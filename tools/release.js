@@ -243,7 +243,15 @@ async function main() {
   const builderCli = path.join(ROOT, 'node_modules', 'electron-builder', 'cli.js');
   if (!fs.existsSync(builderCli)) fail(`electron-builder is not installed (${builderCli} missing)`);
   console.log(`building into ${outDir}...`);
-  run(process.execPath, [builderCli, '--win', '--x64', `--config.directories.output=${outDir}`]);
+  // --publish=never is not optional here. npm sets lifecycle_event=release for
+  // this script, and electron-builder treats that as "go and publish to GitHub",
+  // then fails because it has no PAT. We publish with gh a few lines below.
+  // electron-builder calls this out itself: the behaviour goes away in v27.
+  run(process.execPath, [
+    builderCli, '--win', '--x64',
+    `--config.directories.output=${outDir}`,
+    '--publish=never',
+  ]);
 
   const built = fs
     .readdirSync(path.join(ROOT, outDir))
