@@ -677,12 +677,19 @@ select { cursor: pointer; }
   padding: 4px 8px 4px 6px;
 }
 .composer-field:focus-within { border-color: #3a3a44; }
+/* One line, always. The composer used to auto-grow to 180px as the text
+   wrapped, which pushed the whole thread up and left the newest message
+   riding the top of the window. A long message now scrolls sideways inside the
+   box and the composer keeps its height whatever is typed into it. */
 .composer-field textarea {
   flex: 1; min-width: 0;
-  min-height: 36px; max-height: 170px;
+  height: 36px;
   resize: none; border: none; background: none; border-radius: 0;
   padding: 7px 6px; font-size: 14px;
+  white-space: pre; overflow-x: auto; overflow-y: hidden;
 }
+/* The box still scrolls, but it does not advertise itself with a scrollbar. */
+.composer-field textarea::-webkit-scrollbar { height: 0; width: 0; }
 .composer-field textarea:focus { box-shadow: none; }
 
 .round-btn {

@@ -114,6 +114,52 @@ async function main() {
           || ('short bubble is ' + short.toFixed(1) + 'px of ' + paneRoom.toFixed(1) + 'px');
       });
 
+      // --- the composer -----------------------------------------------------
+      // It auto-grew to 180px as the text wrapped, pushing the thread up and
+      // leaving the newest message riding the top of the window.
+
+      const composer = document.getElementById('composer');
+
+      add('the composer is one line tall when empty', () => {
+        const h = box(composer).height;
+        return h > 20 && h < 60 || ('height ' + h.toFixed(1) + 'px is not one line');
+      });
+
+      add('the composer does not grow when a long message is typed', () => {
+        const before = box(composer).height;
+        composer.value = 'This is a deliberately long message that would certainly wrap '
+          + 'onto several lines if the box still auto-grew, which is exactly what it used to do.';
+        const after = box(composer).height;
+        composer.value = '';
+        return Math.abs(after - before) < 0.5
+          || ('grew from ' + before.toFixed(1) + 'px to ' + after.toFixed(1) + 'px');
+      });
+
+      add('a long message scrolls sideways instead of wrapping', () => {
+        composer.value = 'This is a deliberately long message that would certainly wrap '
+          + 'onto several lines if the box still auto-grew, which is exactly what it used to do.';
+        const cs = getComputedStyle(composer);
+        composer.value = '';
+        const noWrap = cs.whiteSpace === 'pre' || cs.whiteSpace === 'pre-wrap';
+        const scrolls = cs.overflowX === 'auto' || cs.overflowX === 'scroll';
+        return noWrap && scrolls
+          || ('white-space ' + cs.whiteSpace + ', overflow-x ' + cs.overflowX);
+      });
+
+      add('the composer has no height cap to grow into', () => {
+        // max-height is what the old auto-grow respected, so its return would
+        // silently bring the behaviour back.
+        const cs = getComputedStyle(composer);
+        return cs.maxHeight === 'none'
+          || ('max-height is ' + cs.maxHeight + ', so the box can still grow');
+      });
+
+      add('the composer fits inside the pane', () => {
+        const field = composer.closest('.composer-field');
+        return box(field).right <= box(list).right + 1
+          || ('field right ' + box(field).right.toFixed(1) + ' vs list right ' + box(list).right.toFixed(1));
+      });
+
       add('the bubble does not overflow the pane', () => {
         return box(wrap).right <= box(list).right + 1
           || ('wrap right ' + box(wrap).right.toFixed(1) + ' vs list right ' + box(list).right.toFixed(1));

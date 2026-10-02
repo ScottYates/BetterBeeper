@@ -10,7 +10,6 @@ import {
   dayLabel,
   parseTs,
   fileSize,
-  autoGrow,
   debounce,
   escapeHtml,
 } from './util.js';
@@ -54,7 +53,6 @@ export function initThread() {
   const composer = $('#composer');
 
   composer.addEventListener('input', () => {
-    autoGrow(composer);
     updateReplyPreview();
   });
 
@@ -77,7 +75,6 @@ export function initThread() {
       input.value = input.value.slice(0, start) + emoji + input.value.slice(end);
       input.focus();
       input.setSelectionRange(start + emoji.length, start + emoji.length);
-      autoGrow(input);
       updateReplyPreview();
     });
   });
@@ -251,11 +248,21 @@ function renderHeader() {
   archive.classList.toggle('is-on', isArchived(chat));
 
   const composer = $('#composer');
-  if (composer) {
-    const label = chat.title || 'chat';
-    const net = chat.network || chat.accountID || 'Beeper';
-    composer.placeholder = isNoteToSelf(chat) ? 'Write a note…' : `Message ${label} on ${net}`;
-  }
+  if (composer) composer.placeholder = composerPlaceholder(chat);
+}
+
+/**
+ * The composer's placeholder: who the message is going to.
+ *
+ * Just the name. It used to read "Message Beeper Updates on Beeper (Matrix)",
+ * which repeated information already in the header two rows above and made
+ * the single-line box long enough to look truncated on a narrow window. A note
+ * chat has no addressee, so it keeps its own wording.
+ */
+export function composerPlaceholder(chat) {
+  if (isNoteToSelf(chat)) return 'Write a note…';
+  const title = String(chat?.title || '').trim();
+  return title || 'Write a message…';
 }
 
 /** Beeper's "Seen at 11:11 AM" line above the composer. */
@@ -989,7 +996,6 @@ async function sendCurrent() {
   }
 
   composer.value = '';
-  autoGrow(composer);
 
   const replyToMessageID = state.replyTo?.id;
   state.replyTo = null;
@@ -1042,7 +1048,6 @@ async function sendCurrent() {
       toast(`Could not send: ${res.__error.message}`, 'error', 5000);
       if (payload.text) {
         composer.value = payload.text;
-        autoGrow(composer);
       }
       break;
     }
