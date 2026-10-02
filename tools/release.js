@@ -167,6 +167,16 @@ function releaseNotes(version, commits) {
   return lines.join('\n');
 }
 
+/** Is this tag already published? */
+function releaseExists(gh, tag) {
+  try {
+    run(gh, ['release', 'view', tag, '--repo', REPO, '--json', 'tagName', '--jq', '.tagName'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Find the GitHub CLI.
  *
@@ -225,21 +235,45 @@ async function main() {
     console.log(`note: --bump=${forced} overrides the derived ${derived}`);
   }
 
+  const gh = findGh();
+  if (!gh) {
+    fail('the GitHub CLI (gh) is not installed or not on PATH.\n  Install it with: winget install --id GitHub.cli -e');
+  }
+  // A version that is already published cannot be reused - the tag exists, and
+  // the asset behind it was built from older source. Step over it rather than
+  // resuming onto a tag that points somewhere else.
+  let nextVersion = next;
+  while (releaseExists(gh, `v${nextVersion}`)) {
+    const stepped = bumpVersion(nextVersion, level);
+    console.log(`note: v${nextVersion} is already published, stepping over to ${stepped}`);
+    nextVersion = stepped;
+  }
+  const releaseTag = `v${nextVersion}`;
+
   if (dryRun) {
-    console.log('\n--dry-run: stopping before any change.');
+    console.log(`\n--dry-run: would release ${releaseTag}. Nothing was changed.`);
     return;
   }
 
-  // 1. Version in package.json. The build reads it, so it has to land first.
-  pkg.version = next;
-  fs.writeFileSync(PKG, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
-  console.log(`\nwrote ${path.relative(ROOT, PKG)} at ${next}`);
+  // 1. The version bump is committed *before* the tag, so the tag points at the
+  //    commit that carries the version. Committing it afterwards - the obvious
+  //    order - leaves main permanently one commit ahead of its own tag, and
+  //    check:released can then never pass.
+  const pkgPath = PKG;
+  const pkgNow = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  pkgNow.version = nextVersion;
+  fs.writeFileSync(pkgPath, `${JSON.stringify(pkgNow, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(path.join(ROOT, 'RELEASE_NOTES.md'), releaseNotes(nextVersion, commits), 'utf8');
+  console.log(`\nwrote package.json at ${nextVersion}`);
 
-  // 2. Build. A scratch output directory avoids the stale-artefact lock that
-  //    bit twice on release/win-unpacked; gitignore covers release-*.
-  //    electron-builder is invoked through node rather than npx: on Windows npx
-  //    is a .cmd, and execFileSync cannot spawn one without a shell.
-  const outDir = `release-v${next}`;
+  run('git', ['add', 'package.json', 'RELEASE_NOTES.md']);
+  run('git', ['commit', '-m', `Release ${nextVersion}`, '-m', `Bump ${level} from ${current}.`]);
+  run('git', ['push', 'origin', 'main'], { stdio: 'inherit' });
+  console.log(`committed and pushed the version bump: ${git(['rev-parse', '--short', 'HEAD'])}`);
+
+  // 2. Build from that commit. A scratch output directory avoids the
+  //    stale-artefact lock that bit twice on release/win-unpacked.
+  const outDir = `release-v${nextVersion}`;
   const builderCli = path.join(ROOT, 'node_modules', 'electron-builder', 'cli.js');
   if (!fs.existsSync(builderCli)) fail(`electron-builder is not installed (${builderCli} missing)`);
   console.log(`building into ${outDir}...`);
@@ -265,39 +299,15 @@ async function main() {
   console.log('installing over the existing copy...');
   run(installer, ['/S'], { stdio: 'ignore' });
 
-  // 4. Publish. The tag is created on main at HEAD by gh.
-  const gh = findGh();
-  if (!gh) {
-    fail('the GitHub CLI (gh) is not installed or not on PATH.\n  Install it with: winget install --id GitHub.cli -e');
-  }
-  const notesPath = path.join(ROOT, 'RELEASE_NOTES.md');
-  const releaseTag = `v${next}`;
-
-  // Resumable. If this run already published the tag - because a previous run
-  // died between the upload and the final commit - pick up from verification
-  // instead of cutting the next version and leaving a gap.
-  const already = (() => {
-    try {
-      run(gh, ['release', 'view', releaseTag, '--repo', REPO, '--json', 'tagName', '--jq', '.tagName'], { stdio: 'ignore' });
-      return true;
-    } catch {
-      return false;
-    }
-  })();
-
-  if (already) {
-    console.log(`\n${releaseTag} is already published, so this run only verifies and commits.`);
-  } else {
-    fs.writeFileSync(notesPath, releaseNotes(next, commits), 'utf8');
-    console.log(`publishing ${releaseTag}...`);
-    run(gh, [
-      'release', 'create', releaseTag, installer,
-      '--repo', REPO,
-      '--title', `Better Beeper ${next}`,
-      '--notes-file', notesPath,
-      '--target', 'main',
-    ], { stdio: 'inherit' });
-  }
+  // 4. Publish.
+  console.log(`publishing ${releaseTag}...`);
+  run(gh, [
+    'release', 'create', releaseTag, installer,
+    '--repo', REPO,
+    '--title', `Better Beeper ${nextVersion}`,
+    '--notes-file', path.join(ROOT, 'RELEASE_NOTES.md'),
+    '--target', 'main',
+  ], { stdio: 'inherit' });
 
   // 5. Verify. A truncated or wrong upload looks exactly like success.
   //    The asset name has to come from the release, not from the file on disk:
@@ -318,12 +328,7 @@ async function main() {
   }
   console.log(`match: ${localHash}`);
 
-  // 6. Commit the version bump and the notes.
-  run('git', ['add', 'package.json', 'RELEASE_NOTES.md']);
-  run('git', ['commit', '-m', `Release ${next}`, '-m', `Bump ${level} from ${current}, published as a GitHub Release.`]);
-  run('git', ['push', 'origin', 'main'], { stdio: 'inherit' });
-
-  console.log(`\ndone. v${next} is live: https://github.com/${REPO}/releases/tag/v${next}`);
+  console.log(`\ndone. ${releaseTag} is live: https://github.com/${REPO}/releases/tag/${releaseTag}`);
   console.log(`main is now ${git(['rev-parse', '--short', 'HEAD'])}, clean: ${git(['status', '--porcelain']) === ''}`);
 }
 
