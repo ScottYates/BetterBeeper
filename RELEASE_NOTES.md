@@ -1,11 +1,11 @@
-Better Beeper 1.0.1
+Better Beeper 1.0.2
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.0.1-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.0.2-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,9 +17,7 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
-- fix: tell electron-builder not to publish, because npm names this script release (`5e76590`)
-- fix: run electron-builder and gh through paths execFileSync can spawn (`87ed61a`)
-- chore: cut releases from conventional commits, and check that every push has one (`e8fc119`)
-- Keep the v1.0.0 release notes in the repo (`e36cdc0`)
+- fix: tag the commit that carries the version, and step over taken versions (`c0a9554`)
+- fix: read the published asset name back, and make a release run resumable (`84ec643`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.
