@@ -168,12 +168,46 @@ function renderHtmlMessage(source) {
   return holder.innerHTML;
 }
 
+// Elements that start on a line of their own. Used to tell apart whitespace
+// that is only source formatting from whitespace the sender actually typed.
+const BLOCK_LEVEL = /^(P|UL|OL|LI|BLOCKQUOTE|PRE|DIV|SECTION|ARTICLE|HR|TABLE|TR|TD|TH)$/;
+
+/**
+ * Is this text node whitespace the sender never typed?
+ *
+ * Message bodies render with `white-space: pre-wrap`, so a plain-text message
+ * keeps the line breaks the user pressed. That same rule turns the newlines a
+ * sender's *HTML* is pretty-printed with into visible blank lines: a list that
+ * arrives as `<ul>\n<li>a</li>\n<li>b</li>\n</ul>` renders with a blank line
+ * after every bullet. Such nodes are pure formatting, so they are dropped.
+ *
+ * Inline whitespace is never touched. `<strong>a</strong> <em>b</em>` has a
+ * single space between the elements, and removing it would run the words
+ * together; the rule therefore only fires when an element sibling is a
+ * block-level element, or when the parent is a list whose children are items.
+ */
+function isFormattingWhitespace(node) {
+  if (node.data.trim() !== '') return false;
+  const parent = node.parentElement;
+  if (!parent) return false;
+  if (parent.tagName === 'UL' || parent.tagName === 'OL') return true;
+
+  let prev = node.previousSibling;
+  while (prev && prev.nodeType !== Node.ELEMENT_NODE) prev = prev.previousSibling;
+  let next = node.nextSibling;
+  while (next && next.nodeType !== Node.ELEMENT_NODE) next = next.nextSibling;
+
+  if (prev && BLOCK_LEVEL.test(prev.tagName)) return true;
+  if (next && BLOCK_LEVEL.test(next.tagName)) return true;
+  return false;
+}
+
 function sanitizeChildren(doc, sourceNode) {
   const out = document.createDocumentFragment();
 
   for (const child of [...sourceNode.childNodes]) {
     if (child.nodeType === Node.TEXT_NODE) {
-      out.append(doc.createTextNode(child.data));
+      if (!isFormattingWhitespace(child)) out.append(doc.createTextNode(child.data));
       continue;
     }
     // Comments, processing instructions, CDATA: dropped outright.

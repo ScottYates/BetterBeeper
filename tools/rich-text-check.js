@@ -19,6 +19,14 @@ const utilPath = path.join(__dirname, '..', 'src', 'renderer', 'js', 'util.js');
 // util.js uses DOM globals, so exercise it in a browser via Electron.
 async function main() {
   const { app, BrowserWindow } = require('electron');
+
+  // An isolated profile, so the test can never read a cached copy of util.js.
+  // Chromium caches file:// modules in userData, which means a dev run of the
+  // real app can happily execute a stale renderer after the file changed. A
+  // check that inherits that is not a check.
+  const os = require('os');
+  app.setPath('userData', path.join(os.tmpdir(), 'bb-rich-check-profile'));
+
   const src = pathToFileURL(utilPath).href;
   const harness = `
     (async () => {
@@ -106,6 +114,39 @@ async function main() {
         const root = parse(renderRichText('<pre><code>const a = 1;</code></pre>'));
         const code = root.querySelector('pre > code');
         return !!code && code.textContent.trim() === 'const a = 1;' || ('code text: ' + JSON.stringify(code && code.textContent));
+      });
+
+      add('pretty-printed list keeps no newline text nodes', () => {
+        // Beeper sends HTML indented across lines. Under white-space: pre-wrap
+        // those newlines render, which showed up as a blank line under every
+        // bullet.
+        const root = parse(renderRichText('<ul>\\n<li>one</li>\\n<li>two</li>\\n</ul>'));
+        const ul = root.querySelector('ul');
+        const stray = [...ul.childNodes].filter((n) => n.nodeType === 3 && n.data.trim() === '');
+        return stray.length === 0 || ('stray whitespace nodes inside ul: ' + stray.length);
+      });
+
+      add('pretty-printed body keeps no newline between blocks', () => {
+        const root = parse(renderRichText('<p>intro</p>\\n<p>outro</p>'));
+        const stray = [...root.childNodes].filter((n) => n.nodeType === 3 && n.data.trim() === '');
+        return stray.length === 0 || ('stray whitespace nodes at top level: ' + stray.length);
+      });
+
+      add('inline spacing between tags is preserved', () => {
+        // The opposite mistake: this space is content, not formatting.
+        const root = parse(renderRichText('<p><strong>a</strong> <em>b</em> and <code>c</code></p>'));
+        return root.textContent.replace(/\\s+/g, ' ').trim() === 'a b and c' || ('text: ' + JSON.stringify(root.textContent));
+      });
+
+      add('inline newlines the sender typed are preserved', () => {
+        const root = parse(renderRichText('<p>first line\\nsecond line</p>'));
+        return root.textContent.includes('\\n') || ('expected a kept newline, got: ' + JSON.stringify(root.textContent));
+      });
+
+      add('space inside a list item is preserved', () => {
+        const root = parse(renderRichText('<ul>\\n<li>one <em>two</em> words</li>\\n</ul>'));
+        const li = root.querySelector('li');
+        return li && li.textContent.replace(/\\s+/g, ' ').trim() === 'one two words' || ('li text: ' + JSON.stringify(li && li.textContent));
       });
 
       add('blockquote keeps its text', () => {

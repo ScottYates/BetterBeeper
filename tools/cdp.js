@@ -31,6 +31,11 @@ async function main() {
   let id = 0;
   const pending = new Map();
 
+  // Say which document we attached to. Two copies of the app can be running at
+  // once and only one owns the debugging port, so an evaluation can silently
+  // land in the installed build while you believe you are looking at a dev run.
+  console.log(`# attached: ${page.url}`);
+
   const send = (method, params) =>
     new Promise((resolve, reject) => {
       const msgId = ++id;
