@@ -1,5 +1,9 @@
 node_modules/
 release/
+# Any build output directory, not just the default one. Building to a scratch
+# name like release-new/ is the way around a Windows file lock left on a stale
+# artifact, and that must not become a 90 MB commit.
+release-*/
 dist/
 
 # Dev artifacts
