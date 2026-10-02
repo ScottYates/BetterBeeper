@@ -53,7 +53,9 @@ chats, and send, with every action shown to you before it happens.
 - Opening a chat always lands on its newest message, even when you were scrolled up in the
   previous one and even when images are still decoding
 - Hover any row to archive it without opening it. The button becomes "Move back to inbox" on
-  the same row once archived, so the Archive view is a two-way door
+  the same row once archived, so the Archive view is a two-way door. Archiving is confirmed
+  against Beeper rather than assumed, and the one chat Beeper refuses to archive stays archived
+  here anyway (see "Beeper accepts isPinned and then ignores it" below)
 - Mute, pin, archive and mark-unread from the thread header
 - Pinning is kept in this app rather than at Beeper. Beeper's Desktop API accepts
   `isPinned` on `PATCH /v1/chats/{id}` and then drops it, so the pin set lives in
@@ -162,6 +164,7 @@ npm run check:notify   # notification preference logic
 npm run check:send     # optimistic-send bubble absorption
 npm run check:rich      # message HTML sanitizing keeps the markup's structure
 npm run check:pin       # pinning moves the row and flags it, notes included
+npm run check:archive   # archiving survives a Beeper that accepts and ignores it
 npm run check:icons     # network glyphs, including the self-coloured Google Voice mark
 npm run check:ascii     # documentation and code comments stay ASCII
 npm run check:live     # send a real message, then assert the thread and the list are intact
@@ -298,6 +301,8 @@ src/
     live-send.js      check: drive the running app's composer end to end
     pin-check.js     check: pin and unpin move the row and its flag, notes included
     pin-harness.html page that hosts pin-check.js, for the same reason
+    archive-check.js  check: an archive survives a Beeper that accepts and ignores it
+    archive-harness.html  page that hosts archive-check.js, for the same reason
     icon-check.mjs    check: every network glyph still renders, self-coloured or not
     ascii-check.js    check: markdown and code comments stay ASCII
     badge-probe.js    dev helper: prove glyph badges stay square and monograms stay pills
@@ -387,6 +392,27 @@ Each of these caused a real bug here.
   note-to-self rows, and a set could add those but never remove them. The client still sends the
   PATCH, so that the two sources agree if Beeper ever starts honouring the field, but it never
   merges the response: that response carries the pre-change value and would undo the pin.
+- **Beeper also ignores `isArchived` for its own built-in "Note to self" chat.** Same shape as
+  the pin: `PATCH /v1/chats/{id}` answers ok, and a fresh `GET` still reports `isArchived`
+  false. It is specific to that one chat, though - ordinary chats and the Signal note-to-self
+  chat archive and restore fine, which is why this went unnoticed for so long.
+
+  The old code set the flag optimistically and trusted it. That made the archive look broken:
+  the row would leave the list for a moment and the next chat event would merge Beeper's stale
+  value straight back in. Archiving now reads the chat back afterwards and compares. Only when
+  Beeper disagrees is the user's choice recorded locally, and the list filters on the resolved
+  value rather than on the raw field.
+
+  Two details matter. Nothing is recorded when the confirming `GET` itself fails, because a
+  request that could not be checked is not evidence that it was ignored. And the read is
+  retried a few times, because the `GET` is not ordered behind the `PATCH` - Beeper can report
+  the old value for a moment after accepting a write, and a single read made an ordinary
+  archive look ignored. Only `true` is ever stored, with restoring deleting the entry, so the
+  override map stays limited to the chat that needs it and an archive made in another Beeper
+  client is not shadowed here.
+
+  `check:archive` drives this against a stub that can be told to ignore the request, or to
+  apply it late. It drops from 11/11 to 6/9 if the confirmation is removed.
 - **Construction-time window bounds are wrong on a mixed-DPI desktop.** The width and height
   passed to the `BrowserWindow` constructor are converted using the *primary* display's scale
   factor, so on a second monitor at a different scale the window arrives at the wrong size. A

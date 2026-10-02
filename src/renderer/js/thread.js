@@ -27,8 +27,10 @@ import {
   isPinned,
   setPinned,
   pinMap,
+  isArchived,
 } from './state.js';
 import { toast, confirmDialog, openEmojiPicker, openPopover, openLightbox } from './ui.js';
+import { setArchived } from './chat-actions.js';
 import { avatarNode, renderChats, networkBadge } from './sidebar.js';
 
 let currentChat = null;
@@ -245,8 +247,8 @@ function renderHeader() {
   pin.classList.toggle('is-on', isPinned(chat));
 
   const archive = $('#btn-archive');
-  archive.dataset.tip = chat.isArchived ? 'Move back to inbox' : 'Archive chat';
-  archive.classList.toggle('is-on', Boolean(chat.isArchived));
+  archive.dataset.tip = isArchived(chat) ? 'Move back to inbox' : 'Archive chat';
+  archive.classList.toggle('is-on', isArchived(chat));
 
   const composer = $('#composer');
   if (composer) {
@@ -338,17 +340,18 @@ async function archiveActive() {
   if (!currentChat) return;
   // The header button is a toggle: its label promises "Move back to inbox" once
   // the chat is archived, so it has to actually unarchive.
-  const archiving = !currentChat.isArchived;
-  const result = await callOk(() => api.chats.archive(currentChat.id, archiving), {
-    context: archiving ? 'archive' : 'unarchive',
-  });
-  if (result === FAILED) return;
+  const archiving = !isArchived(currentChat);
+  const result = await setArchived(currentChat, archiving);
+  if (!result.ok) return;
 
-  state.chats.set(currentChat.id, { ...currentChat, isArchived: archiving });
   currentChat = { ...currentChat, isArchived: archiving };
 
   if (archiving) {
-    toast('Chat archived', 'success', 1800);
+    toast(
+      result.localOnly ? 'Archived in this app only - Beeper still lists it' : 'Chat archived',
+      result.localOnly ? 'info' : 'success',
+      result.localOnly ? 3600 : 1800,
+    );
     closeThread();
   } else {
     toast('Moved back to inbox', 'success', 1800);

@@ -1,7 +1,7 @@
 /** Sidebar: network badges, chat list, filters, and unified search. */
 
 import { $, el, clear, listTime, initials, hueFor, debounce, renderRichText, escapeHtml } from './util.js';
-import { api, call, callOk, FAILED } from './api.js';
+import { api, call } from './api.js';
 import {
   state,
   bus,
@@ -12,8 +12,10 @@ import {
   noteLabel,
   networkMeta,
   isPinned,
+  isArchived,
 } from './state.js';
 import { toast, openLightbox } from './ui.js';
+import { setArchived } from './chat-actions.js';
 import { networkIconMarkup, badgeBackground } from './network-icons.js';
 
 let onSelectChat = () => {};
@@ -140,11 +142,11 @@ export function renderChats() {
       case 'unread':
         return (chat.unreadCount || 0) > 0;
       case 'archive':
-        return chat.isArchived;
+        return isArchived(chat);
       case 'primary':
-        return !chat.isArchived && !chat.isLowPriority;
+        return !isArchived(chat) && !chat.isLowPriority;
       default:
-        return !chat.isArchived;
+        return !isArchived(chat);
     }
   });
 
@@ -261,7 +263,7 @@ export function networkBadge(source, { size = 11 } = {}) {
  * from the list does not also open the chat you are archiving.
  */
 function rowArchiveButton(chat) {
-  const restoring = Boolean(chat.isArchived);
+  const restoring = isArchived(chat);
   const label = restoring ? 'Move back to inbox' : 'Archive chat';
 
   return el('button', {
@@ -278,14 +280,14 @@ function rowArchiveButton(chat) {
 }
 
 async function archiveFromList(chat) {
-  const restoring = Boolean(chat.isArchived);
-  const result = await callOk(() => api.chats.archive(chat.id, !restoring), {
-    context: restoring ? 'unarchive' : 'archive',
-  });
-  if (result === FAILED) return;
+  const restoring = isArchived(chat);
+  const result = await setArchived(chat, !restoring);
+  if (!result.ok) return;
 
-  state.chats.set(chat.id, { ...chat, isArchived: !restoring });
-  toast(restoring ? 'Moved back to inbox' : 'Chat archived', 'success', 1800);
+  if (restoring) toast('Moved back to inbox', 'success', 1800);
+  else if (result.localOnly) {
+    toast('Archived in this app only - Beeper still lists it', 'info', 3600);
+  } else toast('Chat archived', 'success', 1800);
 
   // Archiving the chat you are reading closes it, same as the header button.
   if (state.activeChatID === chat.id) bus.emit('chat:close');

@@ -27,6 +27,10 @@ const DEFAULTS = {
   // the choice is kept here. See the note in renderer/js/state.js.
   pinnedChats: {},
 
+  // chatIDs archived in this app where Beeper ignored the request. Only the
+  // built-in "Note to self" chat needs this. See the note in renderer/js/state.js.
+  archivedChats: [],
+
   // Desktop notifications.
   notifyEnabled: true,
   // 'full' = sender and message text, 'sender' = who wrote, 'none' = "New message"

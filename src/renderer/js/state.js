@@ -277,6 +277,52 @@ export function setPinned(chatID, pinned) {
   return pinOverrides.get(chatID);
 }
 
+// ---------------------------------------------------------------------------
+// Archive overrides
+//
+// Beeper honours `isArchived` on PATCH /v1/chats/{id} for almost everything -
+// verified working on ordinary chats and on the Signal note-to-self chat - but
+// it silently ignores it for its own built-in "Note to self" chat on
+// beeper.com. The call answers ok, and a fresh GET a second later still says
+// isArchived is false.
+//
+// That makes the optimistic update a lie: the next chat event merges Beeper's
+// value back in and the row returns to the inbox, so archiving looks like it
+// did nothing. When the server disagrees with the request the choice is
+// recorded here instead, and the list filters on the resolved value.
+//
+// Only `true` is ever stored, and restoring deletes the entry. That keeps the
+// map to the chats where the workaround is actually required, so an archive
+// made in another Beeper client still shows up normally here.
+// ---------------------------------------------------------------------------
+
+/** chatID -> archived in this app even though Beeper says otherwise. */
+const archivedOverrides = new Set();
+
+export function loadArchived(ids) {
+  archivedOverrides.clear();
+  if (Array.isArray(ids)) {
+    for (const id of ids) if (typeof id === 'string' && id) archivedOverrides.add(id);
+  }
+}
+
+export function archivedList() {
+  return [...archivedOverrides];
+}
+
+export function isArchived(chat) {
+  if (!chat) return false;
+  if (archivedOverrides.has(chat.id)) return true;
+  return Boolean(chat.isArchived);
+}
+
+export function setArchivedOverride(chatID, archived) {
+  if (!chatID) return false;
+  if (archived) archivedOverrides.add(chatID);
+  else archivedOverrides.delete(chatID);
+  return archivedOverrides.has(chatID);
+}
+
 export function chatPreviewText(chat) {
   const preview = chat?.preview;
   if (!preview) return '';
