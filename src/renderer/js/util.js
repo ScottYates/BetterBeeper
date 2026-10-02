@@ -195,8 +195,14 @@ function sanitizeChildren(doc, sourceNode) {
         clean.setAttribute('target', '_blank');
       }
     }
+    // The sanitized children have to go *inside* the clean element. Appending
+    // them to `out` instead renders every allowed element empty and hoists its
+    // content out as siblings, which is invisible for a plain <p> (the text
+    // still shows) but destroys everything structural: lists come out as an
+    // empty <ul> followed by loose <li>s, <em> and <strong> lose their styling
+    // and <a> stops being a link at all.
+    clean.append(sanitizeChildren(doc, child));
     out.append(clean);
-    out.append(sanitizeChildren(doc, child));
   }
   return out;
 }

@@ -158,6 +158,7 @@ npm run pack           # unpacked build -> release/win-unpacked/
 
 npm run check:notify   # notification preference logic
 npm run check:send     # optimistic-send bubble absorption
+npm run check:rich      # message HTML sanitizing keeps the markup's structure
 npm run check:icons     # network glyphs, including the self-coloured Google Voice mark
 npm run check:ascii     # documentation and code comments stay ASCII
 npm run check:live     # send a real message, then assert the thread and the list are intact
@@ -289,6 +290,8 @@ src/
     notify-check.js   check: notification preferences, no app or message needed
     send-check.js     check: optimistic-bubble absorption in the live state module
     send-harness.html page that hosts send-check.js (a data: URL cannot import ES modules)
+    rich-text-check.js  check: the message HTML sanitizer keeps lists, links and emphasis
+    rich-harness.html   page that hosts rich-text-check.js, for the same reason
     live-send.js      check: drive the running app's composer end to end
     icon-check.mjs    check: every network glyph still renders, self-coloured or not
     ascii-check.js    check: markdown and code comments stay ASCII
@@ -340,6 +343,15 @@ that Beeper's own UI interprets on the client side:
 
 Each of these caused a real bug here.
 
+- **The HTML sanitizer must nest, not just filter.** The allowlist walk appended each
+  cleaned element and then appended that element's children as its *siblings*, so every
+  permitted tag rendered empty with its content hoisted beside it. A plain `<p>` still looked
+  right because the text survived, which is exactly why this went unnoticed, but a bulleted
+  message arrived as an empty `<ul>` followed by loose `<li>`s: bullets out in the margin,
+  no hanging indent, and a large gap between items. `<em>` and `<strong>` lost their emphasis
+  and `<a>` stopped being a link. The children now go inside the element. `check:rich` covers
+  it, and was confirmed by putting the two lines back the wrong way round: 9 of 14 assertions
+  fail, reporting `ul had siblings: UL,LI,LI`.
 - **Beeper accepts `isPinned` and then ignores it.** `PATCH /v1/chats/{id}` answers 200 and
   returns the value from before the change, and a fresh `GET` a second later confirms nothing
   moved. Verified on 4.3.160 across Signal, Google Voice and Matrix, while `isMuted` and
