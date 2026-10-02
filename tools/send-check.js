@@ -6,6 +6,7 @@
  * Run with `npm run check:send`.
  */
 const path = require('path');
+const harnessGuard = require('./harness-guard');
 const { pathToFileURL } = require('url');
 
 const statePath = path.join(__dirname, '..', 'src', 'renderer', 'js', 'state.js');
@@ -80,6 +81,9 @@ async function main() {
   `;
 
   await app.whenReady();
+  // Expire on our own rather than being killed from outside, which would pop
+  // an Electron error dialog that looks like the app under test crashing.
+  harnessGuard(app, { label: 'check:send' });
   const win = new BrowserWindow({ show: false });
   // A real file:// page: a data: URL cannot import ES modules.
   await win.loadFile(path.join(__dirname, 'send-harness.html'));

@@ -82,6 +82,24 @@ chats, and send, with every action shown to you before it happens.
   other chat. Archived chats drop out of the main list. Ordering is the only thing pinning
   changes; it never resizes a row
 
+**Message width**
+
+- A message uses the whole chat pane. It used to stop at `max-width: min(620px, 72%)`, which
+  left a dead column down the right of any window with room to spare - the percentage, not the
+  620px, was doing the damage at normal sizes. Short messages still hug their text, because the
+  wrap is sized by content up to the cap
+- The cap is now `min(100%, 880px)`. The 880px only matters on a very wide window, where a
+  bubble stretched across 2000px would run to about 150 characters a line
+- Inline images stay at their original 340px, and that is deliberate. Widening the cap to
+  `min(100%, 520px)` looks correct and does nothing: the image sits *inside* `.msg-bubble`,
+  which is `fit-content`, so the percentage resolves against a width the image itself is
+  deciding and the browser answers with roughly the intrinsic size. Giving an image real room
+  means letting the text bubble containing it grow to the full row, which changes the text
+  layout as well. That is a bigger change than this one, and it is the obvious next step if
+  the preview still reads as too small
+- `check:layout` measures the rendered boxes against the real stylesheet, so a cap written as a
+  percentage, a pixel value or a `calc()` all fail it. It drops from 6/6 to 2/6 on the old rule
+
 **Image viewer**
 
 - Click any image or avatar and it opens in its own frameless window on top of the app, sized
@@ -165,6 +183,8 @@ npm run check:send     # optimistic-send bubble absorption
 npm run check:rich      # message HTML sanitizing keeps the markup's structure
 npm run check:pin       # pinning moves the row and flags it, notes included
 npm run check:archive   # archiving survives a Beeper that accepts and ignores it
+npm run check:layout    # message bubbles use the full width of the chat pane
+npm run check:syntax    # every JS file parses, so a broken check cannot pose as an app crash
 npm run check:icons     # network glyphs, including the self-coloured Google Voice mark
 npm run check:ascii     # documentation and code comments stay ASCII
 npm run check:live     # send a real message, then assert the thread and the list are intact
@@ -303,6 +323,10 @@ src/
     pin-harness.html page that hosts pin-check.js, for the same reason
     archive-check.js  check: an archive survives a Beeper that accepts and ignores it
     archive-harness.html  page that hosts archive-check.js, for the same reason
+    layout-check.js   check: a message bubble fills the chat pane, measured not grepped
+    layout-harness.html  page that hosts layout-check.js, against the real stylesheet
+    syntax-check.js   check: every JS file parses, so a broken check cannot look like a crash
+    harness-guard.js  dev helper: a check harness expires on its own instead of being killed
     icon-check.mjs    check: every network glyph still renders, self-coloured or not
     ascii-check.js    check: markdown and code comments stay ASCII
     badge-probe.js    dev helper: prove glyph badges stay square and monograms stay pills
@@ -383,6 +407,21 @@ Each of these caused a real bug here.
   which is the fastest way to notice. `check:rich` also runs against a throwaway profile, since
   Chromium caches `file://` modules in `userData` and a check that inherits that cache is not a
   check.
+- **A broken check looks exactly like the app crashing.** A comment containing backticks was
+  written inside the template literal holding a check harness's page script. The backticks
+  closed the string early and the file became a `SyntaxError`, which under `electron` is an
+  uncaught exception in the main process: a modal "A JavaScript error occurred" dialog on the
+  desktop, naming `tools/layout-check.js` and not the app. The app was fine the whole time.
+
+  Two things now stop that recurring. `check:syntax` runs `node --check` over every JS file in
+  plain Node, with no window and therefore no possible dialog, and it also extracts each
+  harness's page script out of its template literal and parses that - a file can be perfectly
+  valid and still be broken inside the string. It caught both mistakes made here: a comment
+  with backticks, and a parameter shadowed by a `const` in the same function. Each harness also
+  installs `harness-guard.js`, so a stalled check exits on its own instead of waiting to be
+  killed from outside - being killed is what turns a bad moment into a dialog. Neither would
+  have helped if the mistake had been made inside the renderer, but the renderer is loaded and
+  exercised by the app itself on every launch.
 - **Beeper accepts `isPinned` and then ignores it.** `PATCH /v1/chats/{id}` answers 200 and
   returns the value from before the change, and a fresh `GET` a second later confirms nothing
   moved. Verified on 4.3.160 across Signal, Google Voice and Matrix, while `isMuted` and

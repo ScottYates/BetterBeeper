@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>layout-check harness</title>
+    <link rel="stylesheet" href="../src/renderer/styles.css" />
+    <style>
+      /* Stand in for the thread pane the real page lays out with flexbox, at the
+         width the chat pane actually gets beside the sidebar. */
+      #pane { width: 624px; display: flex; flex-direction: column; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Loaded by tools/layout-check.js against the real stylesheet, so a layout
+      rule is measured rather than pattern-matched in the source.
+    -->
+    <div id="pane">
+      <div class="message-list" id="list">
+        <div class="msg" id="msg">
+          <div class="avatar" style="width: 28px; height: 28px"></div>
+          <div class="msg-bubble-wrap" id="wrap">
+            <div class="msg-bubble" id="bubble">September kept us busy! Heres whats new in Beeper and a good deal more text so the bubble has to wrap onto several lines and want the whole pane rather than a slice of it.</div>
+          </div>
+        </div>
+        <div class="msg" id="msg-short">
+          <div class="avatar" style="width: 28px; height: 28px"></div>
+          <div class="msg-bubble-wrap" id="wrap-short">
+            <div class="msg-bubble" id="bubble-short">lol</div>
+          </div>
+        </div>
+        <div class="msg is-out" id="msg-out">
+          <div class="msg-bubble-wrap" id="wrap-out">
+            <div class="msg-bubble" id="bubble-out">Outgoing messages carry no avatar, so the bubble gets the whole row and not the whole pane minus one.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

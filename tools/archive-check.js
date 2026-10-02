@@ -17,6 +17,7 @@
  * Run with `npm run check:archive`.
  */
 const path = require('path');
+const harnessGuard = require('./harness-guard');
 const { pathToFileURL } = require('url');
 
 const ROOT = path.join(__dirname, '..');
@@ -244,6 +245,9 @@ async function main() {
   `;
 
   await app.whenReady();
+  // Expire on our own rather than being killed from outside, which would pop
+  // an Electron error dialog that looks like the app under test crashing.
+  harnessGuard(app, { label: 'check:archive' });
   const win = new BrowserWindow({ show: false });
   // A real file:// page, because a data: URL cannot import an ES module.
   await win.loadFile(path.join(__dirname, 'archive-harness.html'));

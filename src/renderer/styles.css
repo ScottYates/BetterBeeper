@@ -512,7 +512,12 @@ select { cursor: pointer; }
 
 .msg { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 2px; }
 .msg.is-out { flex-direction: row-reverse; }
-.msg-bubble-wrap { max-width: min(620px, 72%); min-width: 0; }
+/* Bubbles fill the chat pane instead of stopping at a percentage of it, which
+   left a dead column down the right of a wide window. Short messages still hug
+   their text, because the wrap is sized by content up to the cap. The cap only
+   matters on a very wide window, where a 2000px-wide bubble would run to 150
+   characters a line. */
+.msg-bubble-wrap { max-width: min(100%, 880px); min-width: 0; }
 .msg.is-out .msg-bubble-wrap { align-items: flex-end; }
 
 .msg-author { font-size: 12px; font-weight: 650; color: var(--text-dim); margin: 6px 0 2px 12px; }
@@ -589,6 +594,15 @@ select { cursor: pointer; }
 }
 
 .msg-attachments { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+/* Images open in the full viewer, so the inline size is only a preview. The cap
+   stays a flat pixel value on purpose. Widening it to min(100%, 520px) looks
+   right and does nothing: the image sits inside .msg-bubble, which is
+   fit-content, so the percentage resolves against a width the image itself is
+   deciding and the browser answers with roughly the intrinsic size. Giving the
+   image real room means letting the text bubble that contains it grow to the
+   full row, which changes the text layout too and is a bigger change than this
+   one. The 340px cap is what Beeper itself uses, so the preview is at least
+   consistent with the app it sits next to. */
 .att-image { max-width: 340px; max-height: 340px; border-radius: 11px; display: block; cursor: zoom-in; }
 .att-file {
   display: flex; align-items: center; gap: 9px;

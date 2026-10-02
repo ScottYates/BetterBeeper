@@ -19,8 +19,10 @@
     "check:rich": "electron tools/rich-text-check.js",
     "check:pin": "electron tools/pin-check.js",
     "check:archive": "electron tools/archive-check.js",
+    "check:layout": "electron tools/layout-check.js",
     "check:icons": "node tools/icon-check.mjs",
     "check:ascii": "node tools/ascii-check.js",
+    "check:syntax": "node tools/syntax-check.js",
     "check:live": "node tools/live-send.js",
     "pack": "electron-builder --dir"
   },
