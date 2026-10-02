@@ -271,20 +271,45 @@ async function main() {
     fail('the GitHub CLI (gh) is not installed or not on PATH.\n  Install it with: winget install --id GitHub.cli -e');
   }
   const notesPath = path.join(ROOT, 'RELEASE_NOTES.md');
-  fs.writeFileSync(notesPath, releaseNotes(next, commits), 'utf8');
-  console.log(`publishing v${next}...`);
-  run(gh, [
-    'release', 'create', `v${next}`, installer,
-    '--repo', REPO,
-    '--title', `Better Beeper ${next}`,
-    '--notes-file', notesPath,
-    '--target', 'main',
-  ], { stdio: 'inherit' });
+  const releaseTag = `v${next}`;
+
+  // Resumable. If this run already published the tag - because a previous run
+  // died between the upload and the final commit - pick up from verification
+  // instead of cutting the next version and leaving a gap.
+  const already = (() => {
+    try {
+      run(gh, ['release', 'view', releaseTag, '--repo', REPO, '--json', 'tagName', '--jq', '.tagName'], { stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  if (already) {
+    console.log(`\n${releaseTag} is already published, so this run only verifies and commits.`);
+  } else {
+    fs.writeFileSync(notesPath, releaseNotes(next, commits), 'utf8');
+    console.log(`publishing ${releaseTag}...`);
+    run(gh, [
+      'release', 'create', releaseTag, installer,
+      '--repo', REPO,
+      '--title', `Better Beeper ${next}`,
+      '--notes-file', notesPath,
+      '--target', 'main',
+    ], { stdio: 'inherit' });
+  }
 
   // 5. Verify. A truncated or wrong upload looks exactly like success.
-  const url = `https://github.com/${REPO}/releases/download/v${next}/${encodeURIComponent(built)}`;
+  //    The asset name has to come from the release, not from the file on disk:
+  //    GitHub rewrites spaces in an uploaded asset name to dots, so
+  //    "Better Beeper-1.0.1-x64-setup.exe" is published as
+  //    "Better.Beeper-1.0.1-x64-setup.exe" and guessing with %20 gives a 404.
+  const assetName = run(gh, [
+    'release', 'view', releaseTag, '--repo', REPO, '--json', 'assets', '--jq', '.assets[0].name',
+  ]).trim();
+  const url = `https://github.com/${REPO}/releases/download/${releaseTag}/${encodeURIComponent(assetName)}`;
   const tmp = path.join(os.tmpdir(), `bb-verify-${process.pid}.exe`);
-  console.log(`\nverifying the published bytes from ${url}`);
+  console.log(`\nverifying ${assetName} from ${url}`);
   const remoteHash = await fetchSha256(url, tmp);
   fs.rmSync(tmp, { force: true });
 
