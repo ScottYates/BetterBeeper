@@ -148,10 +148,6 @@ export function renderChats() {
     }
   });
 
-  // Beeper pins the personal note chat above everything else.
-  const notes = all.filter(isNoteToSelf);
-  const rest = all.filter((chat) => !isNoteToSelf(chat));
-
   if (!all.length) {
     list.append(
       el('div', {
@@ -162,18 +158,27 @@ export function renderChats() {
     return;
   }
 
-  // Beeper's order: the personal note chats, then the rest. All of these are
-  // ordinary rows - the pinning is position, not size.
-  for (const note of notes) list.append(noteItem(note));
-
-  // Pinned first, then most recent activity. `isPinned` also covers pins the
-  // user set in this app, not just the ones Beeper reports.
-  rest.sort((a, b) => {
+  // Beeper's order: pinned first, then most recent activity. The note-to-self
+  // chats count as pinned, which is what puts them at the top by default and
+  // what lets an explicit unpin send them back down with the ordinary chats.
+  // `isPinned` also covers pins the user set in this app, not just the ones
+  // Beeper reports.
+  const ordered = all.slice();
+  ordered.sort((a, b) => {
     if (isPinned(b) !== isPinned(a)) return isPinned(b) ? 1 : -1;
     return new Date(b.lastActivity || 0).getTime() - new Date(a.lastActivity || 0).getTime();
   });
 
-  for (const chat of rest) list.append(chatItem(chat));
+  for (const chat of ordered) list.append(isNoteToSelf(chat) ? noteItem(chat) : chatItem(chat));
+}
+
+/** The pin, mute and draft glyphs in a row's corner. */
+function rowFlags(chat) {
+  const flags = [];
+  if (isPinned(chat)) flags.push('📌');
+  if (chat.isMuted) flags.push('🔕');
+  if (chat.draft?.text) flags.push('✏️');
+  return flags;
 }
 
 /**
@@ -182,12 +187,19 @@ export function renderChats() {
  * Beeper pins these above the rest of the list; pinning is about *position*,
  * not prominence, so this is an ordinary `.chat-item` row in every respect -
  * same size, same padding, same preview line. The only differences are the
- * pin flag that explains why it is at the top, and an avatar that opens the
- * chat rather than the image viewer (it is your own profile picture, not a
- * photo in a conversation).
+ * label ("Note" rather than the contact name) and an avatar that opens the chat
+ * rather than the image viewer, since it is your own profile picture and not a
+ * photo in a conversation.
+ *
+ * The pin flag is deliberately *not* hard-coded here. It used to be, which is
+ * what made unpinning a note chat look broken: the header button flipped to off
+ * and the row kept its paperclip forever. Note chats are pinned by default
+ * because isPinned() treats them that way, so the flag reads the same state the
+ * sort does and an explicit unpin is visible and effective.
  */
 function noteItem(chat) {
   const isActive = chat.id === state.activeChatID;
+  const flags = rowFlags(chat);
   return el(
     'div',
     {
@@ -214,7 +226,7 @@ function noteItem(chat) {
       el(
         'div',
         { class: 'chat-item-bottom' },
-        el('div', { class: 'chat-flags', text: '📌' }),
+        flags.length ? el('div', { class: 'chat-flags', text: flags.join(' ') }) : null,
         el('div', { class: 'chat-item-preview', text: chatPreviewText(chat) }),
         chat.unreadCount > 0
           ? el('div', { class: 'chat-unread', text: chat.unreadCount > 99 ? '99+' : String(chat.unreadCount) })
@@ -283,12 +295,7 @@ async function archiveFromList(chat) {
 function chatItem(chat) {
   const isActive = chat.id === state.activeChatID;
   const preview = chatPreviewText(chat);
-  const flags = [];
-
-  if (isPinned(chat)) flags.push('📌');
-  if (chat.isMuted) flags.push('🔕');
-  if (chat.draft?.text) flags.push('✏️');
-
+  const flags = rowFlags(chat);
   return el(
     'div',
     {

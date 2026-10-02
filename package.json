@@ -17,6 +17,7 @@
     "check:notify": "node tools/notify-check.js",
     "check:send": "electron tools/send-check.js",
     "check:rich": "electron tools/rich-text-check.js",
+    "check:pin": "electron tools/pin-check.js",
     "check:icons": "node tools/icon-check.mjs",
     "check:ascii": "node tools/ascii-check.js",
     "check:live": "node tools/live-send.js",

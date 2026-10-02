@@ -26,7 +26,8 @@ chats, and send, with every action shown to you before it happens.
 - Note chats are pinned to the top of the list and are otherwise ordinary rows: same height,
   same padding, same preview line as every other chat, with a pin marking why they are up
   there. Clicking one opens the note. Its avatar is your profile picture, so it does not open
-  the image viewer
+  the image viewer. The pin is a real pin, so a note can be unpinned from the header and it
+  moves down with everything else
 - Each avatar carries a brand glyph for its source network: Signal, Google Voice, Facebook,
   WhatsApp, Instagram, Telegram, Discord and about 20 more, drawn as inline SVG on a
   brand-coloured disc. An unmapped bridge falls back to a monogram, so a new network still
@@ -74,8 +75,9 @@ chats, and send, with every action shown to you before it happens.
 **Chat list layout**
 
 - Collapsible search and filter rows under the Inbox header, matching Beeper's compact header
-- Rows are ordered the way Beeper orders them: notes to self, then pinned, then unread, then the
-  rest by recency. Archived chats drop out of the main list. Ordering is the only thing pinning
+- Rows are ordered pinned first, then by recency. Notes to self count as pinned, which is what
+  keeps them at the top by default, so unpinned they drop back into the recency order like any
+  other chat. Archived chats drop out of the main list. Ordering is the only thing pinning
   changes; it never resizes a row
 
 **Image viewer**
@@ -159,6 +161,7 @@ npm run pack           # unpacked build -> release/win-unpacked/
 npm run check:notify   # notification preference logic
 npm run check:send     # optimistic-send bubble absorption
 npm run check:rich      # message HTML sanitizing keeps the markup's structure
+npm run check:pin       # pinning moves the row and flags it, notes included
 npm run check:icons     # network glyphs, including the self-coloured Google Voice mark
 npm run check:ascii     # documentation and code comments stay ASCII
 npm run check:live     # send a real message, then assert the thread and the list are intact
@@ -293,6 +296,8 @@ src/
     rich-text-check.js  check: the message HTML sanitizer keeps lists, links and emphasis
     rich-harness.html   page that hosts rich-text-check.js, for the same reason
     live-send.js      check: drive the running app's composer end to end
+    pin-check.js     check: pin and unpin move the row and its flag, notes included
+    pin-harness.html page that hosts pin-check.js, for the same reason
     icon-check.mjs    check: every network glyph still renders, self-coloured or not
     ascii-check.js    check: markdown and code comments stay ASCII
     badge-probe.js    dev helper: prove glyph badges stay square and monograms stay pills
@@ -350,8 +355,29 @@ Each of these caused a real bug here.
   message arrived as an empty `<ul>` followed by loose `<li>`s: bullets out in the margin,
   no hanging indent, and a large gap between items. `<em>` and `<strong>` lost their emphasis
   and `<a>` stopped being a link. The children now go inside the element. `check:rich` covers
-  it, and was confirmed by putting the two lines back the wrong way round: 9 of 14 assertions
+  it, and was confirmed by putting the two lines back the wrong way round: 9 of 19 assertions
   fail, reporting `ul had siblings: UL,LI,LI`.
+- **Message bodies need `white-space: pre-wrap`, which turns source formatting into blank lines.**
+  That rule is what makes a plain-text message keep the line breaks the user pressed. It also means
+  the newlines a sender's *HTML* is indented with become visible: a list arriving as
+  `<ul>\n<li>a</li>\n<li>b</li>\n</ul>` rendered with an empty line under every bullet, even after
+  the nesting was fixed. The sanitizer now drops whitespace-only text nodes, but only where they
+  are clearly formatting: the parent is a list, or an element sibling is a block-level element.
+  Inline spacing is left alone, because the single space in `<strong>a</strong> <em>b</em>` is
+  content, and removing it would run the words together. `check:rich` asserts both directions.
+- **Unpinning a note chat appeared to do nothing.** The note-to-self rows were built by their own
+  `noteItem()` that hard-coded the pin flag, and were appended from a partition of the list ahead
+  of everything else. So a note could be unpinned with the header button and nothing on screen
+  would change: the button said off while the row kept its paperclip and stayed at the top. Note
+  chats are now pinned by default because `isPinned()` treats them that way, and they go through
+  the same sort and the same flag builder as every other row. `check:pin` covers the round trip
+  for both kinds of chat, and drops from 11/11 to 2/11 if the hard-coded flag comes back.
+- **Two copies of the app can both be running, and only one owns the debug port.** A dev run that
+  fails to bind `:9222` leaves the installed copy answering every `tools/cdp.js` evaluation, so a
+  change looks like it did nothing. `cdp.js` now prints the URL it attached to on every call,
+  which is the fastest way to notice. `check:rich` also runs against a throwaway profile, since
+  Chromium caches `file://` modules in `userData` and a check that inherits that cache is not a
+  check.
 - **Beeper accepts `isPinned` and then ignores it.** `PATCH /v1/chats/{id}` answers 200 and
   returns the value from before the change, and a fresh `GET` a second later confirms nothing
   moved. Verified on 4.3.160 across Signal, Google Voice and Matrix, while `isMuted` and

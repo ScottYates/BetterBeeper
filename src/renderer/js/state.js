@@ -264,7 +264,11 @@ export function isPinned(chat) {
   if (!chat) return false;
   const override = pinOverrides.get(chat.id);
   if (override !== undefined) return override;
-  return Boolean(chat.isPinned);
+  // Beeper pins the note-to-self chats above everything else, and reports
+  // isPinned for them, so that is the default. Reading it through this one
+  // predicate is what lets an explicit unpin take a note chat back down with
+  // the ordinary chats: the override is checked first, so it still wins.
+  return Boolean(chat.isPinned) || isNoteToSelf(chat);
 }
 
 export function setPinned(chatID, pinned) {
