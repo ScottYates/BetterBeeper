@@ -79,16 +79,16 @@ export function focusSearch() {
 }
 
 // ---------------------------------------------------------------------------
-// The "Inbox ▾" view switcher
+// The "Inbox" view switcher
 // ---------------------------------------------------------------------------
 
 /**
  * The views the header menu offers, in the order Beeper lists them.
  *
  * All three are filters over the same chat list. Beeper also lists a "Voice
- * calls" entry above the chats, but Beeper's Desktop API has no calls endpoint
- * — the v1 spec is chats, messages, contacts, assets, search, bridges, login
- * and setup, and nothing call-related — so there is nothing to put behind it.
+ * calls" entry above the chats, but Beeper's Desktop API has no calls endpoint.
+ * The v1 spec is chats, messages, contacts, assets, search, bridges, login and
+ * setup, and nothing call-related, so there is nothing to put behind it.
  */
 export const VIEWS = [
   { id: 'inbox', label: 'Inbox', filter: 'all' },
@@ -180,7 +180,7 @@ export function renderChats() {
  * Beeper pins these above the rest of the list; pinning is about *position*,
  * not prominence, so this is an ordinary `.chat-item` row in every respect -
  * same size, same padding, same preview line. The only differences are the
- * 📌 flag that explains why it is at the top, and an avatar that opens the
+ * pin flag that explains why it is at the top, and an avatar that opens the
  * chat rather than the image viewer (it is your own profile picture, not a
  * photo in a conversation).
  */
@@ -226,7 +226,7 @@ function noteItem(chat) {
 /**
  * The network badge on an avatar: a brand glyph when we have artwork for the
  * network, otherwise the monogram. Both sit on the same brand-coloured disc so
- * the list reads the same either way — except for self-coloured marks like
+ * the list reads the same either way, except for self-coloured marks like
  * Google Voice, which supply their own disc so the artwork stays visible.
  */
 export function networkBadge(source, { size = 11 } = {}) {

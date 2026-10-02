@@ -333,8 +333,9 @@ async function boot() {
     chip?.click();
   });
 
-  // The "Inbox ▾" header control. It was a label and a decorative caret for
-  // months, so it looked clickable and did nothing; it is now a real menu.
+  // The "Inbox" header control, with its caret. It was a label and a
+  // decorative caret for months, so it looked clickable and did nothing;
+  // it is now a real menu.
   const viewSwitch = $('#view-switch');
   viewSwitch.addEventListener('click', () => {
     const active = currentView();

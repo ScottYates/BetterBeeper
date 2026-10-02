@@ -1,6 +1,6 @@
 /**
  * Dev helper: sends a real key press to the running app over CDP, so keyboard
- * shortcuts can be verified the way a user actually triggers them.
+ * shortcuts can be verified the way a user triggers them.
  *
  * Usage: node tools/press-key.js Escape [--shot=out.png]
  */

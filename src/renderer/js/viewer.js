@@ -10,7 +10,7 @@
  *   drag              -> pan, once zoomed in
  *   double-click      -> toggle fit and 2x
  *   + / - / 0         -> step in, step out, reset to fit
- *   Esc, click, ✕     -> close
+ *   Esc, click, X     -> close
  *
  * The image URL arrives as a query parameter so the window can be a plain
  * `loadFile` with no IPC round trip and no Node access in the renderer.

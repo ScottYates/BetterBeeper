@@ -543,7 +543,7 @@ function messageNode(message, previous) {
 }
 
 /**
- * Sender avatar plus a network badge — but only when the message arrived on a
+ * Sender avatar plus a network badge, but only when the message arrived on a
  * different network than the chat as a whole. In a single-network chat the
  * header already names it, and a badge on every bubble would just be noise.
  */

@@ -150,7 +150,7 @@ export function glyphFor(networkName) {
  * glyph on the brand disc.
  *
  * Google Voice is the case that forces this. Its real artwork is a green
- * gradient, and the brand disc for it is Google green — so a self-coloured glyph
+ * gradient, and the brand disc for it is Google green, so a self-coloured glyph
  * on the usual disc is completely invisible (verified: a flat green circle with
  * a speck). Giving it a near-black disc, like the actual app icon, is the only
  * way the mark reads. Everything else stays monochrome for consistency.

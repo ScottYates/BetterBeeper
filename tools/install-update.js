@@ -165,7 +165,7 @@ if (!after) {
 const stat = fs.statSync(after.exe);
 
 // The installed exe carries the timestamp of the build it came from, which is
-// *older* than the setup.exe that carries it — so "is the install current?" is
+// *older* than the setup.exe that carries it, so "is the install current?" is
 // answered by comparing content against the build, not by comparing timestamps.
 // That also makes this idempotent: re-running without rebuilding is still a pass.
 const sha = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
