@@ -154,6 +154,23 @@ async function main() {
           || ('max-height is ' + cs.maxHeight + ', so the box can still grow');
       });
 
+      add('a Shift+Enter newline can still be scrolled back to', () => {
+        // Enter sends, but Shift+Enter types a real newline. With
+        // overflow-y hidden those rows exist and cannot be seen, which is
+        // worse than the box growing ever was.
+        const before = box(composer).height;
+        // Escaped twice on purpose: this harness is a template literal, so a
+        // bare \\n would land in the page script as a real line break and turn
+        // the string below into an unterminated literal.
+        composer.value = 'first line\\nsecond line\\nthird line';
+        const cs = getComputedStyle(composer);
+        const reaches = cs.overflowY === 'auto' || cs.overflowY === 'scroll';
+        const held = Math.abs(box(composer).height - before) < 0.5;
+        composer.value = '';
+        return reaches && held
+          || ('overflow-y ' + cs.overflowY + ', height held: ' + held);
+      });
+
       add('the composer fits inside the pane', () => {
         const field = composer.closest('.composer-field');
         return box(field).right <= box(list).right + 1

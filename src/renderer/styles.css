@@ -680,13 +680,16 @@ select { cursor: pointer; }
 /* One line, always. The composer used to auto-grow to 180px as the text
    wrapped, which pushed the whole thread up and left the newest message
    riding the top of the window. A long message now scrolls sideways inside the
-   box and the composer keeps its height whatever is typed into it. */
+   box and the composer keeps its height whatever is typed into it.
+   overflow-y stays auto rather than hidden: Enter sends, but Shift+Enter adds a
+   real newline, and hidden rows are rows you cannot scroll back to. The box is
+   still pinned to 36px, so the thread never moves either way. */
 .composer-field textarea {
   flex: 1; min-width: 0;
   height: 36px;
   resize: none; border: none; background: none; border-radius: 0;
   padding: 7px 6px; font-size: 14px;
-  white-space: pre; overflow-x: auto; overflow-y: hidden;
+  white-space: pre; overflow-x: auto; overflow-y: auto;
 }
 /* The box still scrolls, but it does not advertise itself with a scrollbar. */
 .composer-field textarea::-webkit-scrollbar { height: 0; width: 0; }
