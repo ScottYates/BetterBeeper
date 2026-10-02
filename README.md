@@ -340,6 +340,13 @@ All of these caused real bugs here, and all are easy to reintroduce:
   and hit targets together and keeps all of it in one coordinate space. It is also the mechanism
   the View menu's `zoomIn` / `zoomOut` / `resetZoom` roles were already using, so this makes that
   existing behaviour persistent instead of adding a second, competing scaling path.
+- **Chromium remembers a page zoom of its own, and restores it *after* you set one.** Page zoom is
+  persisted per origin, so a zoom set through the View menu's `zoomIn` / `zoomOut` roles — or by an
+  earlier version of the app — comes back on the next launch and overwrites anything applied
+  before the document loaded. The symptom is confusing because the setting is stored correctly and
+  the Settings dialog shows the right value while the window is plainly not that size. Both
+  windows therefore re-apply the saved scale on `did-finish-load`, which makes the stored value
+  the last word rather than the first one.
 - **The optimistic bubble must be inserted *before* the send round trip, not after.**
   Beeper can deliver the authoritative copy over the WebSocket while `sendMessage()` is
   still awaiting its response — the Signal bridge does exactly this, reliably. The placeholder

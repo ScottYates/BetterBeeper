@@ -271,7 +271,11 @@ function openImageViewer(srcURL, alt = '') {
   });
 
   // The viewer honours the same text size as the app, so its toolbar and zoom
-  // badge match the rest of the UI.
+  // badge match the rest of the UI. Re-applied after load for the same reason as
+  // the main window: Chromium restores its own per-origin zoom during load.
+  viewer.webContents.on('did-finish-load', () => {
+    applyTextScale(services?.settings?.read().textScale);
+  });
   applyTextScale(services?.settings?.read().textScale);
   return true;
 }
@@ -304,6 +308,15 @@ function createWindow() {
   // Apply the remembered text size before the first paint, so the window never
   // opens at one size and then visibly jumps to another.
   applyTextScale(services?.settings?.read().textScale);
+
+  // ...and again once the document is loaded, because Chromium keeps a page
+  // zoom of its own per origin and restores it during load. Setting the zoom
+  // only up front loses to that restore: the app would reopen at whatever was
+  // last set through the View menu's zoom roles, ignoring the saved setting
+  // entirely. Re-applying after load makes the stored value the last word.
+  mainWindow.webContents.on('did-finish-load', () => {
+    applyTextScale(services?.settings?.read().textScale);
+  });
 
   // Remember the size and position across runs.
   mainWindow.on('resize', persistBounds);
