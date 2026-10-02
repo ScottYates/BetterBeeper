@@ -167,6 +167,33 @@ function releaseNotes(version, commits) {
   return lines.join('\n');
 }
 
+/**
+ * Find the GitHub CLI.
+ *
+ * winget installs it to Program Files, which is not always on PATH for a
+ * non-interactive shell, so fall back to the documented location rather than
+ * failing with ENOENT at the last step.
+ */
+function findGh() {
+  const candidates = [
+    'gh',
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'GitHub CLI', 'gh.exe'),
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'GitHub CLI', 'bin', 'gh.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'GitHub CLI', 'gh.exe'),
+  ];
+  for (const c of candidates) {
+    if (path.isAbsolute(c) ? fs.existsSync(c) : true) {
+      try {
+        execFileSync(c, ['--version'], { stdio: 'ignore' });
+        return c;
+      } catch {
+        /* try the next one */
+      }
+    }
+  }
+  return null;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
@@ -210,9 +237,13 @@ async function main() {
 
   // 2. Build. A scratch output directory avoids the stale-artefact lock that
   //    bit twice on release/win-unpacked; gitignore covers release-*.
+  //    electron-builder is invoked through node rather than npx: on Windows npx
+  //    is a .cmd, and execFileSync cannot spawn one without a shell.
   const outDir = `release-v${next}`;
+  const builderCli = path.join(ROOT, 'node_modules', 'electron-builder', 'cli.js');
+  if (!fs.existsSync(builderCli)) fail(`electron-builder is not installed (${builderCli} missing)`);
   console.log(`building into ${outDir}...`);
-  run('npx', ['electron-builder', '--win', '--x64', `--config.directories.output=${outDir}`]);
+  run(process.execPath, [builderCli, '--win', '--x64', `--config.directories.output=${outDir}`]);
 
   const built = fs
     .readdirSync(path.join(ROOT, outDir))
@@ -227,10 +258,14 @@ async function main() {
   run(installer, ['/S'], { stdio: 'ignore' });
 
   // 4. Publish. The tag is created on main at HEAD by gh.
+  const gh = findGh();
+  if (!gh) {
+    fail('the GitHub CLI (gh) is not installed or not on PATH.\n  Install it with: winget install --id GitHub.cli -e');
+  }
   const notesPath = path.join(ROOT, 'RELEASE_NOTES.md');
   fs.writeFileSync(notesPath, releaseNotes(next, commits), 'utf8');
   console.log(`publishing v${next}...`);
-  run('gh', [
+  run(gh, [
     'release', 'create', `v${next}`, installer,
     '--repo', REPO,
     '--title', `Better Beeper ${next}`,
