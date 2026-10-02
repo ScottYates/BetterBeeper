@@ -11,6 +11,7 @@ import {
   isNoteToSelf,
   noteLabel,
   networkMeta,
+  isPinned,
 } from './state.js';
 import { toast, openLightbox } from './ui.js';
 import { networkIconMarkup, badgeBackground } from './network-icons.js';
@@ -165,9 +166,10 @@ export function renderChats() {
   // ordinary rows - the pinning is position, not size.
   for (const note of notes) list.append(noteItem(note));
 
-  // Pinned first, then most recent activity.
+  // Pinned first, then most recent activity. `isPinned` also covers pins the
+  // user set in this app, not just the ones Beeper reports.
   rest.sort((a, b) => {
-    if (Boolean(b.isPinned) !== Boolean(a.isPinned)) return b.isPinned ? 1 : -1;
+    if (isPinned(b) !== isPinned(a)) return isPinned(b) ? 1 : -1;
     return new Date(b.lastActivity || 0).getTime() - new Date(a.lastActivity || 0).getTime();
   });
 
@@ -283,6 +285,7 @@ function chatItem(chat) {
   const preview = chatPreviewText(chat);
   const flags = [];
 
+  if (isPinned(chat)) flags.push('📌');
   if (chat.isMuted) flags.push('🔕');
   if (chat.draft?.text) flags.push('✏️');
 

@@ -54,6 +54,9 @@ chats, and send, with every action shown to you before it happens.
 - Hover any row to archive it without opening it. The button becomes "Move back to inbox" on
   the same row once archived, so the Archive view is a two-way door
 - Mute, pin, archive and mark-unread from the thread header
+- Pinning is kept in this app rather than at Beeper. Beeper's Desktop API accepts
+  `isPinned` on `PATCH /v1/chats/{id}` and then drops it, so the pin set lives in
+  `settings.json` and the list is ordered by it
 - `Esc` closes the open chat and returns you to the list
 - Desktop notifications for messages that arrive while the window is in the background, with a
   full preference set under Settings > Notifications, including a master switch to turn them
@@ -209,9 +212,9 @@ without a live message:
 npm run check:notify    # 18 cases across every preference combination
 ```
 
-The conversation list width, and the window size and position, are remembered automatically and
-need no setting. Stored bounds are clamped to whichever display currently owns them, so
-unplugging a monitor cannot strand the window off-screen.
+The conversation list width, and the window size, position and maximized state, are remembered
+automatically and need no setting. Stored bounds are clamped to whichever display currently
+owns them, so unplugging a monitor cannot strand the window off-screen.
 
 Data lives in Electron's `userData` directory, which is `%APPDATA%\Better Beeper` on Windows.
 The directory is named after `productName`, not the npm package name.
@@ -337,6 +340,24 @@ that Beeper's own UI interprets on the client side:
 
 Each of these caused a real bug here.
 
+- **Beeper accepts `isPinned` and then ignores it.** `PATCH /v1/chats/{id}` answers 200 and
+  returns the value from before the change, and a fresh `GET` a second later confirms nothing
+  moved. Verified on 4.3.160 across Signal, Google Voice and Matrix, while `isMuted` and
+  `isLowPriority` on the same endpoint do apply, so it is the field and not the call. The pin
+  set is therefore kept in this app, as a map of chatID to the user's choice. It is a map and
+  not a set of pinned ids because Beeper does report some chats as pinned on its own, the
+  note-to-self rows, and a set could add those but never remove them. The client still sends the
+  PATCH, so that the two sources agree if Beeper ever starts honouring the field, but it never
+  merges the response: that response carries the pre-change value and would undo the pin.
+- **Construction-time window bounds are wrong on a mixed-DPI desktop.** The width and height
+  passed to the `BrowserWindow` constructor are converted using the *primary* display's scale
+  factor, so on a second monitor at a different scale the window arrives at the wrong size. A
+  window asked for 720x520 opened at 480x347 on a primary display set to 150%. Position was
+  unaffected, which made it look like a clamping bug. Re-applying the same bounds with
+  `setBounds()` once the window exists uses the scale of the display it actually landed on, and
+  the size then holds. The position has to be guarded with `Number.isFinite` the same way the
+  constructor guards it, because `setBounds` converts its arguments eagerly and throws on
+  `undefined` on a first run with nothing stored.
 - **Pick the viewer's display from the window, not from a rectangle.** The viewer opens full-size
   on one monitor, so getting this wrong drops an always-on-top window over whatever the user is
   working in. It first used `screen.getDisplayMatching(mainWindow.getBounds())`, which answers

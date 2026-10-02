@@ -20,6 +20,12 @@ const DEFAULTS = {
 
   sidebarWidth: 300,
   windowBounds: null,
+  // Whether the window was maximized when it closed. The bounds alone are not
+  // enough: getNormalBounds() is the pre-maximize rectangle.
+  windowMaximized: false,
+  // chatID -> the user's pin choice. Beeper's own isPinned does not apply, so
+  // the choice is kept here. See the note in renderer/js/state.js.
+  pinnedChats: {},
 
   // Desktop notifications.
   notifyEnabled: true,

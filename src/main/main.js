@@ -173,7 +173,14 @@ function persistBounds() {
     // Minimised and full-screen bounds would be saved as the "normal" size.
     if (mainWindow.isMinimized() || mainWindow.isFullScreen()) return;
     try {
-      services?.settings?.write({ windowBounds: mainWindow.getNormalBounds() });
+      // getNormalBounds() is deliberately the pre-maximize rectangle, so a
+      // maximized window restores to the size it had before it was maximized.
+      // The maximized flag is saved alongside it, otherwise closing a maximized
+      // window and reopening it would quietly un-maximize it.
+      services?.settings?.write({
+        windowBounds: mainWindow.getNormalBounds(),
+        windowMaximized: mainWindow.isMaximized(),
+      });
     } catch {
       /* a failed write just means we open at the default size next time */
     }
@@ -282,6 +289,7 @@ function openImageViewer(srcURL, alt = '') {
 
 function createWindow() {
   const saved = restoreBounds();
+  const maximized = services?.settings?.read().windowMaximized === true;
 
   mainWindow = new BrowserWindow({
     width: saved.width || 1360,
@@ -302,7 +310,34 @@ function createWindow() {
     },
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', () => {
+    // The size and position passed to the constructor do not survive contact
+    // with a mixed-DPI desktop. On Windows the construction-time width and
+    // height are converted using the *primary* display's scale factor, so on a
+    // second monitor at a different scale the window comes out at the wrong
+    // size: a window asked for 720x520 opened at 480x347, because the primary
+    // display here is at 150%. Position was unaffected, which is what made it
+    // look like a clamp bug rather than a DPI one.
+    //
+    // Re-applying the same bounds once the window exists uses the scale of the
+    // display the window actually landed on, and the size then holds. It is
+    // also safe to skip when the saved state says the window was maximized:
+    // setBounds on a maximized window would drop it back to windowed.
+    if (!maximized) {
+      // Only pass a position that is actually a number. `setBounds` converts its
+      // arguments eagerly and throws on undefined, which is what happens on a
+      // first run where restoreBounds() found nothing to restore and returned
+      // {}. The constructor above guards x and y the same way.
+      const target = { width: saved.width || 1360, height: saved.height || 900 };
+      if (Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+        target.x = saved.x;
+        target.y = saved.y;
+      }
+      mainWindow.setBounds(target);
+    }
+    if (maximized) mainWindow.maximize();
+    mainWindow.show();
+  });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
   // Apply the remembered text size before the first paint, so the window never

@@ -228,6 +228,51 @@ export function upsertChat(chat) {
   state.chats.set(chat.id, existing ? { ...existing, ...chat } : chat);
 }
 
+// ---------------------------------------------------------------------------
+// Pins
+//
+// Beeper's Desktop API advertises `isPinned` on PATCH /v1/chats/{id} and then
+// ignores it: the call returns 200 with the previous value, and a fresh GET
+// afterwards confirms nothing changed. Verified against 4.3.160 on Signal,
+// Google Voice and Matrix accounts, while `isMuted` and `isLowPriority` on the
+// same endpoint do apply. So the user's choice is recorded here instead.
+//
+// It is recorded as an override rather than a plain set of pinned ids, because
+// Beeper does report some chats as pinned on its own (the note-to-self rows).
+// A set of ids could add one of those but never remove it; an override carries
+// the unpin too, and means the two sources cannot fight once Beeper starts
+// honouring isPinned for real.
+// ---------------------------------------------------------------------------
+
+/** chatID -> the user's explicit choice, true or false. */
+const pinOverrides = new Map();
+
+export function loadPins(map) {
+  pinOverrides.clear();
+  if (map && typeof map === 'object') {
+    for (const [id, value] of Object.entries(map)) {
+      if (typeof value === 'boolean') pinOverrides.set(id, value);
+    }
+  }
+}
+
+export function pinMap() {
+  return Object.fromEntries(pinOverrides);
+}
+
+export function isPinned(chat) {
+  if (!chat) return false;
+  const override = pinOverrides.get(chat.id);
+  if (override !== undefined) return override;
+  return Boolean(chat.isPinned);
+}
+
+export function setPinned(chatID, pinned) {
+  if (!chatID) return false;
+  pinOverrides.set(chatID, Boolean(pinned));
+  return pinOverrides.get(chatID);
+}
+
 export function chatPreviewText(chat) {
   const preview = chat?.preview;
   if (!preview) return '';

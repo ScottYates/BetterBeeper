@@ -24,6 +24,9 @@ import {
   removeMessage,
   isNoteToSelf,
   networkNameFor,
+  isPinned,
+  setPinned,
+  pinMap,
 } from './state.js';
 import { toast, confirmDialog, openEmojiPicker, openPopover, openLightbox } from './ui.js';
 import { avatarNode, renderChats, networkBadge } from './sidebar.js';
@@ -82,7 +85,7 @@ export function initThread() {
   });
 
   $('#btn-mute').addEventListener('click', () => patchChat({ isMuted: !(currentChat?.isMuted ?? false) }));
-  $('#btn-pin').addEventListener('click', () => patchChat({ isPinned: !(currentChat?.isPinned ?? false) }));
+  $('#btn-pin').addEventListener('click', togglePin);
   $('#btn-archive').addEventListener('click', archiveActive);
   $('#btn-unread').addEventListener('click', markActiveUnread);
 
@@ -238,8 +241,8 @@ function renderHeader() {
   mute.classList.toggle('is-on', Boolean(chat.isMuted));
 
   const pin = $('#btn-pin');
-  pin.dataset.tip = chat.isPinned ? 'Unpin from top' : 'Pin to top';
-  pin.classList.toggle('is-on', Boolean(chat.isPinned));
+  pin.dataset.tip = isPinned(chat) ? 'Unpin from top' : 'Pin to top';
+  pin.classList.toggle('is-on', isPinned(chat));
 
   const archive = $('#btn-archive');
   archive.dataset.tip = chat.isArchived ? 'Move back to inbox' : 'Archive chat';
@@ -296,6 +299,27 @@ function chatSubtitle(chat) {
   if (chat.isReadOnly) parts.push('read-only');
   if (chat.messageExpirySeconds) parts.push(`disappearing (${chat.messageExpirySeconds}s)`);
   return parts.filter(Boolean).join(' · ');
+}
+
+async function togglePin() {
+  if (!currentChat) return;
+  const chat = currentChat;
+  const pinning = !isPinned(chat);
+
+  // Record the choice locally first, so the button and the list move on the
+  // click rather than after a round trip that Beeper may not honour anyway.
+  setPinned(chat.id, pinning);
+  renderHeader();
+  renderChats();
+
+  await api.settings.set({ pinnedChats: pinMap() }).catch(() => {});
+
+  // Still tell Beeper, so that if isPinned ever starts working the two agree.
+  // Its answer is deliberately not merged: the response carries the value from
+  // before the change, so trusting it would undo the pin the user just made.
+  await call(() => api.chats.patch(chat.id, { isPinned: pinning }), { context: 'pin' });
+
+  toast(pinning ? 'Pinned to top' : 'Unpinned', 'success', 1600);
 }
 
 async function patchChat(patch) {
