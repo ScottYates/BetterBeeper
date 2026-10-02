@@ -14,6 +14,10 @@ const DEFAULTS = {
   markReadOnOpen: true,
   sendOnEnter: true,
   theme: 'system',
+
+  // Text size, as a page-zoom factor. 1 is the size the UI was designed at.
+  textScale: 1,
+
   sidebarWidth: 300,
   windowBounds: null,
 

@@ -6,6 +6,19 @@ import { state, bus, upsertChat } from './state.js';
 import { openModal, closeModal, toast } from './ui.js';
 import { avatarNode } from './sidebar.js';
 
+/**
+ * Text-size presets, as [zoom factor, label]. 1 is the size the UI was designed
+ * at; the percentage is shown so the choice is unambiguous. The main process
+ * clamps whatever lands here into 0.5-3.
+ */
+const TEXT_SCALES = [
+  [0.9, 'Small (90%)'],
+  [1, 'Default (100%)'],
+  [1.15, 'Large (115%)'],
+  [1.3, 'Larger (130%)'],
+  [1.5, 'Largest (150%)'],
+];
+
 // ---------------------------------------------------------------------------
 // New chat
 // ---------------------------------------------------------------------------
@@ -208,6 +221,25 @@ export async function openSettings() {
   const sendOnEnter = el('input', { type: 'checkbox', checked: settings.sendOnEnter !== false });
   const markReadOnOpen = el('input', { type: 'checkbox', checked: settings.markReadOnOpen !== false });
 
+  // Text size. The value is a page-zoom factor; 1 is the designed size. The
+  // percentage is shown so the choice does not have to be guessed at.
+  const savedScale = Number(settings.textScale);
+  const currentScale = Number.isFinite(savedScale) && savedScale > 0 ? savedScale : 1;
+  const textScale = el('select');
+  for (const [value, label] of TEXT_SCALES) {
+    textScale.append(el('option', { value: String(value), text: label, selected: Math.abs(currentScale - value) < 0.001 }));
+  }
+  // A stored factor that is not one of the presets (hand-edited, or clamped in
+  // the main process) still has to show something sensible rather than snap
+  // the dropdown to an unrelated value.
+  if (!TEXT_SCALES.some(([value]) => Math.abs(currentScale - value) < 0.001)) {
+    textScale.append(el('option', {
+      value: String(currentScale),
+      text: `Custom (${Math.round(currentScale * 100)}%)`,
+      selected: true,
+    }));
+  }
+
   const notifyEnabled = el('input', { type: 'checkbox', checked: settings.notifyEnabled !== false });
   const notifyPreview = el('select');
   for (const [value, label] of [
@@ -315,6 +347,12 @@ export async function openSettings() {
       theme,
     ),
     el(
+      'div',
+      { class: 'form-row' },
+      el('label', { text: 'Text size' }),
+      textScale,
+    ),
+    el(
       'label',
       { class: 'form-row', style: { display: 'flex', gap: '9px', alignItems: 'center' } },
       sendOnEnter,
@@ -366,6 +404,7 @@ export async function openSettings() {
             baseUrl: baseUrl.value.trim(),
             model: model.value.trim(),
             theme: theme.value,
+            textScale: Number(textScale.value),
             sendOnEnter: sendOnEnter.checked,
             markReadOnOpen: markReadOnOpen.checked,
             notifyEnabled: notifyEnabled.checked,

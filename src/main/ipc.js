@@ -52,7 +52,7 @@ const handle = (fn) => async (_event, ...args) => {
   }
 };
 
-function register({ getWindow, openImageViewer }) {
+function register({ getWindow, openImageViewer, applyTextScale }) {
   const userData = app.getPath('userData');
   const tokenStore = new TokenStore(userData);
   const settings = new SettingsStore(userData);
@@ -282,7 +282,15 @@ function register({ getWindow, openImageViewer }) {
   // ---- assistant --------------------------------------------------------
 
   ipcMain.handle('settings:get', handle(() => settings.read()));
-  ipcMain.handle('settings:set', handle((patch) => settings.write(patch || {})));
+  ipcMain.handle('settings:set', handle((patch) => {
+    const saved = settings.write(patch || {});
+    // Text size is window state, not document state, so only the main process
+    // can apply it. Re-applied on every write because the value is clamped and
+    // idempotent, which also means it takes effect no matter which surface
+    // saved it - the settings dialog, or the sidebar-width autosave.
+    if (typeof applyTextScale === 'function') applyTextScale(saved.textScale);
+    return saved;
+  }));
 
   ipcMain.handle('mcp:tools', handle(async () => {
     const res = await mcp.connect();

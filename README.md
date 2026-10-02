@@ -39,6 +39,9 @@ your chats — and send, with every action shown to you before it happens.
   (200–620px). Double-click the divider to reset it, or focus it and use the arrow keys
 - The window is freely resizable, and **both the window size and the list width are
   remembered** between runs
+- **Text size is adjustable and remembered** — five steps from 90% to 150%. It scales the whole
+  UI, so type, icons, bubbles and spacing grow together, and it is reapplied before the first
+  paint so the window never opens at one size and then visibly jumps to another
 - Thread view with day dividers, read receipts, reply quoting, and per-message hover actions
 - Beeper-style bubbles: timestamp sits *inside* the bubble at its trailing edge, and sender
   names are hidden in one-to-one chats because the header already says who you are talking to
@@ -179,6 +182,7 @@ Open **Settings** (gear icon, or `Ctrl+,` behaviour via the menu):
 | Model | Model identifier, e.g. `gpt-4o-mini` |
 | API key | Stored encrypted; blank means "keep the existing key" |
 | Theme | `system`, `dark`, `light` |
+| Text size | `Small` … `Largest` (90%–150%). Scales the whole UI and is restored before the first paint |
 | Enter to send | Off to use `Ctrl/Cmd+Enter` instead |
 | Mark read on open | Applies when you open a chat |
 | Show desktop notifications | **Master switch** — off means no notifications at all |
@@ -327,6 +331,15 @@ All of these caused real bugs here, and all are easy to reintroduce:
   multi-monitor setup — the viewer landed on the wrong screen entirely. It now asks
   `mainWindow.getDisplay()` directly, which is exactly the question being asked, and keeps
   `getDisplayMatching()` only as a fallback.
+- **Text size is page zoom, not a CSS `font-size` override.** Three things in this UI convert
+  between pointer coordinates and CSS pixels — the sidebar splitter (which sets the width to
+  `event.clientX`), the tooltip placement, and the popover clamping — and the sidebar carries a
+  200–620px clamp. Scaling only the type would grow the words while every box, every pointer
+  calculation and that clamp kept describing the *old* size, so the splitter would drift out of
+  step with the divider it is supposed to be dragging. Chromium's page zoom scales type, boxes
+  and hit targets together and keeps all of it in one coordinate space. It is also the mechanism
+  the View menu's `zoomIn` / `zoomOut` / `resetZoom` roles were already using, so this makes that
+  existing behaviour persistent instead of adding a second, competing scaling path.
 - **The optimistic bubble must be inserted *before* the send round trip, not after.**
   Beeper can deliver the authoritative copy over the WebSocket while `sendMessage()` is
   still awaiting its response — the Signal bridge does exactly this, reliably. The placeholder

@@ -100,6 +100,39 @@ function registerFileProtocol() {
 const MIN_WIDTH = 720;
 const MIN_HEIGHT = 520;
 
+// Text size is applied as Chromium page zoom rather than a CSS font-size
+// override. Zoom scales type, icons, padding and hit targets together and keeps
+// pointer coordinates in one consistent space, which matters because the
+// sidebar splitter and the tooltips both convert between client coordinates and
+// CSS pixels. A font-size override would scale the text but leave the boxes, the
+// pointer maths and the 200-620px sidebar clamp all describing a different size.
+// The View menu's zoomIn / zoomOut / resetZoom roles already drive this same
+// mechanism, so this makes that behaviour persistent rather than adding a
+// parallel one.
+const DEFAULT_TEXT_SCALE = 1;
+const MIN_TEXT_SCALE = 0.5;
+const MAX_TEXT_SCALE = 3;
+
+function clampTextScale(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_TEXT_SCALE;
+  return Math.min(MAX_TEXT_SCALE, Math.max(MIN_TEXT_SCALE, n));
+}
+
+/** Apply the text size to every window the app owns. */
+function applyTextScale(value) {
+  const scale = clampTextScale(value);
+  for (const win of [mainWindow, viewerWindow]) {
+    if (!win || win.isDestroyed()) continue;
+    try {
+      win.webContents.setZoomFactor(scale);
+    } catch {
+      // A window mid-teardown is not worth failing a settings save over.
+    }
+  }
+  return scale;
+}
+
 let boundsTimer = 0;
 
 /**
@@ -236,6 +269,10 @@ function openImageViewer(srcURL, alt = '') {
   viewer.loadFile(path.join(__dirname, '..', 'renderer', 'viewer.html'), {
     query: { src: srcURL, alt },
   });
+
+  // The viewer honours the same text size as the app, so its toolbar and zoom
+  // badge match the rest of the UI.
+  applyTextScale(services?.settings?.read().textScale);
   return true;
 }
 
@@ -263,6 +300,10 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+
+  // Apply the remembered text size before the first paint, so the window never
+  // opens at one size and then visibly jumps to another.
+  applyTextScale(services?.settings?.read().textScale);
 
   // Remember the size and position across runs.
   mainWindow.on('resize', persistBounds);
@@ -409,6 +450,7 @@ app.whenReady().then(async () => {
   services = ipc.register({
     getWindow: () => mainWindow,
     openImageViewer,
+    applyTextScale,
   });
   createWindow();
   wireNotifications();
