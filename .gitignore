@@ -1,0 +1,21 @@
+node_modules/
+release/
+dist/
+
+# Dev artifacts
+*.log
+.DS_Store
+Thumbs.db
+
+# Local screenshots produced while developing
+/shot-*.png
+/app-*.png
+
+# docs/ holds development captures of the running app. Those show real contact
+# names, phone numbers, private message text and a private server URL, so they
+# stay on this machine and are never published. Only the synthetic sheet of
+# hand-drawn network glyphs - which contains no user data - is committed.
+# Note the `/docs/*` form: excluding the directory itself would make the
+# negation below unreachable.
+/docs/*
+!/docs/network-glyphs.png

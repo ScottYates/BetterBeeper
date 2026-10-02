@@ -1,0 +1,440 @@
+/** Modals: start a new chat (contact search) and app settings. */
+
+import { $, el, clear, debounce, escapeHtml, initials, hueFor, fullTime, renderRichText } from './util.js';
+import { api, call } from './api.js';
+import { state, bus, upsertChat } from './state.js';
+import { openModal, closeModal, toast } from './ui.js';
+import { avatarNode } from './sidebar.js';
+
+// ---------------------------------------------------------------------------
+// New chat
+// ---------------------------------------------------------------------------
+
+export function openNewChat() {
+  const results = el('div', { class: 'result-list' });
+  const summary = el('div', { class: 'search-summary', text: 'Search your contacts to start a conversation.' });
+
+  const search = el('input', {
+    type: 'search',
+    placeholder: 'Search contacts…',
+    autocomplete: 'off',
+    spellcheck: 'false',
+  });
+
+  let selection = new Map(); // contactID -> contact
+
+  const selectedBar = el('div', { class: 'search-summary' });
+  const createBtn = el('button', {
+    class: 'btn btn-primary',
+    text: 'Start chat',
+    disabled: true,
+    onClick: createChat,
+  });
+
+  const accountSelect = el('select');
+  for (const account of state.accounts) {
+    accountSelect.append(
+      el('option', {
+        value: account.accountID,
+        text: `${account.network || account.accountID} · ${account.user?.fullName || account.user?.username || ''}`,
+      }),
+    );
+  }
+  const connected = state.accounts.filter((a) => a.status === 'connected');
+  if (connected.length) {
+    accountSelect.value = connected[0].accountID;
+  }
+
+  const body = el(
+    'div',
+    {},
+    el('div', { class: 'form-row' }, el('label', { text: 'Account' }), accountSelect),
+    el('div', { class: 'form-row' }, search),
+    summary,
+    results,
+    selectedBar,
+  );
+
+  openModal({
+    title: 'New chat',
+    body,
+    footer: [el('button', { class: 'btn', text: 'Cancel', onClick: closeModal }), createBtn],
+  });
+
+  search.addEventListener(
+    'input',
+    debounce(async () => {
+      const query = search.value.trim();
+      if (!query) {
+        summary.textContent = 'Search your contacts to start a conversation.';
+        clear(results);
+        return;
+      }
+      const accountID = accountSelect.value;
+      if (!accountID) {
+        summary.textContent = 'No account selected.';
+        return;
+      }
+      summary.textContent = 'Searching…';
+      const res = await call(() => api.contacts(accountID, { query, limit: 40 }), {
+        context: 'contacts',
+        fallback: null,
+      });
+      if (!res) {
+        summary.textContent = 'Could not load contacts for that account.';
+        return;
+      }
+      const items = res.items || [];
+      summary.textContent = items.length
+        ? `${items.length} contact${items.length === 1 ? '' : 's'}`
+        : 'No contacts matched. Beeper can only search contacts it has synced for this bridge.';
+
+      clear(results);
+      for (const contact of items) {
+        const contactID = contact.id || contact.userID;
+        if (!contactID) continue;
+        const node = el(
+          'div',
+          {
+            class: `result-item${selection.has(contactID) ? ' is-selected' : ''}`,
+            dataset: { contactId: contactID },
+            onClick: () => {
+              if (selection.has(contactID)) selection.delete(contactID);
+              else selection.set(contactID, contact);
+              node.classList.toggle('is-selected', selection.has(contactID));
+              node.querySelector('.result-check')?.remove();
+              if (selection.has(contactID)) node.append(el('span', { class: 'result-check', text: '✓' }));
+              updateSelected();
+            },
+          },
+          avatarNode(contact, contact.fullName || contact.username || '?', 'sm'),
+          el(
+            'div',
+            { class: 'result-item-body' },
+            el('div', { class: 'result-item-title', text: contact.fullName || contact.username || contact.phoneNumber || contactID }),
+            el('div', {
+              class: 'result-item-sub',
+              text: contact.username || contact.phoneNumber || contact.email || contactID,
+            }),
+          ),
+        );
+        results.append(node);
+      }
+    }, 300),
+  );
+
+  function updateSelected() {
+    const count = selection.size;
+    selectedBar.textContent = count ? `${count} selected` : '';
+    createBtn.disabled = count === 0;
+  }
+
+  async function createChat() {
+    const accountID = accountSelect.value;
+    const contactIDs = [...selection.keys()];
+    if (!accountID || !contactIDs.length) return;
+
+    createBtn.disabled = true;
+    createBtn.textContent = 'Creating…';
+
+    const single = contactIDs.length === 1;
+    const res = await call(
+      () =>
+        api.chats.create({
+          accountID,
+          type: single ? 'single' : 'group',
+          participantIDs: contactIDs,
+          title: single ? undefined : contactIDs.map((id) => selection.get(id)?.fullName).filter(Boolean).join(', '),
+        }),
+      { context: 'create chat', throwOnError: true },
+    ).catch((err) => ({ __error: err }));
+
+    if (res?.__error) {
+      toast(res.__error.message, 'error', 5000);
+      createBtn.disabled = false;
+      createBtn.textContent = 'Start chat';
+      return;
+    }
+
+    const chatID = res?.id || res?.chatID;
+    closeModal();
+    toast('Chat created', 'success', 1800);
+    if (chatID) {
+      upsertChat(res);
+      bus.emit('chats:changed');
+      bus.emit('chat:open', chatID);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+export async function openSettings() {
+  const settings = (await call(() => api.settings.get(), { context: 'settings' })) || {};
+  state.settings = { ...state.settings, ...settings };
+
+  const provider = el('select');
+  for (const [value, label] of [
+    ['openai', 'OpenAI-compatible (OpenAI, OpenRouter, Groq, Ollama, LM Studio, vLLM…)'],
+    ['anthropic', 'Anthropic'],
+  ]) {
+    provider.append(el('option', { value, text: label, selected: settings.provider === value }));
+  }
+
+  const baseUrl = el('input', {
+    type: 'text',
+    value: settings.baseUrl || '',
+    placeholder: 'https://api.openai.com/v1',
+    spellcheck: 'false',
+  });
+  const model = el('input', {
+    type: 'text',
+    value: settings.model || '',
+    placeholder: 'gpt-4o-mini',
+    spellcheck: 'false',
+  });
+  const apiKey = el('input', {
+    type: 'password',
+    value: '',
+    placeholder: settings.hasApiKey ? '•••••••• (stored)' : 'sk-…',
+    autocomplete: 'off',
+  });
+  const theme = el('select');
+  for (const value of ['system', 'dark', 'light']) {
+    theme.append(el('option', { value, text: value, selected: (settings.theme || 'system') === value }));
+  }
+  const sendOnEnter = el('input', { type: 'checkbox', checked: settings.sendOnEnter !== false });
+  const markReadOnOpen = el('input', { type: 'checkbox', checked: settings.markReadOnOpen !== false });
+
+  const notifyEnabled = el('input', { type: 'checkbox', checked: settings.notifyEnabled !== false });
+  const notifyPreview = el('select');
+  for (const [value, label] of [
+    ['full', 'Sender and message text'],
+    ['sender', 'Sender only'],
+    ['none', 'Nothing — just "New message"'],
+  ]) {
+    notifyPreview.append(el('option', { value, text: label, selected: (settings.notifyPreview || 'full') === value }));
+  }
+  const notifyMutedChats = el('input', { type: 'checkbox', checked: settings.notifyMutedChats === true });
+  const notifySound = el('input', { type: 'checkbox', checked: settings.notifySound !== false });
+  const notifyWhenFocused = el('input', {
+    type: 'checkbox',
+    checked: settings.notifyWhenFocused === true,
+  });
+
+  // The sub-options are meaningless with notifications off, so dim them.
+  const notifyOptions = el(
+    'div',
+    { class: 'notify-options' },
+    el(
+      'div',
+      { class: 'form-row' },
+      el('label', { text: 'Show in the notification' }),
+      notifyPreview,
+    ),
+    el(
+      'label',
+      { class: 'form-row row-check', style: { display: 'flex', gap: '9px', alignItems: 'center' } },
+      notifyMutedChats,
+      el('span', { text: 'Also notify for muted chats' }),
+    ),
+    el(
+      'label',
+      { class: 'form-row row-check', style: { display: 'flex', gap: '9px', alignItems: 'center' } },
+      notifySound,
+      el('span', { text: 'Play a sound' }),
+    ),
+    el(
+      'label',
+      { class: 'form-row row-check', style: { display: 'flex', gap: '9px', alignItems: 'center' } },
+      notifyWhenFocused,
+      el('span', { text: 'Notify even while this window is focused' }),
+    ),
+  );
+
+  const syncNotifyOptions = () => {
+    notifyOptions.classList.toggle('is-disabled', !notifyEnabled.checked);
+    for (const input of notifyOptions.querySelectorAll('input, select')) input.disabled = !notifyEnabled.checked;
+  };
+  notifyEnabled.addEventListener('change', syncNotifyOptions);
+  syncNotifyOptions();
+
+  const baseUrlField = el(
+    'div',
+    { class: 'form-row' },
+    el('label', { text: 'Base URL' }),
+    baseUrl,
+    el('p', {
+      class: 'hint',
+      text: 'Base URL of an OpenAI-compatible API. Leave the default for OpenAI; for Ollama use http://localhost:11434/v1.',
+    }),
+  );
+  const baseUrlHint = baseUrlField.querySelector('.hint');
+
+  provider.addEventListener('change', () => {
+    if (provider.value === 'anthropic') {
+      baseUrl.value = 'https://api.anthropic.com';
+      baseUrlHint.textContent = 'Leave as the default for Anthropic.';
+    } else if (baseUrl.value.includes('anthropic')) {
+      baseUrl.value = 'https://api.openai.com/v1';
+      baseUrlHint.textContent = baseUrlHint.textContent.replace('Anthropic', 'OpenAI');
+    }
+  });
+
+  const body = el(
+    'div',
+    {},
+    el('h4', { text: 'Assistant', style: { marginBottom: '10px' } }),
+    el('div', { class: 'form-row' }, el('label', { text: 'Provider' }), provider),
+    baseUrlField,
+    el(
+      'div',
+      { class: 'form-grid' },
+      el('div', { class: 'form-row' }, el('label', { text: 'Model' }), model),
+      el('div', { class: 'form-row' }, el('label', { text: 'API key' }), apiKey),
+    ),
+    el('p', {
+      class: 'hint',
+      style: { marginTop: '-6px', marginBottom: '16px' },
+      text: 'The key is stored encrypted in your OS keychain and only ever used from the main process.',
+    }),
+    el('button', {
+      class: 'btn btn-sm',
+      text: 'Show available MCP tools',
+      style: { marginBottom: '22px' },
+      onClick: () => window.dispatchEvent(new CustomEvent('show-mcp-tools')),
+    }),
+
+    el('h4', { text: 'Behaviour', style: { marginBottom: '10px' } }),
+    el(
+      'div',
+      { class: 'form-row' },
+      el('label', { text: 'Theme' }),
+      theme,
+    ),
+    el(
+      'label',
+      { class: 'form-row', style: { display: 'flex', gap: '9px', alignItems: 'center' } },
+      sendOnEnter,
+      el('span', { text: 'Press Enter to send (Shift+Enter for a new line)' }),
+    ),
+    el(
+      'label',
+      { class: 'form-row', style: { display: 'flex', gap: '9px', alignItems: 'center' } },
+      markReadOnOpen,
+      el('span', { text: 'Mark a chat as read when I open it' }),
+    ),
+
+    el('h4', { text: 'Notifications', style: { margin: '20px 0 10px' } }),
+    el(
+      'label',
+      { class: 'form-row', style: { display: 'flex', gap: '9px', alignItems: 'center' } },
+      notifyEnabled,
+      el('span', { text: 'Show desktop notifications' }),
+    ),
+    notifyOptions,
+
+    el('h4', { text: 'Connection', style: { margin: '20px 0 10px' } }),
+    el('p', { class: 'muted tiny', id: 'settings-connection' }),
+    el('button', {
+      class: 'btn btn-sm',
+      text: 'Disconnect from Beeper',
+      style: { marginTop: '10px' },
+      onClick: async () => {
+        const res = await call(() => api.disconnect(), { context: 'disconnect' });
+        if (res !== null) {
+          closeModal();
+          window.location.reload();
+        }
+      },
+    }),
+  );
+
+  openModal({
+    title: 'Settings',
+    body,
+    footer: [
+      el('button', { class: 'btn', text: 'Cancel', onClick: closeModal }),
+      el('button', {
+        class: 'btn btn-primary',
+        text: 'Save',
+        onClick: async () => {
+          const patch = {
+            provider: provider.value,
+            baseUrl: baseUrl.value.trim(),
+            model: model.value.trim(),
+            theme: theme.value,
+            sendOnEnter: sendOnEnter.checked,
+            markReadOnOpen: markReadOnOpen.checked,
+            notifyEnabled: notifyEnabled.checked,
+            notifyPreview: notifyPreview.value,
+            notifyMutedChats: notifyMutedChats.checked,
+            notifySound: notifySound.checked,
+            notifyWhenFocused: notifyWhenFocused.checked,
+          };
+          if (apiKey.value.trim()) patch.apiKey = apiKey.value.trim();
+          if (apiKey.value === '') delete patch.apiKey;
+
+          const saved = await call(() => api.settings.set(patch), { context: 'save settings' });
+          if (saved) {
+            state.settings = saved;
+            applyTheme(saved.theme);
+            closeModal();
+            toast('Settings saved', 'success', 1600);
+            window.dispatchEvent(new CustomEvent('settings:changed'));
+          }
+        },
+      }),
+    ],
+  });
+}
+
+export function applyTheme(theme) {
+  const prefersLight = window.matchMedia?.('(prefers-color-scheme: light)').matches;
+  const resolved = theme === 'system' ? (prefersLight ? 'light' : 'dark') : theme;
+  document.documentElement.dataset.theme = resolved;
+}
+
+// ---------------------------------------------------------------------------
+// Message search (accessible from the sidebar search)
+// ---------------------------------------------------------------------------
+
+export async function openMessageSearch(query) {
+  const body = el('div', { class: 'result-list' }, el('div', { class: 'search-loading', text: 'Searching…' }));
+  openModal({ title: `Search: ${query}`, body });
+
+  const res = await call(() => api.messages.search({ query, limit: 50 }), {
+    context: 'message search',
+    fallback: null,
+  });
+  clear(body);
+  const items = res?.items || [];
+  if (!items.length) {
+    body.append(el('div', { class: 'empty-note', text: 'No matching messages found.' }));
+    return;
+  }
+  for (const message of items) {
+    const chat = state.chats.get(message.chatID);
+    body.append(
+      el(
+        'div',
+        {
+          class: 'result-item',
+          onClick: () => {
+            closeModal();
+            bus.emit('chat:open', message.chatID, { focusMessageID: message.id });
+          },
+        },
+        avatarNode(chat, chat?.title || '?', 'sm'),
+        el(
+          'div',
+          { class: 'result-item-body' },
+          el('div', { class: 'result-item-sub', text: `${chat?.title || 'Chat'} · ${message.senderName || ''} · ${fullTime(message.timestamp)}` }),
+          el('div', { class: 'result-item-title', html: renderRichText(String(message.text || '').slice(0, 160)) }),
+        ),
+      ),
+    );
+  }
+}

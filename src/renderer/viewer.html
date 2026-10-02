@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' beeper-file: data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>Image</title>
+    <link rel="stylesheet" href="viewer.css" />
+  </head>
+  <body>
+    <!--
+      A standalone viewer window, opened above the app rather than inside it.
+      Its own window means the image can be zoomed and panned without the chat
+      list or thread reacting, and without the app window's size capping it.
+    -->
+    <div class="viewer-stage" id="stage">
+      <img class="viewer-img" id="img" alt="" draggable="false" />
+    </div>
+
+    <div class="viewer-zoom" id="zoom">100%</div>
+    <div class="viewer-hint" id="hint">scroll to zoom · drag to pan · double-click to zoom · esc to close</div>
+    <div class="viewer-toolbar">
+      <button id="zoom-out" aria-label="Zoom out">−</button>
+      <button id="zoom-in" aria-label="Zoom in">+</button>
+      <button id="zoom-fit" aria-label="Fit to window">Fit</button>
+      <button id="close" aria-label="Close">✕</button>
+    </div>
+
+    <div class="viewer-error" id="error" hidden>
+      <p>That image could not be loaded.</p>
+    </div>
+
+    <script type="module" src="js/viewer.js"></script>
+  </body>
+</html>

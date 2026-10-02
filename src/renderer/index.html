@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' beeper-file: data: https:; media-src 'self' beeper-file: data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'"
+    />
+    <title>Better Beeper</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- ================= Connect / setup screen ================= -->
+    <section id="connect-screen" class="screen" hidden>
+      <div class="connect-card">
+        <div class="brand">
+          <div class="brand-mark">B</div>
+          <div>
+            <h1>Better Beeper</h1>
+            <p class="muted">A native client for your local Beeper Desktop.</p>
+          </div>
+        </div>
+
+        <div id="connect-status" class="status-pill" data-state="unknown">
+          <span class="dot"></span><span class="label">Checking Beeper Desktop…</span>
+        </div>
+
+        <div id="connect-error" class="alert alert-error" hidden></div>
+
+        <div class="connect-actions">
+          <button id="btn-connect" class="btn btn-primary btn-lg">Connect to Beeper</button>
+          <button id="btn-manual-toggle" class="btn btn-ghost">Use a token instead</button>
+        </div>
+
+        <div id="manual-token-box" class="manual-token" hidden>
+          <label for="manual-token">Access token</label>
+          <p class="hint">
+            In Beeper: <strong>Settings → Integrations → Approved connections → +</strong>. Create a token,
+            then paste it here. It is stored encrypted in your OS keychain.
+          </p>
+          <textarea
+            id="manual-token"
+            rows="3"
+            spellcheck="false"
+            placeholder="paste your Beeper access token"
+          ></textarea>
+          <button id="btn-manual" class="btn btn-primary">Use this token</button>
+        </div>
+
+        <details class="connect-help">
+          <summary>Having trouble?</summary>
+          <ul>
+            <li>Make sure Beeper Desktop is running on this computer.</li>
+            <li>
+              Enable it in <strong>Beeper → Settings → Integrations → Desktop API</strong>, then restart
+              Beeper.
+            </li>
+            <li>The API listens on <code>http://localhost:23373</code> by default.</li>
+            <li>
+              <a href="#" data-external="https://developers.beeper.com/desktop-api/">Read the API docs</a>
+            </li>
+          </ul>
+        </details>
+      </div>
+    </section>
+
+    <!-- ================= Main app ================= -->
+    <div id="app" class="app" hidden>
+      <aside class="sidebar">
+        <header class="sidebar-header">
+          <div class="sidebar-title">
+            <button
+              id="view-switch"
+              class="view-switch"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-label="Switch view"
+            >
+              <span id="inbox-label" class="view-switch-label">Inbox</span>
+              <span class="caret" aria-hidden="true">▾</span>
+            </button>
+            <span id="account-badges" class="badges"></span>
+          </div>
+          <div class="sidebar-tools">
+            <button id="btn-filters" class="icon-btn" data-tip="Filter chats" aria-label="Filter chats">≡</button>
+            <button id="btn-focus-search" class="icon-btn" data-tip="Search chats and messages" aria-label="Search">⌕</button>
+            <button id="btn-new-chat" class="icon-btn" data-tip="New chat (Ctrl+N)" aria-label="New chat">✎</button>
+            <button id="btn-assistant" class="icon-btn" data-tip="Toggle assistant (Ctrl+Shift+A)" aria-label="Toggle assistant">✦</button>
+            <button id="btn-settings" class="icon-btn" data-tip="Settings" aria-label="Settings">⚙</button>
+          </div>
+        </header>
+
+        <div class="search-row" id="search-row">
+          <input
+            id="search-input"
+            type="search"
+            placeholder="Search chats and messages"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <select id="search-scope" aria-label="Search scope">
+            <option value="all">All</option>
+            <option value="chats">Chats</option>
+            <option value="messages">Messages</option>
+          </select>
+        </div>
+
+        <div id="filter-row" class="filter-row">
+          <button class="chip is-active" data-filter="all">All</button>
+          <button class="chip" data-filter="unread">Unread</button>
+          <button class="chip" data-filter="primary">Inbox</button>
+          <button class="chip" data-filter="archive">Archive</button>
+        </div>
+
+        <div id="chat-list" class="chat-list" role="list"></div>
+
+        <footer class="sidebar-footer">
+          <span id="live-status" class="live" data-state="idle">offline</span>
+          <span id="version-label" class="muted tiny"></span>
+        </footer>
+      </aside>
+
+      <div
+        class="splitter"
+        id="splitter-sidebar"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize conversation list"
+        tabindex="0"
+      ></div>
+
+      <main class="thread-pane">
+        <div id="thread-empty" class="thread-empty">
+          <div class="empty-inner">
+            <div class="empty-mark">B</div>
+            <h3>Select a chat</h3>
+            <p class="muted">Your Beeper conversations show up here, live.</p>
+          </div>
+        </div>
+
+        <div id="thread" class="thread" hidden>
+          <header class="thread-header">
+            <div class="thread-title">
+              <img id="thread-avatar" class="avatar" alt="" />
+              <div class="thread-title-text">
+                <h3 id="thread-name">…</h3>
+                <p id="thread-sub" class="muted tiny"></p>
+              </div>
+            </div>
+            <div class="thread-actions">
+              <button id="btn-mute" class="icon-btn" data-tip="Mute notifications" aria-label="Mute">🔔</button>
+              <button id="btn-pin" class="icon-btn" data-tip="Pin to top" aria-label="Pin">📌</button>
+              <button id="btn-archive" class="icon-btn" data-tip="Archive chat" aria-label="Archive">🗄</button>
+              <button id="btn-unread" class="icon-btn" data-tip="Mark as unread" aria-label="Mark unread">●</button>
+            </div>
+          </header>
+
+          <div id="message-list" class="message-list"></div>
+
+          <div id="reply-preview" class="reply-preview" hidden>
+            <span id="reply-preview-text" class="muted"></span>
+            <button id="btn-cancel-reply" class="icon-btn tiny-btn" data-tip="Cancel reply" aria-label="Cancel reply">✕</button>
+          </div>
+
+          <div id="seen-line" class="seen-line"></div>
+
+          <footer class="composer">
+            <button id="btn-attach" class="round-btn" data-tip="Attach a file" aria-label="Attach a file">+</button>
+            <div class="composer-field">
+              <div id="attachment-chips" class="attachment-chips"></div>
+              <textarea
+                id="composer"
+                rows="1"
+                placeholder="Write a message…"
+                spellcheck="true"
+              ></textarea>
+            </div>
+            <button id="btn-emoji" class="icon-btn" data-tip="Insert emoji" aria-label="Insert emoji">🙂</button>
+            <button id="btn-attach-image" class="icon-btn" data-tip="Attach an image" aria-label="Attach an image">🖼</button>
+            <button id="btn-send" class="round-btn send-btn" data-tip="Send (Enter)" aria-label="Send">↑</button>
+          </footer>
+        </div>
+      </main>
+
+      <aside id="assistant-pane" class="assistant-pane" hidden>
+        <header class="assistant-header">
+          <div>
+            <h3>Assistant</h3>
+            <p id="mcp-status" class="muted tiny">MCP not connected</p>
+          </div>
+          <button id="btn-assistant-close" class="icon-btn" data-tip="Close assistant" aria-label="Close assistant">✕</button>
+        </header>
+
+        <div id="assistant-log" class="assistant-log"></div>
+
+        <div id="assistant-input-row" class="assistant-input-row">
+          <textarea
+            id="assistant-input"
+            rows="1"
+            placeholder="Ask about your chats…"
+            spellcheck="true"
+          ></textarea>
+          <button id="btn-assistant-send" class="icon-btn send-btn" aria-label="Send">➤</button>
+        </div>
+      </aside>
+    </div>
+
+    <!-- ================= Modals ================= -->
+    <div id="modal-root" class="modal-root" hidden></div>
+    <div id="toast-root" class="toast-root"></div>
+
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>

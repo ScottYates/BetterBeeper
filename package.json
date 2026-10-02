@@ -1,0 +1,31 @@
+{
+  "name": "better-beeper",
+  "productName": "Better Beeper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A desktop chat client for Beeper, built on the Beeper Desktop REST API, WebSocket events, and the built-in MCP server.",
+  "main": "src/main/main.js",
+  "author": "Scott Yates",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "electron-builder --win --x64 && node tools/install-update.js",
+    "dist:only": "electron-builder --win --x64",
+    "deploy": "node tools/install-update.js",
+    "deploy:check": "node tools/install-update.js --check",
+    "check:notify": "node tools/notify-check.js",
+    "check:send": "electron tools/send-check.js",
+    "check:icons": "node tools/icon-check.mjs",
+    "check:live": "node tools/live-send.js",
+    "pack": "electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "ws": "^8.22.0"
+  }
+}

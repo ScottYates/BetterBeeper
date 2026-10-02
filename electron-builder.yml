@@ -1,0 +1,49 @@
+appId: com.yates.better-beeper
+productName: Better Beeper
+copyright: Copyright © 2026 Scott Yates
+
+directories:
+  output: release
+  buildResources: build
+
+# Only ship what the app actually runs; devDependencies (electron, builder)
+# are resolved by electron-builder itself and must not be bundled.
+files:
+  - src/**/*
+  - package.json
+  - '!**/*.map'
+  - '!tools/**'
+
+asar: true
+compression: normal
+removePackageScripts: true
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+  # No custom icon yet; Electron's default is used.
+  signAndEditExecutable: true
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Better Beeper
+  deleteAppDataOnUninstall: false
+
+# The app talks only to a localhost Beeper Desktop instance, so it needs no
+# network entitlements beyond the loopback API and an optional AI endpoint.
+mac:
+  target:
+    - dmg
+  category: public.app-category.social-networking
+
+linux:
+  target:
+    - AppImage
+  category: Network
