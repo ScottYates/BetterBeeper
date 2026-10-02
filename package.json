@@ -23,7 +23,10 @@
     "check:icons": "node tools/icon-check.mjs",
     "check:ascii": "node tools/ascii-check.js",
     "check:syntax": "node tools/syntax-check.js",
+    "check:released": "node tools/released-check.js",
+    "check:bump": "node tools/bump-check.js",
     "check:live": "node tools/live-send.js",
+    "release": "node tools/release.js",
     "pack": "electron-builder --dir"
   },
   "devDependencies": {

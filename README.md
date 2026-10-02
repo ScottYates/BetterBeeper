@@ -185,10 +185,47 @@ npm run check:pin       # pinning moves the row and flags it, notes included
 npm run check:archive   # archiving survives a Beeper that accepts and ignores it
 npm run check:layout    # message bubbles use the full width of the chat pane
 npm run check:syntax    # every JS file parses, so a broken check cannot pose as an app crash
+npm run check:bump      # the semver level chosen from a commit message is right
+npm run check:released  # every push to main has a release
 npm run check:icons     # network glyphs, including the self-coloured Google Voice mark
 npm run check:ascii     # documentation and code comments stay ASCII
 npm run check:live     # send a real message, then assert the thread and the list are intact
 ```
+
+## Releasing
+
+**Every push to `main` gets a release.** `npm run release` does the whole thing, and the
+version number is not a judgement call - it is derived from the commit messages since the last
+tag:
+
+| commits since the last tag | bump |
+|---|---|
+| `fix:` or `perf:` | patch |
+| `feat:` | minor |
+| a `!` after the type, or a `BREAKING CHANGE:` trailer | major |
+| anything else, including `docs:` and `chore:` | patch |
+
+It never declines to cut a release, because `check:released` would then fail forever on a push
+that semver says needs nothing. Semver picks how big, not whether. `--bump=<level>` overrides
+the derived level, and `--dry-run` prints the decision without changing anything.
+
+The steps, in order: bump `package.json`, build to a scratch directory, install over the
+existing copy, `gh release create` tagged on `main`, then **fetch the published asset back and
+compare SHA-256 against what was built**. That last step is not ceremony. A CLI reporting
+success is not evidence that 90 MB arrived intact, and a truncated upload looks exactly like
+success until somebody tries to install it.
+
+`check:released` is the enforcement. It fails when `main` is ahead of the newest tag, and when
+`package.json` and that tag disagree, which is the usual way a version bump gets lost between
+the commit and the upload. It is read-only, so it is safe to run at any time.
+
+Two details worth knowing if you run this by hand:
+
+- `gh` creates the tag on the remote only. Both scripts `git fetch --tags` first, because
+  otherwise the repo you just released looks unreleased forever.
+- The breaking-change trailer is matched case-sensitively, as the spec defines it. Bodies
+  routinely say "not a breaking change", and reading that as a major would be worse than
+  missing an unlabelled one.
 
 `npm run dist` is the one command you need. It builds the NSIS installer and then runs it with
 `/S`, so the copy in **Start menu -> Better Beeper** is replaced for you. You never run the setup
@@ -327,6 +364,9 @@ src/
     layout-harness.html  page that hosts layout-check.js, against the real stylesheet
     syntax-check.js   check: every JS file parses, so a broken check cannot look like a crash
     harness-guard.js  dev helper: a check harness expires on its own instead of being killed
+    release.js        bump the version from the commits, build, install, publish, verify by hash
+    released-check.js check: every push to main has a release
+    bump-check.js     check: the semver level a commit message produces is the right one
     icon-check.mjs    check: every network glyph still renders, self-coloured or not
     ascii-check.js    check: markdown and code comments stay ASCII
     badge-probe.js    dev helper: prove glyph badges stay square and monograms stay pills

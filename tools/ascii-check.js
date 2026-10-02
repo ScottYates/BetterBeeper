@@ -20,13 +20,24 @@ const DOC_EXT = new Set(['.md']);
 const CODE_EXT = new Set(['.js', '.mjs', '.cjs', '.css', '.html', '.yml', '.yaml']);
 const SKIP_DIRS = new Set(['node_modules', 'release', 'dist', '.git', 'docs']);
 
+/**
+ * Build output, whatever it is called.
+ *
+ * Building to a scratch name like release-new/ is how you get around a Windows
+ * file lock on a stale artifact, so the checks have to skip every one of these
+ * and not just the default directory.
+ */
+function isBuildOutput(name) {
+  return SKIP_DIRS.has(name) || name.startsWith('release-');
+}
+
 const OPT_OUT = 'ascii-ok';
 const NON_ASCII = /[^\x00-\x7F]/;
 
 function walk(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) walk(path.join(dir, entry.name), out);
+      if (!isBuildOutput(entry.name)) walk(path.join(dir, entry.name), out);
     } else if (entry.isFile()) {
       out.push(path.join(dir, entry.name));
     }

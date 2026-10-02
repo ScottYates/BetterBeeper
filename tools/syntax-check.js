@@ -28,6 +28,15 @@ const ROOT = path.join(__dirname, '..');
 const SKIP_DIRS = new Set(['node_modules', 'release', 'dist', '.git', 'docs']);
 
 /**
+ * Build output, whatever it is called. A scratch name like release-new/ is how
+ * you get around a Windows file lock on a stale artifact, and parsing the
+ * vendored Electron sources inside it would be both slow and meaningless.
+ */
+function isBuildOutput(name) {
+  return SKIP_DIRS.has(name) || name.startsWith('release-');
+}
+
+/**
  * Pull out a check harness's page script and parse it.
  *
  * The harness is held in a template literal, so it is a *string* to the file
@@ -89,7 +98,7 @@ function checkHarness(file, source) {
 function walk(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) walk(path.join(dir, entry.name), out);
+      if (!isBuildOutput(entry.name)) walk(path.join(dir, entry.name), out);
     } else if (entry.isFile() && /\.(js|mjs|cjs)$/.test(entry.name)) {
       out.push(path.join(dir, entry.name));
     }
