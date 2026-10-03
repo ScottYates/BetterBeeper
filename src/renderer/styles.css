@@ -631,11 +631,16 @@ select { cursor: pointer; }
 .att-file .att-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg.is-out .att-file { background: rgba(0, 0, 0, 0.16); border-color: rgba(255, 255, 255, 0.2); }
 
+/* opacity: 0 alone would leave these buttons clickable while invisible, which
+   matters now that one of them deletes: a stray click landing on a transparent
+   button would be a delete the user never saw. pointer-events follows the same
+   rule as the opacity. */
 .msg-hover-actions {
-  display: flex; gap: 1px; opacity: 0; transition: opacity 0.12s ease;
+  display: flex; gap: 1px; opacity: 0; pointer-events: none;
+  transition: opacity 0.12s ease;
   align-self: center;
 }
-.msg:hover .msg-hover-actions { opacity: 1; }
+.msg:hover .msg-hover-actions { opacity: 1; pointer-events: auto; }
 
 .emoji-popover {
   position: fixed; z-index: 60;

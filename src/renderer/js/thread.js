@@ -738,10 +738,9 @@ export function messageNode(message, previous) {
 /**
  * The outer row: avatar, bubble column, and the hover action buttons.
  *
- * Delete and Hide live here rather than in the context menu, because they are
- * the two things you do to a message you are looking at. A destructive action
- * behind a hover is only safe because delete still asks first, and hide still
- * folds rather than destroys.
+ * The trash here is deliberately the *local* delete. Deleting on Beeper means
+ * everyone else sees it go, which is too much to attach to a hover; that one
+ * lives in the context menu, where it is asked for by name.
  */
 function wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap) {
   const actions = el('div', { class: 'msg-hover-actions' });
@@ -773,21 +772,21 @@ function wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap) {
     );
   }
 
-  // Only your own messages can be deleted on Beeper, so only they get the
-  // button. Same rule as the context menu item it replaces.
-  if (message.isSender && !message.isDeleted) {
-    actions.append(
-      el('button', {
-        class: 'icon-btn tiny-btn',
-        title: 'Delete message',
-        text: '🗑',
-        onClick: (event) => {
-          event.stopPropagation();
-          deleteMessage(message);
-        },
-      }),
-    );
-  }
+  // The trash on hover is the *local* delete, on every message. It only hides
+  // the message in this app, and Clear list in settings brings them all back.
+  // Deleting on Beeper, which everyone else sees, stays in the context menu
+  // where it is a deliberate choice rather than a stray click.
+  actions.append(
+    el('button', {
+      class: 'icon-btn tiny-btn',
+      title: 'Delete on this device',
+      text: '🗑',
+      onClick: (event) => {
+        event.stopPropagation();
+        deleteOnThisDevice(message);
+      },
+    }),
+  );
 
   actions.append(
     el('button', {
@@ -1090,12 +1089,11 @@ function editingNode(message) {
 /**
  * The context menu, for the things that are not one click.
  *
- * Delete and Hide are deliberately not here: they are on the message row's
- * hover actions now. What is left is the slower, rarer list - replying,
- * copying, editing, and the local-only delete that needs a second thought.
- *
- * The anchor is the button the menu hangs off. A caller that only wants the
- * labels - the dev check does - can pass null; it must not invoke the items.
+ * The trash on the message row is the local delete, which only hides the
+ * message here. This Delete is the real one: it goes to Beeper, everyone else
+ * sees it go, and on most networks it cannot be undone. So it stays in the
+ * menu, where reaching it is a decision rather than a stray click, and only
+ * appears on your own messages.
  */
 export function messageMenuItems(anchor, message) {
   const canEdit = message.isSender && !message.isDeleted;
@@ -1104,11 +1102,9 @@ export function messageMenuItems(anchor, message) {
     { label: 'React', onSelect: () => openEmojiPicker(anchor, (e) => toggleReaction(message, e)) },
     { label: 'Copy text', onSelect: () => copyText(message.text || '') },
     canEdit ? { label: 'Edit', onSelect: () => { state.editing = message.id; onMessageUpserted(); } } : null,
-    {
-      label: 'Delete on this device',
-      danger: true,
-      onSelect: () => deleteOnThisDevice(message),
-    },
+    canEdit
+      ? { label: 'Delete for everyone', danger: true, onSelect: () => deleteMessage(message) }
+      : null,
     {
       label: 'Copy message ID',
       onSelect: () => copyText(message.id),

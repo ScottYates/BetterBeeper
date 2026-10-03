@@ -3,16 +3,20 @@
   <head>
     <meta charset="utf-8" />
     <title>actions-check harness</title>
+    <!--
+      The real stylesheet, on purpose. The visibility assertions below measure
+      where the Clear list button actually lands, and that depends entirely on
+      the modal's max-height and the body's overflow. Measuring it without the
+      CSS would pass while the button sat below the fold in the app.
+    -->
+    <link rel="stylesheet" href="../src/renderer/styles.css" />
   </head>
   <body>
     <!--
-      Blank page loaded by tools/actions-check.js. It exists so the test can
-      import the renderer's modules as real ES modules from a file:// origin;
-      a data: URL cannot import modules.
-
-      The assertions build real message nodes and read the hover buttons off
-      them, so this needs a live document - which is what makes it worth
-      asserting on rendered output rather than on the source text.
+      openModal() mounts into #modal-root, so the harness needs it. The rest of
+      the app's chrome is not needed: the assertions build real message nodes
+      and read buttons off them, and open the real settings modal.
     -->
+    <div id="modal-root" hidden></div>
   </body>
 </html>

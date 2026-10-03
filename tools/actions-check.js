@@ -24,6 +24,7 @@ const harnessGuard = require('./harness-guard');
 
 const stateURL = pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', 'state.js')).href;
 const threadURL = pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', 'thread.js')).href;
+const modalsURL = pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', 'modals.js')).href;
 
 async function main() {
   const { app, BrowserWindow } = require('electron');
@@ -39,6 +40,7 @@ async function main() {
     (async () => {
       const S = await import(${JSON.stringify(stateURL)});
       const T = await import(${JSON.stringify(threadURL)});
+      const M = await import(${JSON.stringify(modalsURL)});
 
       const cases = [];
       const add = (name, fn) => {
@@ -68,20 +70,24 @@ async function main() {
 
       // --- hover actions --------------------------------------------------------
       reset();
-      add('my own message offers delete and hide on hover', () => {
+      add('my own message offers hide and the local delete on hover', () => {
         const got = titles({ ...base, isSender: true });
-        return got.includes('Delete message') && got.includes('Hide message')
+        return got.includes('Delete on this device') && got.includes('Hide message')
           || ('got ' + JSON.stringify(got));
       });
 
-      add('somebody else\'s message does not offer delete', () => {
+      add('somebody else\'s message also offers the local delete', () => {
+        // The hover trash is the local delete, which works on anybody's
+        // message. Only the Beeper delete is restricted to your own.
         const got = titles({ ...base, isSender: false });
-        return !got.includes('Delete message') && got.includes('Hide message')
+        return got.includes('Delete on this device') && got.includes('Hide message')
           || ('got ' + JSON.stringify(got));
       });
 
-      add('a message Beeper already deleted offers no delete', () => {
-        const got = titles({ ...base, isSender: true, isDeleted: true });
+      add('the hover trash is never the Beeper delete', () => {
+        // If it were, a stray click would remove a message for everyone with no
+        // way back. The menu is the only place that can happen.
+        const got = titles({ ...base, isSender: true });
         return !got.includes('Delete message') || ('got ' + JSON.stringify(got));
       });
 
@@ -90,7 +96,7 @@ async function main() {
         // is how they drift apart.
         S.loadHiddenMessages(['m']);
         const got = titles({ ...base, id: 'm', isSender: true });
-        return !got.includes('Hide message') && got.includes('Delete message')
+        return !got.includes('Hide message') && got.includes('Delete on this device')
           || ('got ' + JSON.stringify(got));
       });
 
@@ -99,30 +105,36 @@ async function main() {
         return got.includes('React') && got.includes('More') || ('got ' + JSON.stringify(got));
       });
 
-      add('an incoming message still has its hover actions', () => {
-        // The control case. A filter that dropped the row's actions entirely
-        // would satisfy the "no delete" assertion above.
+      add('an incoming message still has all four hover actions', () => {
+        // The control case. A row that lost its actions would satisfy the
+        // "never the Beeper delete" assertion above.
         const got = titles({ ...base, isSender: false });
-        return got.length === 3 || ('got ' + JSON.stringify(got));
+        return got.length === 4 || ('got ' + JSON.stringify(got));
       });
 
       // --- the context menu -----------------------------------------------------
       const labels = (message) => T.messageMenuItems(null, message).map((i) => i.label);
 
-      add('the context menu no longer offers delete', () => {
+      add('the Beeper delete is in the menu on my own message', () => {
         const got = labels({ ...base, isSender: true });
-        return !got.includes('Delete') || ('got ' + JSON.stringify(got));
+        return got.includes('Delete for everyone') || ('got ' + JSON.stringify(got));
       });
 
-      add('the context menu no longer offers hide', () => {
+      add('the Beeper delete is not offered on somebody else\'s message', () => {
+        const got = labels({ ...base, isSender: false });
+        return !got.includes('Delete for everyone') || ('got ' + JSON.stringify(got));
+      });
+
+      add('the local delete is not duplicated in the menu', () => {
+        // It is on the row now. Having it in both places is how the two drift.
+        const got = labels({ ...base, isSender: true });
+        return !got.includes('Delete on this device') || ('got ' + JSON.stringify(got));
+      });
+
+      add('the menu no longer offers hide', () => {
         const got = labels({ ...base, isSender: true });
         return !got.includes('Hide message') && !got.includes('Show message')
           || ('got ' + JSON.stringify(got));
-      });
-
-      add('the local-only delete stays in the menu', () => {
-        const got = labels({ ...base, isSender: true });
-        return got.includes('Delete on this device') || ('got ' + JSON.stringify(got));
       });
 
       add('editing is still offered on my own message', () => {
@@ -181,6 +193,51 @@ async function main() {
           || 'clearing the deleted list also un-hid a folded message';
       });
 
+      // --- the Clear list button is reachable, not just present ------------------
+      // This is here because the button shipped in the middle of a scrolling
+      // modal, 240px below the fold, and the first version of this check found
+      // it with querySelector and called it done. Existing in the DOM and
+      // visible to a person are different claims, so this measures the one the
+      // user actually makes.
+      S.setMessageDeleted('a', true);
+      S.setMessageDeleted('b', true);
+      try {
+        await M.openSettings();
+      } catch (e) {
+        add('settings opens', () => 'settings threw: ' + e.message);
+      }
+
+      const modalBody = document.querySelector('.modal-body');
+      const clearRow = document.querySelector('.clear-deleted-row');
+      add('the Clear list button is in the settings modal', () => {
+        return Boolean(clearRow && clearRow.querySelector('button'))
+          || 'not found';
+      });
+
+      add('the Clear list button is visible without scrolling', () => {
+        if (!modalBody || !clearRow) return 'nothing to measure';
+        const btn = clearRow.querySelector('button').getBoundingClientRect();
+        const view = modalBody.getBoundingClientRect();
+        const onScreen = btn.top >= view.top && btn.bottom <= view.bottom;
+        return (onScreen && modalBody.scrollTop === 0)
+          || ('button at ' + Math.round(btn.top) + '-' + Math.round(btn.bottom)
+              + ' inside ' + Math.round(view.top) + '-' + Math.round(view.bottom)
+              + ' scrollTop ' + modalBody.scrollTop);
+      });
+
+      add('the count of deleted messages is shown next to the button', () => {
+        if (!clearRow) return 'no row';
+        const text = clearRow.querySelector('span').textContent;
+        return text.indexOf('2') >= 0 || ('got ' + JSON.stringify(text));
+      });
+
+      add('the button is enabled while there is something to clear', () => {
+        if (!clearRow) return 'no row';
+        return clearRow.querySelector('button').disabled === false || 'disabled with 2 deleted';
+      });
+
+      document.querySelector('#modal-root')?.replaceChildren();
+
       reset();
       return JSON.stringify(cases);
     })()
@@ -188,7 +245,7 @@ async function main() {
 
   await app.whenReady();
   harnessGuard(app, { label: 'check:actions' });
-  const win = new BrowserWindow({ show: false });
+  const win = new BrowserWindow({ show: false, width: 1100, height: 780 });
   await win.loadFile(path.join(__dirname, 'actions-harness.html'));
   const result = await win.webContents.executeJavaScript(harness, true);
   app.exit(0);
