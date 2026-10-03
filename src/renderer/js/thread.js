@@ -27,8 +27,14 @@ import {
   setPinned,
   pinMap,
   isArchived,
+  isMessageHidden,
+  isMessageDeleted,
+  setMessageHidden,
+  setMessageDeleted,
+  hiddenList,
+  deletedList,
 } from './state.js';
-import { toast, confirmDialog, openEmojiPicker, openPopover, openLightbox } from './ui.js';
+import { toast, confirmDialog, openEmojiPicker, openPopover, openLightbox, imageMenu } from './ui.js';
 import { setArchived } from './chat-actions.js';
 import { avatarNode, renderChats, networkBadge } from './sidebar.js';
 
@@ -62,6 +68,37 @@ export function initThread() {
       event.preventDefault();
       sendCurrent();
     }
+  });
+
+  // Listens on the document rather than the textarea. A paste very often lands
+  // with focus in the message list, or nowhere in particular, because clicking
+  // a chat and then reaching for the keyboard is the normal way to write a
+  // message. Anchored to the composer, the paste fired at the document and the
+  // composer never heard about it.
+  document.addEventListener('paste', (event) => {
+    // Only the chat composer claims an image. Anywhere else - the assistant,
+    // the search box, the token field - a paste is left alone.
+    const target = event.target;
+    if (target?.closest?.('#assistant-input, #search-input, #manual-token')) return;
+    if (!currentChat) return;
+    // A screenshot arrives as a clipboard *file* with no text beside it, so the
+    // textarea has nothing to insert and the paste would look like nothing
+    // happened. Only claim the event when an image really is there: swallowing
+    // a normal text paste would be far worse than not supporting image paste.
+    if (!hasImageItem(event.clipboardData)) return;
+    event.preventDefault();
+    attachPastedImages(event.clipboardData);
+  });
+
+  // Right-click any image in the thread to copy it as a pasteable picture
+  // rather than a link. Delegated, so it covers attachments and images inside
+  // message text alike, and survives every re-render of the list.
+  $('#message-list').addEventListener('contextmenu', (event) => {
+    const img = event.target.closest?.('img');
+    if (!img || !img.src) return;
+    if (!imageMenu(img, img.src, { pointer: { x: event.clientX, y: event.clientY } })) return;
+    event.preventDefault();
+    event.stopPropagation();
   });
 
   $('#btn-send').addEventListener('click', sendCurrent);
@@ -263,6 +300,78 @@ export function composerPlaceholder(chat) {
   if (isNoteToSelf(chat)) return 'Write a note…';
   const title = String(chat?.title || '').trim();
   return title || 'Write a message…';
+}
+
+// ---------------------------------------------------------------------------
+// Clipboard images
+// ---------------------------------------------------------------------------
+
+// Enough for a full-resolution screenshot, small enough that a stray 200 MB
+// clipboard payload cannot wedge the upload.
+const MAX_PASTE_BYTES = 25 * 1024 * 1024;
+const MAX_PASTE_MB = MAX_PASTE_BYTES / 1048576;
+
+const PASTE_EXT = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/bmp': 'bmp',
+  'image/svg+xml': 'svg',
+};
+
+/** Clipboard images arrive nameless, so give the upload one it can be labelled by. */
+export function pasteImageName(mimeType, index) {
+  return `pasted-image-${index + 1}.${PASTE_EXT[mimeType] || 'png'}`;
+}
+
+/**
+ * Whether the clipboard holds an image at all. Called synchronously from the
+ * paste handler, because preventDefault has to happen during the event - by the
+ * time an async read has finished the browser has already inserted its default.
+ */
+export function hasImageItem(dataTransfer) {
+  return imageItems(dataTransfer).length > 0;
+}
+
+function imageItems(dataTransfer) {
+  return Array.from(dataTransfer?.items || []).filter(
+    (item) => item.kind === 'file' && String(item.type || '').startsWith('image/'),
+  );
+}
+
+/**
+ * Read the pasted images out of a clipboard payload.
+ *
+ * Returns { images, rejected } rather than throwing or silently truncating: a
+ * screenshot that is too big has to be *told* about, because from the user's
+ * side nothing happened is indistinguishable from the paste not working.
+ */
+export async function pastedImages(dataTransfer) {
+  const images = [];
+  const rejected = [];
+
+  for (const item of imageItems(dataTransfer)) {
+    const file = item.getAsFile();
+    if (!file) continue;
+    const name = pasteImageName(file.type, images.length);
+    if (file.size > MAX_PASTE_BYTES) {
+      rejected.push({ fileName: name, bytes: file.size });
+      continue;
+    }
+    images.push({
+      data: new Uint8Array(await file.arrayBuffer()),
+      mimeType: file.type,
+      fileName: name,
+    });
+  }
+
+  return { images, rejected };
+}
+
+/** A pasted screenshot is a picture, not a document: do not label it as one. */
+export function attachmentIcon(attachment) {
+  return String(attachment?.mimeType || '').startsWith('image/') ? '\u{1F5BC}' : '\u{1F4CE}';
 }
 
 /** Beeper's "Seen at 11:11 AM" line above the composer. */
@@ -502,10 +611,23 @@ function messageNode(message, previous) {
     );
   }
 
+  // Deleted on this device only. Beeper still has it, everyone else still sees
+  // it; here it is a tombstone you can click to bring back.
+  if (isMessageDeleted(message.id)) {
+    bubbleWrap.append(deletedHereNode(message));
+    return wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap);
+  }
+
   if (state.editing === message.id) {
     bubbleWrap.append(editingNode(message));
   } else {
     if (message.linkedMessageID) bubbleWrap.append(replyQuoteNode(message));
+
+    // Folded away on this device: the arrow opens it again.
+    if (isMessageHidden(message.id)) {
+      bubbleWrap.append(collapsedNode(message));
+      return wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap);
+    }
 
     const bubble = el('div', { class: 'msg-bubble' });
 
@@ -542,8 +664,13 @@ function messageNode(message, previous) {
     bubbleWrap.append(metaNode(message));
   }
 
-  const hoverActions = el('div', { class: 'msg-hover-actions' });
-  hoverActions.append(
+  return wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap);
+}
+
+/** The outer row: avatar, bubble column, and the hover action buttons. */
+function wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap) {
+  const actions = el('div', { class: 'msg-hover-actions' });
+  actions.append(
     el('button', {
       class: 'icon-btn tiny-btn',
       title: 'React',
@@ -572,8 +699,79 @@ function messageNode(message, previous) {
     },
     !isOut ? messageAvatar(message) : null,
     bubbleWrap,
-    hoverActions,
+    actions,
   );
+}
+
+/**
+ * The tombstone for a message deleted on this device.
+ *
+ * Kept in the thread rather than removed from it, because "delete it just for
+ * me" that silently discards the text is not something to do to someone by
+ * accident. One click brings it back.
+ */
+function deletedHereNode(message) {
+  return el(
+    'button',
+    {
+      class: 'msg-local-deleted',
+      title: 'Deleted on this device only. Click to restore.',
+      onClick: () => setLocalDeleted(message, false),
+    },
+    el('span', { class: 'msg-local-deleted-label', text: 'Deleted on this device' }),
+    el('span', { class: 'msg-local-deleted-restore', text: 'Restore' }),
+  );
+}
+
+/**
+ * A folded-away message: one line with an arrow to open it again.
+ *
+ * The summary is the message's own first line rather than a word like
+ * "hidden", so a folded thread still reads as a conversation.
+ */
+function collapsedNode(message) {
+  const summary = messageSummary(message);
+  const arrow = el('span', { class: 'msg-collapse-arrow', text: '▸' });
+
+  const toggle = el(
+    'button',
+    {
+      class: 'msg-collapsed',
+      title: 'Show this message',
+      'aria-expanded': 'false',
+      onClick: (event) => {
+        event.stopPropagation();
+        setLocalHidden(message, false);
+      },
+    },
+    arrow,
+    el('span', { class: 'msg-collapsed-summary', text: summary }),
+  );
+
+  const shrink = el('button', {
+    class: 'icon-btn tiny-btn msg-collapse-btn',
+    title: 'Hide this message',
+    text: '▴',
+    onClick: (event) => {
+      event.stopPropagation();
+      setLocalHidden(message, true);
+    },
+  });
+
+  return el('div', { class: 'msg-collapsed-wrap' }, toggle, shrink);
+}
+
+/** One readable line standing in for a whole message. */
+export function messageSummary(message) {
+  const text = String(message?.text || '').trim();
+  if (text) return text.replace(/\s+/g, ' ').slice(0, 120);
+  if (message?.attachments?.length) {
+    const first = message.attachments[0];
+    const isImage = first.type === 'img' || /^image\//i.test(first.mimeType || '');
+    if (isImage) return 'Photo';
+    return first.fileName || 'Attachment';
+  }
+  return message?.type ? `[${String(message.type).toLowerCase()}]` : 'Message';
 }
 
 /**
@@ -745,6 +943,8 @@ function editingNode(message) {
 function openMessageMenu(anchor, message) {
   const canEdit = message.isSender && !message.isDeleted;
   const canDelete = message.isSender && !message.isDeleted;
+  const hidden = isMessageHidden(message.id);
+  const deletedHere = isMessageDeleted(message.id);
   openPopover(anchor, [
     { label: 'Reply', onSelect: () => setReplyTo(message) },
     { label: 'React', onSelect: () => openEmojiPicker(anchor, (e) => toggleReaction(message, e)) },
@@ -754,10 +954,62 @@ function openMessageMenu(anchor, message) {
       ? { label: 'Delete', danger: true, onSelect: () => deleteMessage(message) }
       : null,
     {
+      label: hidden ? 'Show message' : 'Hide message',
+      onSelect: () => setLocalHidden(message, !hidden),
+    },
+    {
+      label: deletedHere ? 'Restore message' : 'Delete on this device',
+      danger: !deletedHere,
+      onSelect: () => setLocalDeleted(message, !deletedHere),
+    },
+    {
       label: 'Copy message ID',
       onSelect: () => copyText(message.id),
     },
   ]);
+}
+
+/**
+ * Fold a message away, or bring it back, and remember the choice.
+ *
+ * Purely local: Beeper is not told, so the message stays where it is for every
+ * other device and for everyone else in the chat. The setting is written
+ * straight through rather than on a debounce, because a fold is rare and a
+ * fold that is lost on a crash is the one that annoys.
+ */
+async function setLocalHidden(message, hidden) {
+  if (!message?.id) return;
+  setMessageHidden(message.id, hidden);
+  onMessageUpserted();
+  const saved = await call(() => api.settings.set({ hiddenMessages: hiddenList() }), {
+    context: 'remember hidden message',
+  });
+  if (saved === null) {
+    // The fold is on screen but would not survive a restart; say so rather
+    // than leaving the user to discover it later.
+    toast('Hidden for now, but this could not be saved', 'error');
+    return;
+  }
+  toast(hidden ? 'Message hidden' : 'Message shown', 'success', 1400);
+}
+
+/** The same, for "delete on this device". Beeper keeps the message either way. */
+async function setLocalDeleted(message, deleted) {
+  if (!message?.id) return;
+  setMessageDeleted(message.id, deleted);
+  onMessageUpserted();
+  const saved = await call(() => api.settings.set({ deletedMessages: deletedList() }), {
+    context: 'remember deleted message',
+  });
+  if (saved === null) {
+    toast('Changed for now, but this could not be saved', 'error');
+    return;
+  }
+  toast(
+    deleted ? 'Deleted on this device only' : 'Message restored',
+    'success',
+    deleted ? 2200 : 1400,
+  );
 }
 
 async function copyText(text) {
@@ -961,6 +1213,50 @@ async function pickAttachments() {
   }
 }
 
+/**
+ * Upload whatever images were pasted into the composer.
+ *
+ * The bytes go over as a Uint8Array rather than a path, because a pasted
+ * screenshot has never been a file - there is nothing on disk to hand back.
+ */
+async function attachPastedImages(dataTransfer) {
+  const { images, rejected } = await pastedImages(dataTransfer);
+
+  for (const skip of rejected) {
+    toast(
+      `${skip.fileName} is ${(skip.bytes / 1048576).toFixed(1)} MB, over the ${MAX_PASTE_MB} MB paste limit`,
+      'error',
+    );
+  }
+  if (!images.length) return;
+
+  let done = 0;
+  for (const image of images) {
+    try {
+      const upload = await call(() => api.assets.uploadBytes(image), {
+        context: 'upload pasted image',
+        fallback: null,
+      });
+      if (upload?.uploadID) {
+        pendingAttachments.push({
+          uploadID: upload.uploadID,
+          mimeType: upload.mimeType || image.mimeType,
+          fileName: upload.fileName || image.fileName,
+        });
+        renderAttachments();
+        done += 1;
+      }
+    } catch (err) {
+      toast(`Upload failed: ${err.message}`, 'error');
+    }
+  }
+
+  if (done) {
+    toast(`Attached ${done} pasted image${done > 1 ? 's' : ''}`, 'success', 1500);
+    $('#composer').focus();
+  }
+}
+
 function renderAttachments() {
   const wrap = $('#attachment-chips');
   clear(wrap);
@@ -969,7 +1265,7 @@ function renderAttachments() {
       el(
         'span',
         { class: 'att-chip' },
-        el('span', { text: `📎 ${attachment.fileName}` }),
+        el('span', { text: `${attachmentIcon(attachment)} ${attachment.fileName}` }),
         el('button', {
           text: '✕',
           title: 'Remove',

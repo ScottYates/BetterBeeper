@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>gif-check harness</title>
+    <!--
+      The real renderer stylesheet, on purpose. The question is whether an
+      animated GIF animates *in this app*, so the image elements created by
+      the page script have to be styled by the same rules the thread uses.
+      If someone later adds something to .att-image that suppresses display of
+      the image, this page sees it and the check notices.
+
+      The fixture elements are created by the page script that
+      tools/gif-check.js injects, not here, so they can be built from bytes
+      the check hands over.
+    -->
+    <link rel="stylesheet" href="../src/renderer/styles.css" />
+  </head>
+  <body>
+    <!--
+      Blank page loaded by tools/gif-check.js. It carries no markup of its own:
+      the check has to build the <img class="att-image"> elements itself, the
+      same way src/renderer/js/thread.js does, and then sample them.
+    -->
+  </body>
+</html>

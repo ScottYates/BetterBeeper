@@ -303,9 +303,17 @@ class BeeperClient {
   async uploadAsset(filePath) {
     const fs = require('node:fs/promises');
     const path = require('node:path');
-    const buf = await fs.readFile(filePath);
+    return this.uploadAssetBytes(await fs.readFile(filePath), path.basename(filePath));
+  }
+
+  /**
+   * Upload bytes that never touched the disk - a pasted screenshot, for one.
+   * Both entry points share this so the multipart shape stays identical.
+   */
+  uploadAssetBytes(data, fileName, mimeType) {
     const form = new FormData();
-    form.append('file', new Blob([buf]), path.basename(filePath));
+    const blob = new Blob([data], mimeType ? { type: mimeType } : undefined);
+    form.append('file', blob, fileName);
     return this.request('POST', ENDPOINTS.assetsUpload, { raw: form });
   }
 

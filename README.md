@@ -48,6 +48,19 @@ chats, and send, with every action shown to you before it happens.
   names are hidden in one-to-one chats because the header already says who you are talking to
 - Send, edit, delete, and emoji-react to messages
 - Attach files, which are uploaded to Beeper and then referenced by the message
+- Paste an image straight into the composer with Ctrl+V. A pasted screenshot is a clipboard
+  file with no text beside it, so there is nothing for the textarea to insert; it is uploaded
+  and chipped onto the message instead. Works wherever focus happens to be in the thread, and
+  an ordinary text paste is left completely alone
+- Right-click any image in a message to open it, copy it, or copy its address. "Copy image"
+  puts a real picture on the system clipboard rather than a path or a URL, so it pastes as a
+  picture into this app and into anything else on the desktop
+- Hide any message behind an arrow to get it out of the way, and delete one "on this device"
+  only, for when you want a message gone for you without it disappearing for everyone else.
+  Neither tells Beeper anything. A local delete leaves a tombstone you can click to bring the
+  message back, because a delete that silently throws the text away is not one to do by accident
+- Animated GIFs animate as they should: nothing in the stylesheet suppresses image animation,
+  and `loading="lazy"` does not hold them still
 - Independent vertical scrolling for the chat list and the message thread, with infinite
   scroll backwards through history
 - Opening a chat always lands on its newest message, even when you were scrolled up in the
@@ -184,12 +197,29 @@ npm run check:rich      # message HTML sanitizing keeps the markup's structure
 npm run check:pin       # pinning moves the row and flags it, notes included
 npm run check:archive   # archiving survives a Beeper that accepts and ignores it
 npm run check:layout    # message bubbles use the full width of the chat pane
+npm run check:composer  # the composer placeholder names one person and stays one line
+npm run check:paste     # a pasted image becomes an attachment; a text paste is not swallowed
+npm run check:imagecopy # which image URLs may be copied, and how they map back to bytes
+npm run check:api       # the preload surface, the IPC handlers and the renderer agree
+npm run check:visibility # hiding and locally deleting a message, and surviving a restart
+npm run check:gif       # an animated GIF really advances frames on screen
 npm run check:syntax    # every JS file parses, so a broken check cannot pose as an app crash
 npm run check:bump      # the semver level chosen from a commit message is right
 npm run check:released  # every push to main has a release
 npm run check:icons     # network glyphs, including the self-coloured Google Voice mark
 npm run check:ascii     # documentation and code comments stay ASCII
 npm run check:live     # send a real message, then assert the thread and the list are intact
+```
+
+Two of the clipboard checks need the app running and a real clipboard, because only a real
+clipboard can answer whether something is pasteable. They attach and remove an attachment in the
+Note to self chat and never send a message:
+
+```bash
+"Better Beeper.exe" --remote-debugging-port=9222
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File tools/clip-put.ps1
+npm run check:paste-live
+npm run check:imagecopy-live   # copies an image, then pastes it straight back
 ```
 
 ## Releasing

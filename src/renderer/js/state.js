@@ -323,6 +323,75 @@ export function setArchivedOverride(chatID, archived) {
   return archivedOverrides.has(chatID);
 }
 
+// ---------------------------------------------------------------------------
+// Per-message local visibility
+//
+// Two separate choices, and the difference matters:
+//
+//   hidden  - folded away behind an arrow. Still there, still in Beeper, still
+//             in the chat for everyone else. A way to get a long message out
+//             of the way without losing it.
+//   deleted - gone from this app's thread, shown as a tombstone you can click
+//             to bring back. Beeper is never told, so no other device and no
+//             other person in the chat is affected.
+//
+// Neither is sent anywhere. They are keyed by messageID alone because Beeper
+// message IDs are unique per message, not per chat, so there is no need to
+// carry the chatID along and risk the two disagreeing.
+// ---------------------------------------------------------------------------
+
+const hiddenMessages = new Set();
+const deletedMessages = new Set();
+
+export function loadHiddenMessages(ids) {
+  hiddenMessages.clear();
+  if (Array.isArray(ids)) {
+    for (const id of ids) if (typeof id === 'string' && id) hiddenMessages.add(id);
+  }
+}
+
+export function loadDeletedMessages(ids) {
+  deletedMessages.clear();
+  if (Array.isArray(ids)) {
+    for (const id of ids) if (typeof id === 'string' && id) deletedMessages.add(id);
+  }
+}
+
+export function hiddenList() {
+  return [...hiddenMessages];
+}
+
+export function deletedList() {
+  return [...deletedMessages];
+}
+
+export function isMessageHidden(messageID) {
+  return Boolean(messageID) && hiddenMessages.has(messageID);
+}
+
+export function isMessageDeleted(messageID) {
+  return Boolean(messageID) && deletedMessages.has(messageID);
+}
+
+export function setMessageHidden(messageID, hidden) {
+  if (!messageID) return false;
+  if (hidden) hiddenMessages.add(messageID);
+  else hiddenMessages.delete(messageID);
+  return hiddenMessages.has(messageID);
+}
+
+export function setMessageDeleted(messageID, deleted) {
+  if (!messageID) return false;
+  if (deleted) {
+    deletedMessages.add(messageID);
+    // A message that is deleted here is not also sitting there folded up.
+    hiddenMessages.delete(messageID);
+  } else {
+    deletedMessages.delete(messageID);
+  }
+  return deletedMessages.has(messageID);
+}
+
 export function chatPreviewText(chat) {
   const preview = chat?.preview;
   if (!preview) return '';

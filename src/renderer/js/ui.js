@@ -306,3 +306,73 @@ export function openLightbox(srcUrl, { alt = '' } = {}) {
   return { close() {}, view: { scale: 1, x: 0, y: 0 }, detached: true };
 }
 
+/**
+ * Put a displayed image on the system clipboard as a real image, so it can be
+ * pasted straight back into this composer or into any other app.
+ *
+ * The bytes go over as an image rather than a path or a URL, which is what makes
+ * it pasteable elsewhere: Windows applications look at the clipboard formats,
+ * and only CF_DIB/CF_BITMAP makes something paste as a picture.
+ */
+export async function copyImage(srcUrl) {
+  if (!srcUrl) return false;
+  if (!window.beeper?.images?.copy) {
+    toast('Could not copy the image.', 'error');
+    return false;
+  }
+
+  const res = await window.beeper.images.copy(srcUrl);
+  if (res?.ok) {
+    toast('Image copied', 'success', 1500);
+    return true;
+  }
+  toast(res?.error?.message || 'Could not copy the image.', 'error');
+  return false;
+}
+
+/**
+ * Menu for a displayed image: open it, copy it out, or copy its address.
+ *
+ * Uses the same popover as the message menu rather than a native one, so it
+ * looks like the rest of the app and needs no new bridge surface - the only
+ * thing the main process has to know about is the copy itself.
+ */
+export function imageMenu(anchor, srcUrl, { pointer } = {}) {
+  if (!srcUrl) return false;
+  if (!window.beeper?.images?.copy) return false;
+
+  // positionPopover places the menu under the anchor's bottom-left corner, so
+  // a zero-size point sitting at the cursor is exactly a context menu origin.
+  let origin = anchor;
+  let point = null;
+  if (pointer) {
+    point = document.createElement('div');
+    point.style.cssText = `position:fixed;left:${pointer.x}px;top:${pointer.y}px;width:0;height:0;pointer-events:none;`;
+    document.body.append(point);
+    origin = point;
+  }
+
+  const menu = openPopover(origin, [
+    { label: 'Open image', onSelect: () => openLightbox(srcUrl) },
+    { label: 'Copy image', onSelect: () => { copyImage(srcUrl); } },
+    { label: 'Copy image address', onSelect: () => copyText(srcUrl) },
+  ]);
+
+  if (point && menu) {
+    const cleanup = menu._cleanup;
+    menu._cleanup = () => {
+      cleanup?.();
+      point.remove();
+    };
+  }
+  return true;
+}
+
+function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(String(value)).catch(() => {});
+    return;
+  }
+  toast('Could not copy the address.', 'error');
+}
+

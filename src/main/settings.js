@@ -31,6 +31,12 @@ const DEFAULTS = {
   // built-in "Note to self" chat needs this. See the note in renderer/js/state.js.
   archivedChats: [],
 
+  // messageIDs this app has hidden or deleted for the user only. Beeper is
+  // never told, so the other devices and the other people in the chat keep
+  // seeing the message. See the note in renderer/js/state.js.
+  hiddenMessages: [],
+  deletedMessages: [],
+
   // Desktop notifications.
   notifyEnabled: true,
   // 'full' = sender and message text, 'sender' = who wrote, 'none' = "New message"

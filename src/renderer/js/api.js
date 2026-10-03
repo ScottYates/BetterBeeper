@@ -81,6 +81,7 @@ export const api = {
 
   assets: {
     upload: (path) => window.beeper.assets.upload(path),
+    uploadBytes: (payload) => window.beeper.assets.uploadBytes(payload),
     download: (input) => window.beeper.assets.download(input),
     resolve: (attachment) => window.beeper.assets.resolve(attachment),
     pick: () => window.beeper.assets.pick(),

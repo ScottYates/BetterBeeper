@@ -28,7 +28,14 @@
     "check:bump": "node tools/bump-check.js",
     "check:live": "node tools/live-send.js",
     "release": "node tools/release.js",
-    "pack": "electron-builder --dir"
+    "pack": "electron-builder --dir",
+    "check:paste": "electron tools/paste-check.js",
+    "check:paste-live": "node tools/paste-live.js",
+    "check:api": "node tools/api-surface-check.js",
+    "check:imagecopy": "node tools/image-copy-check.js",
+    "check:imagecopy-live": "node tools/image-copy-live.js",
+    "check:gif": "electron tools/gif-check.js",
+    "check:visibility": "electron tools/visibility-check.js"
   },
   "devDependencies": {
     "electron": "^38.0.0",

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>paste-check harness</title>
+  </head>
+  <body>
+    <!--
+      Blank page loaded by tools/paste-check.js. It exists only so the test can
+      import the renderer's thread.js as a real ES module from a file:// origin;
+      a data: URL cannot import modules.
+
+      The clipboard assertions build their own DataTransfer-ish objects rather
+      than touching the real clipboard, so they are hermetic and can run with
+      no window focused. The browser-level paste path is covered by check:paste
+      --live against the installed app.
+    -->
+  </body>
+</html>

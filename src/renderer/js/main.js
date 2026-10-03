@@ -2,7 +2,7 @@
 
 import { $, el } from './util.js';
 import { api, call, onApiError } from './api.js';
-import { state, bus, upsertChat, chatList, loadPins, loadArchived } from './state.js';
+import { state, bus, upsertChat, chatList, loadPins, loadArchived, loadHiddenMessages, loadDeletedMessages } from './state.js';
 import { toast, closePopover, initTooltips, openPopover } from './ui.js';
 import {
   initSidebar, renderChats, renderAccountBadges, setLiveStatus, focusSearch, avatarNode,
@@ -369,6 +369,8 @@ async function boot() {
   applyTheme(state.settings.theme);
   loadPins(state.settings.pinnedChats);
   loadArchived(state.settings.archivedChats);
+  loadHiddenMessages(state.settings.hiddenMessages);
+  loadDeletedMessages(state.settings.deletedMessages);
 
   // Restores the remembered conversation-list width; runs after settings load.
   initLayout();

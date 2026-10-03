@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 const fs = require('node:fs');
-const { ipcMain, dialog, shell, app, BrowserWindow } = require('electron');
+const { ipcMain, dialog, shell, app, BrowserWindow, clipboard, nativeImage } = require('electron');
 
 const { DEFAULT_BASE_URL, ENDPOINTS } = require('./config');
 const { TokenStore } = require('./token-store');
@@ -12,6 +12,7 @@ const { BeeperEvents } = require('./beeper-ws');
 const { McpClient } = require('./mcp-client');
 const auth = require('./auth');
 const { runAssistantTurn } = require('./assistant');
+const mediaPath = require('./media-path');
 
 /** Wraps a handler so the renderer always gets {ok, data|error}. */
 function ok(data) {
@@ -216,6 +217,17 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
 
   ipcMain.handle('assets:upload', handle(async (filePath) => client.uploadAsset(filePath)));
 
+  // A pasted screenshot exists only as clipboard bytes, so there is no path to
+  // read. The renderer hands over a Uint8Array (structured clone gives one for
+  // an ArrayBuffer) and we put it straight into the same multipart upload.
+  ipcMain.handle('assets:uploadBytes', handle(async (payload) => {
+    const { data, fileName, mimeType } = payload || {};
+    if (!data) throw new Error('no image data to upload');
+    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+    if (!bytes.byteLength) throw new Error('the pasted image was empty');
+    return client.uploadAssetBytes(bytes, fileName || 'pasted-image.png', mimeType);
+  }));
+
   ipcMain.handle('assets:download', handle(async (input) => client.downloadAsset(input || {})));
 
   ipcMain.handle('assets:resolve', handle(async (attachment) => {
@@ -244,6 +256,26 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     if (!srcURL) return false;
     if (!/^(beeper-file|data|https):/i.test(srcURL)) return false;
     return openImageViewer(srcURL, alt || '');
+  }));
+
+  // Puts a real image on the system clipboard, so it can be pasted straight
+  // back into this app or into anything else. Only local files and data URLs
+  // are readable; a remote URL is refused rather than fetched.
+  ipcMain.handle('images:copy', handle(async ({ srcURL } = {}) => {
+    if (!mediaPath.isCopyableUrl(srcURL)) {
+      throw new Error('That image cannot be copied.');
+    }
+
+    const bytes = /^data:/i.test(srcURL)
+      ? mediaPath.dataUrlBuffer(srcURL)
+      : await fs.promises.readFile(mediaPath.localPathFrom(srcURL) || '');
+
+    const image = nativeImage.createFromBuffer(bytes || Buffer.alloc(0));
+    if (image.isEmpty()) throw new Error('That file is not an image the clipboard can hold.');
+
+    clipboard.writeImage(image);
+    const size = image.getSize();
+    return { copied: true, width: size.width, height: size.height };
   }));
 
   ipcMain.handle('dialog:pickAttachment', handle(async () => {

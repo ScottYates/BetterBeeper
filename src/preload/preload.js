@@ -61,12 +61,14 @@ contextBridge.exposeInMainWorld('beeper', {
   },
   assets: {
     upload: (filePath) => invoke('assets:upload', filePath),
+    uploadBytes: (payload) => invoke('assets:uploadBytes', payload),
     download: (input) => invoke('assets:download', input),
     resolve: (attachment) => invoke('assets:resolve', attachment),
     pick: () => invoke('dialog:pickAttachment'),
   },
   images: {
     openViewer: (srcURL, alt) => invoke('images:openViewer', { srcURL, alt }),
+    copy: (srcURL) => invoke('images:copy', { srcURL }),
   },
   events: {
     subscribe: (chatIDs) => invoke('events:subscribe', chatIDs),

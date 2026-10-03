@@ -15,6 +15,9 @@ Thumbs.db
 /shot-*.png
 /app-*.png
 
+# Fixture written by the clipboard checks, regenerated on every run
+/tools/.copy-sample.png
+
 # docs/ holds development captures of the running app. Those show real contact
 # names, phone numbers, private message text and a private server URL, so they
 # stay on this machine and are never published. Only the synthetic sheet of
