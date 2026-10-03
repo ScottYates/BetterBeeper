@@ -5,14 +5,20 @@
  *
  *   hidden  - folded behind an arrow, still in Beeper, still visible to
  *             everyone else. Reversible in one click.
- *   deleted - a tombstone in the thread, gone from this app. Beeper is never
- *             told, so no other device and no other person is affected.
+ *   deleted - gone from this app's thread, not drawn at all. There is no restore
+ *             anywhere in the UI. Beeper is never told, so no other device and
+ *             no other person is affected.
  *
  * The bug this guards is the quiet one. A hidden message that forgets to write
  * itself to settings looks perfect right up until the app is closed, and a
  * local delete that leaks into Beeper is the worst possible outcome of the
  * feature: the user asked to remove it for themselves and it disappeared for
  * everyone.
+ *
+ * It also guards the delete itself, by checking the set of messages the thread
+ * draws rather than only the flag. Flagging a message is not deleting it: a
+ * tombstone row left behind by an earlier version of this would satisfy every
+ * assertion about the flag while the text was still on screen.
  *
  * Run with `npm run check:visibility`.
  */
@@ -87,11 +93,6 @@ async function main() {
         return S.isMessageDeleted('m1') === true || 'not deleted';
       });
 
-      add('restoring brings the message back', () => {
-        S.setMessageDeleted('m1', false);
-        return S.isMessageDeleted('m1') === false || 'still deleted';
-      });
-
       add('deleting locally also unfolds the message', () => {
         reset();
         S.setMessageHidden('m1', true);
@@ -100,10 +101,68 @@ async function main() {
           || 'the message is both folded and deleted, so the fold can never be seen';
       });
 
-      add('restoring does not bring the fold back', () => {
-        S.setMessageDeleted('m1', false);
-        return S.isMessageHidden('m1') === false
-          || 'restoring also un-hid it';
+      // --- what the thread actually draws ---------------------------------------
+      // The delete has to take the row away, not just flag it. The drawn set is
+      // the honest place to prove that: if a tombstone ever came back, the
+      // message would be in this list again.
+      const seed = (chatID, ids) => {
+        S.state.messages.set(chatID, ids.map((id, i) => ({
+          id,
+          text: 'message ' + id,
+          timestamp: 1700000000000 + i * 1000,
+          accountID: 'account-1',
+        })));
+      };
+      const drawn = (chatID) => T.renderableMessages(chatID).map((m) => m.id);
+
+      reset();
+      seed('c1', ['a', 'b', 'c']);
+      add('untouched messages are drawn', () => {
+        return JSON.stringify(drawn('c1')) === JSON.stringify(['a', 'b', 'c'])
+          || ('got ' + JSON.stringify(drawn('c1')));
+      });
+
+      reset();
+      seed('c2', ['a', 'b', 'c']);
+      S.setMessageDeleted('b', true);
+      add('a message deleted on this device is not drawn', () => {
+        return JSON.stringify(drawn('c2')) === JSON.stringify(['a', 'c'])
+          || ('got ' + JSON.stringify(drawn('c2')));
+      });
+
+      add('deleting leaves no tombstone row behind', () => {
+        return drawn('c2').length === 2 || ('got ' + JSON.stringify(drawn('c2')));
+      });
+
+      add('the record stays in state, so Beeper still has the message', () => {
+        const raw = (S.state.messages.get('c2') || []).map((m) => m.id);
+        return JSON.stringify(raw) === JSON.stringify(['a', 'b', 'c'])
+          || ('got ' + JSON.stringify(raw));
+      });
+
+      add('deleting one message leaves the others alone', () => {
+        reset();
+        seed('c5', ['a', 'b', 'c']);
+        S.setMessageDeleted('a', true);
+        return JSON.stringify(drawn('c5')) === JSON.stringify(['b', 'c'])
+          || ('got ' + JSON.stringify(drawn('c5')));
+      });
+
+      reset();
+      seed('c3', ['only']);
+      S.setMessageDeleted('only', true);
+      add('deleting the last message leaves nothing to draw', () => {
+        return drawn('c3').length === 0 || ('got ' + JSON.stringify(drawn('c3')));
+      });
+
+      reset();
+      seed('c4', ['a', 'r', 'b']);
+      const reaction = S.state.messages.get('c4')[1];
+      reaction.type = 'REACTION';
+      reaction.isHidden = true;
+      add('reaction records are still not drawn as rows', () => {
+        return JSON.stringify(drawn('c4')) === JSON.stringify(['a', 'b'])
+          || ('got ' + JSON.stringify(drawn('c4')));
       });
 
       // --- persistence ----------------------------------------------------------

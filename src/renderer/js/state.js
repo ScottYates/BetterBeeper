@@ -331,9 +331,10 @@ export function setArchivedOverride(chatID, archived) {
 //   hidden  - folded away behind an arrow. Still there, still in Beeper, still
 //             in the chat for everyone else. A way to get a long message out
 //             of the way without losing it.
-//   deleted - gone from this app's thread, shown as a tombstone you can click
-//             to bring back. Beeper is never told, so no other device and no
-//             other person in the chat is affected.
+//   deleted - gone from this app's thread, not drawn at all. There is no restore
+//             anywhere in the UI, so the choice is final here. Beeper is never
+//             told, so no other device and no other person in the chat is
+//             affected.
 //
 // Neither is sent anywhere. They are keyed by messageID alone because Beeper
 // message IDs are unique per message, not per chat, so there is no need to

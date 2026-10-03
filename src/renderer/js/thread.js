@@ -601,8 +601,11 @@ export function threadSignature(messages) {
 }
 
 function onMessageUpserted() {
+  // Deleting the last message in a chat is a real state to draw: the list has
+  // to be cleared, not left showing what was just removed. So the empty case
+  // falls through to the rebuild below, and only a closed thread is ignored.
+  if (!state.activeChatID) return;
   const messages = renderableMessages(state.activeChatID);
-  if (!messages.length) return;
 
   // Almost every incoming event changes nothing the thread shows. A typing
   // indicator, a read receipt or a presence update re-renders the same bubbles
@@ -614,6 +617,10 @@ function onMessageUpserted() {
   // Reusing the <img> elements is not enough on its own: they still have to be
   // detached and reattached to be reused. Skipping the rebuild that changes
   // nothing is what actually keeps a GIF playing.
+  //
+  // Deleting a message changes the set itself, so a deleted message drops out of
+  // the list and the signature changes with it. That is the rebuild this relies
+  // on: there is no tombstone left behind to re-render.
   const signature = threadSignature(messages);
   if (signature === lastThreadSignature) return;
   lastThreadSignature = signature;
@@ -640,6 +647,11 @@ function onMessageUpserted() {
   for (const node of rebuilt) {
     listEl.append(node);
     if (node.dataset?.messageId) renderedNodes.set(node.dataset.messageId, node);
+  }
+  // Every message here was deleted on this device. Say so, so an empty thread
+  // reads as a choice rather than as a chat that failed to load.
+  if (!rebuilt.length) {
+    listEl.append(el('div', { class: 'empty-note', text: 'No messages here yet.' }));
   }
 
   renderSeenLine();
@@ -672,13 +684,6 @@ function messageNode(message, previous) {
         text: message.senderName || message.senderID || 'Unknown',
       }),
     );
-  }
-
-  // Deleted on this device only. Beeper still has it, everyone else still sees
-  // it; here it is a tombstone you can click to bring back.
-  if (isMessageDeleted(message.id)) {
-    bubbleWrap.append(deletedHereNode(message));
-    return wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap);
   }
 
   if (state.editing === message.id) {
@@ -763,26 +768,6 @@ function wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap) {
     !isOut ? messageAvatar(message) : null,
     bubbleWrap,
     actions,
-  );
-}
-
-/**
- * The tombstone for a message deleted on this device.
- *
- * Kept in the thread rather than removed from it, because "delete it just for
- * me" that silently discards the text is not something to do to someone by
- * accident. One click brings it back.
- */
-function deletedHereNode(message) {
-  return el(
-    'button',
-    {
-      class: 'msg-local-deleted',
-      title: 'Deleted on this device only. Click to restore.',
-      onClick: () => setLocalDeleted(message, false),
-    },
-    el('span', { class: 'msg-local-deleted-label', text: 'Deleted on this device' }),
-    el('span', { class: 'msg-local-deleted-restore', text: 'Restore' }),
   );
 }
 
@@ -1057,7 +1042,6 @@ function openMessageMenu(anchor, message) {
   const canEdit = message.isSender && !message.isDeleted;
   const canDelete = message.isSender && !message.isDeleted;
   const hidden = isMessageHidden(message.id);
-  const deletedHere = isMessageDeleted(message.id);
   openPopover(anchor, [
     { label: 'Reply', onSelect: () => setReplyTo(message) },
     { label: 'React', onSelect: () => openEmojiPicker(anchor, (e) => toggleReaction(message, e)) },
@@ -1071,9 +1055,9 @@ function openMessageMenu(anchor, message) {
       onSelect: () => setLocalHidden(message, !hidden),
     },
     {
-      label: deletedHere ? 'Restore message' : 'Delete on this device',
-      danger: !deletedHere,
-      onSelect: () => setLocalDeleted(message, !deletedHere),
+      label: 'Delete on this device',
+      danger: true,
+      onSelect: () => deleteOnThisDevice(message),
     },
     {
       label: 'Copy message ID',
@@ -1106,23 +1090,28 @@ async function setLocalHidden(message, hidden) {
   toast(hidden ? 'Message hidden' : 'Message shown', 'success', 1400);
 }
 
-/** The same, for "delete on this device". Beeper keeps the message either way. */
-async function setLocalDeleted(message, deleted) {
+/**
+ * Take a message out of this app's thread, for good.
+ *
+ * One-way on purpose: there is no restore anywhere in the UI, so the choice is
+ * gone once made. Beeper still has the message, so no other device and nobody
+ * else in the chat is affected - but here it is simply not drawn, and the only
+ * way to get it back is to clear this app's settings.
+ */
+async function deleteOnThisDevice(message) {
   if (!message?.id) return;
-  setMessageDeleted(message.id, deleted);
+  setMessageDeleted(message.id, true);
   onMessageUpserted();
   const saved = await call(() => api.settings.set({ deletedMessages: deletedList() }), {
     context: 'remember deleted message',
   });
   if (saved === null) {
-    toast('Changed for now, but this could not be saved', 'error');
+    // It left the thread, but a restart would bring it back. Say so rather than
+    // letting the user believe a delete that did not happen.
+    toast('Removed for now, but this could not be saved', 'error');
     return;
   }
-  toast(
-    deleted ? 'Deleted on this device only' : 'Message restored',
-    'success',
-    deleted ? 2200 : 1400,
-  );
+  toast('Deleted on this device', 'success', 1800);
 }
 
 async function copyText(text) {
@@ -1199,9 +1188,16 @@ async function toggleReaction(message, key) {
  * the message text and made a reacted-to message look like it had been sent
  * twice. The records stay in state (they are what the API sent) but are never
  * drawn as a bubble, and never used as a pagination cursor.
+ *
+ * Messages deleted on this device are dropped here too, which is what makes them
+ * disappear for good. The record stays in `state.messages` - Beeper still has
+ * it, and every other device still shows it - so this is a filter on what gets
+ * drawn, not a deletion of the message we were sent.
  */
-function renderableMessages(chatID) {
-  return (state.messages.get(chatID) || []).filter((m) => !m.isHidden);
+export function renderableMessages(chatID) {
+  return (state.messages.get(chatID) || []).filter(
+    (m) => !m.isHidden && !isMessageDeleted(m.id),
+  );
 }
 
 async function loadOlder() {
