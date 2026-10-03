@@ -366,6 +366,19 @@ export function deletedList() {
   return [...deletedMessages];
 }
 
+/**
+ * Forget every message deleted on this device, so they all come back.
+ *
+ * The escape hatch for the one-way delete: with no per-message restore, this is
+ * the only way to get a message back once it is gone from the thread. It does
+ * not touch Beeper, which still has every one of them.
+ */
+export function clearDeletedMessages() {
+  const count = deletedMessages.size;
+  deletedMessages.clear();
+  return count;
+}
+
 export function isMessageHidden(messageID) {
   return Boolean(messageID) && hiddenMessages.has(messageID);
 }

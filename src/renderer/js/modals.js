@@ -2,7 +2,7 @@
 
 import { $, el, clear, debounce, escapeHtml, initials, hueFor, fullTime, renderRichText } from './util.js';
 import { api, call } from './api.js';
-import { state, bus, upsertChat } from './state.js';
+import { state, bus, upsertChat, deletedList, clearDeletedMessages } from './state.js';
 import { openModal, closeModal, toast } from './ui.js';
 import { avatarNode } from './sidebar.js';
 
@@ -35,6 +35,13 @@ export const RELEASES_URL = 'https://github.com/ScottYates/BetterBeeper/releases
 export function versionLabel(version) {
   const value = String(version ?? state.appVersion ?? '').trim();
   return value ? `Better Beeper ${value}` : 'Better Beeper (version unknown)';
+}
+
+/** How many messages are hidden on this device, in words. */
+function deletedCountText() {
+  const n = deletedList().length;
+  if (!n) return 'None';
+  return `${n} hidden on this device`;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +388,52 @@ export async function openSettings() {
       { class: 'form-row', style: { display: 'flex', gap: '9px', alignItems: 'center' } },
       markReadOnOpen,
       el('span', { text: 'Mark a chat as read when I open it' }),
+    ),
+
+    el('h4', { text: 'Messages', style: { margin: '20px 0 10px' } }),
+    el(
+      'div',
+      { class: 'form-row' },
+      el('label', { text: 'Deleted on this device' }),
+      // There is no per-message restore any more, so this is the only way back.
+      // It saves first and clears second: a failed save that had already wiped
+      // the list would show the messages again for this session only, and then
+      // silently put them back on the next start.
+      (() => {
+        const count = el('span', { class: 'muted tiny', text: deletedCountText() });
+        const btn = el('button', {
+          class: 'btn btn-sm',
+          text: 'Clear list',
+          disabled: deletedList().length === 0,
+          onClick: async () => {
+            btn.disabled = true;
+            const saved = await call(() => api.settings.set({ deletedMessages: [] }), {
+              context: 'clear deleted messages',
+            });
+            if (!saved) {
+              btn.disabled = false;
+              toast('Could not clear the deleted list', 'error');
+              return;
+            }
+            state.settings = saved;
+            const restored = clearDeletedMessages();
+            count.textContent = deletedCountText();
+            // The thread filters these messages out, so it has to redraw for
+            // them to come back rather than just flipping a flag.
+            bus.emit('messages:changed', { chatID: state.activeChatID });
+            toast(
+              `${restored} message${restored === 1 ? '' : 's'} shown again`,
+              'success',
+              2000,
+            );
+          },
+        });
+        return el('div', { class: 'clear-deleted-row' }, count, btn);
+      })(),
+      el('p', {
+        class: 'hint',
+        text: 'Deleting on this device removes a message from this app only; Beeper keeps it. Clearing the list makes those messages visible again.',
+      }),
     ),
 
     el('h4', { text: 'Notifications', style: { margin: '20px 0 10px' } }),

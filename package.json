@@ -37,7 +37,8 @@
     "check:gif": "electron tools/gif-check.js",
     "check:visibility": "electron tools/visibility-check.js",
     "check:gifrebuild": "electron tools/gif-rebuild-check.js",
-    "check:about": "electron tools/about-check.js"
+    "check:about": "electron tools/about-check.js",
+    "check:actions": "electron tools/actions-check.js"
   },
   "devDependencies": {
     "electron": "^38.0.0",

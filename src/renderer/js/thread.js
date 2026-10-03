@@ -664,7 +664,7 @@ function dayKey(value) {
   return date ? date.toDateString() : '';
 }
 
-function messageNode(message, previous) {
+export function messageNode(message, previous) {
   const isOut = Boolean(message.isSender);
   const selfID = selfUserIDFor(message.accountID);
   // In a 1:1 chat the avatar already identifies the other person, so Beeper
@@ -735,7 +735,14 @@ function messageNode(message, previous) {
   return wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap);
 }
 
-/** The outer row: avatar, bubble column, and the hover action buttons. */
+/**
+ * The outer row: avatar, bubble column, and the hover action buttons.
+ *
+ * Delete and Hide live here rather than in the context menu, because they are
+ * the two things you do to a message you are looking at. A destructive action
+ * behind a hover is only safe because delete still asks first, and hide still
+ * folds rather than destroys.
+ */
 function wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap) {
   const actions = el('div', { class: 'msg-hover-actions' });
   actions.append(
@@ -748,6 +755,41 @@ function wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap) {
         openEmojiPicker(event.currentTarget, (emoji) => toggleReaction(message, emoji));
       },
     }),
+  );
+
+  // A folded message already carries its own arrow back, so it does not get a
+  // Hide button too - two controls for one state is how they drift apart.
+  if (!isMessageHidden(message.id)) {
+    actions.append(
+      el('button', {
+        class: 'icon-btn tiny-btn',
+        title: 'Hide message',
+        text: '👁',
+        onClick: (event) => {
+          event.stopPropagation();
+          setLocalHidden(message, true);
+        },
+      }),
+    );
+  }
+
+  // Only your own messages can be deleted on Beeper, so only they get the
+  // button. Same rule as the context menu item it replaces.
+  if (message.isSender && !message.isDeleted) {
+    actions.append(
+      el('button', {
+        class: 'icon-btn tiny-btn',
+        title: 'Delete message',
+        text: '🗑',
+        onClick: (event) => {
+          event.stopPropagation();
+          deleteMessage(message);
+        },
+      }),
+    );
+  }
+
+  actions.append(
     el('button', {
       class: 'icon-btn tiny-btn',
       title: 'More',
@@ -1038,22 +1080,30 @@ function editingNode(message) {
   return el('div', { class: 'msg-bubble' }, input);
 }
 
-function openMessageMenu(anchor, message) {
+/**
+ * The context menu, for the things that are not one click.
+ *
+ * Delete and Hide are deliberately not here: they are on the message row's
+ * hover actions now. What is left is the slower, rarer list - replying,
+ * copying, editing, and the local-only delete that needs a second thought.
+ */
+/**
+ * The context menu, for the things that are not one click.
+ *
+ * Delete and Hide are deliberately not here: they are on the message row's
+ * hover actions now. What is left is the slower, rarer list - replying,
+ * copying, editing, and the local-only delete that needs a second thought.
+ *
+ * The anchor is the button the menu hangs off. A caller that only wants the
+ * labels - the dev check does - can pass null; it must not invoke the items.
+ */
+export function messageMenuItems(anchor, message) {
   const canEdit = message.isSender && !message.isDeleted;
-  const canDelete = message.isSender && !message.isDeleted;
-  const hidden = isMessageHidden(message.id);
-  openPopover(anchor, [
+  return [
     { label: 'Reply', onSelect: () => setReplyTo(message) },
     { label: 'React', onSelect: () => openEmojiPicker(anchor, (e) => toggleReaction(message, e)) },
     { label: 'Copy text', onSelect: () => copyText(message.text || '') },
     canEdit ? { label: 'Edit', onSelect: () => { state.editing = message.id; onMessageUpserted(); } } : null,
-    canDelete
-      ? { label: 'Delete', danger: true, onSelect: () => deleteMessage(message) }
-      : null,
-    {
-      label: hidden ? 'Show message' : 'Hide message',
-      onSelect: () => setLocalHidden(message, !hidden),
-    },
     {
       label: 'Delete on this device',
       danger: true,
@@ -1063,7 +1113,11 @@ function openMessageMenu(anchor, message) {
       label: 'Copy message ID',
       onSelect: () => copyText(message.id),
     },
-  ]);
+  ].filter(Boolean);
+}
+
+function openMessageMenu(anchor, message) {
+  openPopover(anchor, messageMenuItems(anchor, message));
 }
 
 /**
