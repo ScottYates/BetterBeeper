@@ -35,7 +35,8 @@
     "check:imagecopy": "node tools/image-copy-check.js",
     "check:imagecopy-live": "node tools/image-copy-live.js",
     "check:gif": "electron tools/gif-check.js",
-    "check:visibility": "electron tools/visibility-check.js"
+    "check:visibility": "electron tools/visibility-check.js",
+    "check:gifrebuild": "electron tools/gif-rebuild-check.js"
   },
   "devDependencies": {
     "electron": "^38.0.0",

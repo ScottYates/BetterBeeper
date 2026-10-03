@@ -59,8 +59,12 @@ chats, and send, with every action shown to you before it happens.
   only, for when you want a message gone for you without it disappearing for everyone else.
   Neither tells Beeper anything. A local delete leaves a tombstone you can click to bring the
   message back, because a delete that silently throws the text away is not one to do by accident
-- Animated GIFs animate as they should: nothing in the stylesheet suppresses image animation,
-  and `loading="lazy"` does not hold them still
+- Animated GIFs animate. They did not, for a long time, and the reason was not
+  anything to do with images: the thread used to be cleared and rebuilt on every
+  incoming event, and a detached `<img>` loses its playback and restarts at frame
+  0. A typing indicator or a read receipt was enough to restart every GIF on
+  screen, so in a busy chat they never appeared to move, while in a quiet chat
+  they played fine
 - Independent vertical scrolling for the chat list and the message thread, with infinite
   scroll backwards through history
 - Opening a chat always lands on its newest message, even when you were scrolled up in the
@@ -203,6 +207,7 @@ npm run check:imagecopy # which image URLs may be copied, and how they map back 
 npm run check:api       # the preload surface, the IPC handlers and the renderer agree
 npm run check:visibility # hiding and locally deleting a message, and surviving a restart
 npm run check:gif       # an animated GIF really advances frames on screen
+npm run check:gifrebuild # the thread is only rebuilt when what it draws changed
 npm run check:syntax    # every JS file parses, so a broken check cannot pose as an app crash
 npm run check:bump      # the semver level chosen from a commit message is right
 npm run check:released  # every push to main has a release
@@ -445,6 +450,17 @@ that Beeper's own UI interprets on the client side:
 ### Behaviours that are easy to break
 
 Each of these caused a real bug here.
+
+- **Rebuilding the thread kills every animated image in it.** `clear()` followed by a fresh
+  build detaches each `<img>`, and a detached image stops playing and restarts at frame 0. The
+  thread was rebuilt on every incoming event, so a read receipt was enough to restart the GIFs
+  several times a second. The rebuild is now skipped when `threadSignature` says nothing drawn
+  has changed, and the `<img>` elements are cached so a rebuild that really is needed disturbs
+  them as little as possible. Adding a field to `messageNode` without adding it to the signature
+  is the regression to watch for: `check:gifrebuild` fails on exactly that.
+- **A rebuild that looks identical is not free.** It is easy to assume re-rendering the same
+  rows is harmless. Measured on this app, ten updates that changed nothing on screen produced
+  220 DOM mutations, and the same ten produce none now.
 
 - **The HTML sanitizer must nest, not just filter.** The allowlist walk appended each
   cleaned element and then appended that element's children as its *siblings*, so every

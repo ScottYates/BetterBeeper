@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>gif-rebuild-check harness</title>
+  </head>
+  <body>
+    <!--
+      Blank page loaded by tools/gif-rebuild-check.js. It exists only so the
+      test can import the renderer's thread.js as a real ES module from a
+      file:// origin; a data: URL cannot import modules.
+
+      The assertions are about threadSignature: it must be stable when nothing
+      on screen changed, and it must change when anything did. A field left out
+      of it is a field the thread stops updating on, which is worse than the
+      wasted rebuild it was meant to save.
+    -->
+  </body>
+</html>

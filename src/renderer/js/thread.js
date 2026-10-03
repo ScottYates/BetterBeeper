@@ -53,6 +53,7 @@ let pendingAttachments = [];
 // Distinguishes two optimistic bubbles created in the same millisecond.
 let txnSeq = 0;
 let focusMessageID = null;
+let lastThreadSignature = null;
 const renderedNodes = new Map();
 
 export function initThread() {
@@ -244,6 +245,7 @@ export function closeThread() {
   state.view = 'chat';
   currentChat = null;
   renderedNodes.clear();
+  lastThreadSignature = null;
   clear($('#message-list'));
   renderChats();
 }
@@ -536,6 +538,8 @@ function renderAll() {
 
   let lastDay = null;
   let previous = null;
+  // One claim per attachment per pass; see the note above imageCache.
+  resetImageClaims();
   for (const message of messages) {
     const day = dayKey(message.timestamp);
     if (day !== lastDay) {
@@ -553,13 +557,72 @@ function renderAll() {
   if (stick) scrollToBottom();
 }
 
+/**
+ * Everything about the thread that changes what is drawn, as one string.
+ *
+ * If this is unchanged, the next render would produce the same rows in the same
+ * order, so the rebuild can be skipped. It has to cover every field messageNode
+ * reads, or the thread quietly stops updating; erring towards including too
+ * much only costs a rebuild, while leaving something out costs correctness.
+ */
+export function threadSignature(messages) {
+  const parts = [
+    state.activeChatID || '',
+    currentChat?.type || '',
+    state.editing || '',
+    String(atBottom),
+  ];
+  for (const m of messages) {
+    parts.push([
+      m.id,
+      m.isSender ? 1 : 0,
+      m.accountID || '',
+      m.senderID || '',
+      m.senderName || '',
+      m.isDeleted ? 1 : 0,
+      m.sendStatus || '',
+      m.text || '',
+      m.type || '',
+      m.timestamp || '',
+      m.editedTimestamp || '',
+      m.linkedMessageID || '',
+      (m.attachments || [])
+        .map((a) => `${a.id || a.fileName || ''}:${a.fileSize || 0}:${a.mimeType || ''}`)
+        .join(','),
+      (m.reactions || [])
+        .map((r) => `${r.key ?? r.reactionKey}:${r.count ?? (r.userIDs || []).length}:${r.isSelf ? 1 : 0}`)
+        .join(','),
+      (m.links || []).map((l) => l.url || l.title || '').join(','),
+      isMessageHidden(m.id) ? 'h' : '',
+      isMessageDeleted(m.id) ? 'd' : '',
+    ].join('~'));
+  }
+  return parts.join('|');
+}
+
 function onMessageUpserted() {
   const messages = renderableMessages(state.activeChatID);
   if (!messages.length) return;
 
+  // Almost every incoming event changes nothing the thread shows. A typing
+  // indicator, a read receipt or a presence update re-renders the same bubbles
+  // in the same order, and a rebuild detaches every image in the list. An
+  // animated GIF loses its playback the moment it leaves the document, so on a
+  // busy chat the file was restarted several times a second and never appeared
+  // to move - while an identical-looking rebuild was also thrown away.
+  //
+  // Reusing the <img> elements is not enough on its own: they still have to be
+  // detached and reattached to be reused. Skipping the rebuild that changes
+  // nothing is what actually keeps a GIF playing.
+  const signature = threadSignature(messages);
+  if (signature === lastThreadSignature) return;
+  lastThreadSignature = signature;
+
   const listEl = $('#message-list');
   const stick = atBottom;
   const rebuilt = [];
+  // One claim per attachment per pass; see the note above imageCache.
+  resetImageClaims();
 
   let previous = null;
   for (const message of messages) {
@@ -861,19 +924,7 @@ function attachmentsNode(message) {
   for (const attachment of message.attachments || []) {
     const isImage = attachment.type === 'img' || /^image\//i.test(attachment.mimeType || '');
     if (isImage) {
-      const img = el('img', {
-        class: 'att-image',
-        alt: attachment.fileName || 'image',
-        loading: 'lazy',
-        onClick: (event) => {
-          event.stopPropagation();
-          openLightbox(event.currentTarget.src);
-        },
-      });
-      resolveSrc(attachment).then((url) => {
-        if (url) img.src = url;
-      });
-      wrap.append(img);
+      wrap.append(imageElement(attachment));
     } else {
       const node = el(
         'a',
@@ -907,6 +958,68 @@ function resolveSrc(attachment) {
   );
   srcCache.set(key, promise);
   return promise;
+}
+
+// ---------------------------------------------------------------------------
+// Image elements are kept across re-renders
+//
+// An animated GIF only stays animated if the <img> element that is playing it
+// is the same element. A fresh element on the same file starts again at frame
+// 0, and the thread is rebuilt from scratch on every incoming event - a typing
+// indicator or a read receipt is enough. In a chat with any traffic at all
+// that meant the file was restarted several times a second and the GIF never
+// appeared to move.
+//
+// Moving an element within the document does not disturb it: the decoder keeps
+// running and the phase is preserved. So the element is cached by attachment
+// and reused, which is what stops the restart.
+//
+// A key may only be claimed once per pass, or an attachment that appears in
+// two messages would be yanked out of the first one to serve the second.
+// ---------------------------------------------------------------------------
+
+const imgCache = new Map();
+const claimedImages = new Set();
+const IMG_CACHE_LIMIT = 240;
+
+function resetImageClaims() {
+  claimedImages.clear();
+}
+
+function imageElement(attachment) {
+  const key = attachment.id || attachment.srcURL || attachment.fileName || '';
+  const cached = key ? imgCache.get(key) : null;
+
+  if (cached && !claimedImages.has(cached)) {
+    claimedImages.add(cached);
+    cached.alt = attachment.fileName || 'image';
+    return cached;
+  }
+
+  const img = el('img', {
+    class: 'att-image',
+    alt: attachment.fileName || 'image',
+    loading: 'lazy',
+    onClick: (event) => {
+      event.stopPropagation();
+      openLightbox(event.currentTarget.src);
+    },
+  });
+
+  if (key) {
+    if (imgCache.size >= IMG_CACHE_LIMIT) {
+      // Map preserves insertion order, so the first key is the oldest.
+      const oldest = imgCache.keys().next().value;
+      if (oldest !== undefined) imgCache.delete(oldest);
+    }
+    imgCache.set(key, img);
+    claimedImages.add(img);
+  }
+
+  resolveSrc(attachment).then((url) => {
+    if (url && img.src !== url) img.src = url;
+  });
+  return img;
 }
 
 function editingNode(message) {
