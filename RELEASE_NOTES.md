@@ -1,11 +1,11 @@
-Better Beeper 1.3.1
+Better Beeper 1.3.2
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.3.1-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.3.2-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,6 +17,6 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
-- fix: the hover trash is the local delete, and stop invisible buttons taking clicks (`b1c098a`)
+- fix: the inbox preview must point at a message the thread actually shows (`0354000`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.
