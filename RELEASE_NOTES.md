@@ -1,11 +1,11 @@
-Better Beeper 1.2.0
+Better Beeper 1.2.1
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.2.0-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.2.1-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,6 +17,6 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
-- feat: show the running version and a release link in settings (`60305d7`)
+- fix: delete a message on this device for good, with no restore (`b511337`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.
