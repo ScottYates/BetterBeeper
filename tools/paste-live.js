@@ -15,6 +15,8 @@
  *
  * The app must be running with --remote-debugging-port=9222.
  */
+const { execFileSync } = require('child_process');
+const path = require('path');
 const WS = require('ws');
 
 const PORT = Number((process.argv.find((a) => a.startsWith('--port=')) || '--port=9222').slice(7));
@@ -22,6 +24,22 @@ const MATCH = 'index.html';
 const WAIT_MS = 15000;
 // Must match tools/clip-put-text.ps1.
 const TEXT = 'pasted text 123';
+
+/**
+ * Stage the clipboard for a phase.
+ *
+ * The check owns this rather than asking the caller to. Leaving it to the
+ * caller meant a run with the wrong thing on the clipboard failed with a
+ * message about the wrong subject: the text phase pasted the image again and
+ * then reported that a text paste had not arrived.
+ */
+function ps1(name) {
+  return execFileSync(
+    'powershell.exe',
+    ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, name)],
+    { encoding: 'utf8' },
+  ).trim();
+}
 
 const CHIPS = `(() => {
   const wrap = document.getElementById('attachment-chips');
@@ -160,9 +178,11 @@ async function main() {
     });
   };
 
-  await pressPaste();
+  // Stage a real screenshot on the clipboard, then paste it for real.
+  ps1('clip-put.ps1');
 
   // The upload is a round trip to Beeper, so poll rather than guess a delay.
+  await pressPaste();
   const deadline = Date.now() + WAIT_MS;
   let after = before;
   while (Date.now() < deadline) {
@@ -192,6 +212,7 @@ async function main() {
 
   // The regression that would matter most: an ordinary text paste has to keep
   // working. Put plain text on the clipboard and paste it for real.
+  ps1('clip-put-text.ps1');
   await evaluate(`(() => {
     const c = document.getElementById('composer');
     c.value = '';

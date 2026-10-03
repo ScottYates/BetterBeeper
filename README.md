@@ -217,7 +217,6 @@ Note to self chat and never send a message:
 
 ```bash
 "Better Beeper.exe" --remote-debugging-port=9222
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File tools/clip-put.ps1
 npm run check:paste-live
 npm run check:imagecopy-live   # copies an image, then pastes it straight back
 ```
