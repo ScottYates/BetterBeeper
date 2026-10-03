@@ -19,6 +19,24 @@ const TEXT_SCALES = [
   [1.5, 'Largest (150%)'],
 ];
 
+/**
+ * Where a new build is ever published. GitHub resolves /releases/latest to the
+ * newest tag, so this link cannot go stale the way a pinned version URL would.
+ */
+export const RELEASES_URL = 'https://github.com/ScottYates/BetterBeeper/releases/latest';
+
+/**
+ * The running version, for the About row in settings.
+ *
+ * Says "unknown" rather than falling back to a plausible-looking number: a
+ * settings panel that quietly claims 1.0.0 when it has not loaded the real
+ * version is worse than one that admits it does not know.
+ */
+export function versionLabel(version) {
+  const value = String(version ?? state.appVersion ?? '').trim();
+  return value ? `Better Beeper ${value}` : 'Better Beeper (version unknown)';
+}
+
 // ---------------------------------------------------------------------------
 // New chat
 // ---------------------------------------------------------------------------
@@ -388,6 +406,25 @@ export async function openSettings() {
         }
       },
     }),
+
+    el('h4', { text: 'About', style: { margin: '20px 0 10px' } }),
+    el(
+      'div',
+      { class: 'form-row about-row' },
+      el('span', { class: 'muted tiny', id: 'settings-version', text: versionLabel() }),
+      el('a', {
+        class: 'about-link',
+        href: RELEASES_URL,
+        title: RELEASES_URL,
+        text: 'Get the most recent release',
+        // A real link, so it can be copied and middle-clicked, but opened
+        // through the main process rather than navigating the app window.
+        onClick: (event) => {
+          event.preventDefault();
+          api.shell.openExternal(RELEASES_URL);
+        },
+      }),
+    ),
   );
 
   openModal({
