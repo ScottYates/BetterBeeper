@@ -1,11 +1,11 @@
-Better Beeper 1.0.4
+Better Beeper 1.1.0
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.0.4-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.1.0-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,6 +17,6 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
-- Let a Shift+Enter newline in the composer be scrolled back to (`7ca524c`)
+- feat: paste images, copy them out, and hide messages locally (`ec355ad`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.
