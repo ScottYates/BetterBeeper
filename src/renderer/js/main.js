@@ -216,6 +216,31 @@ async function refreshChatSummary(chatID) {
   subscribeVisibleChats();
 }
 
+// How long the inbox may sit on stale summaries before focusing the window
+// goes and fetches the list again.
+const INBOX_REFRESH_AGE = 60_000;
+let lastInboxRefresh = 0;
+
+/**
+ * Re-read the chat list when the window comes back to the front.
+ *
+ * A contact's name is only refreshed when something happens in that chat, so a
+ * rename that landed while the window was in the background - or in another
+ * app entirely - left the inbox showing the old name until an unrelated event
+ * happened to touch that row. One list call covers the whole visible inbox,
+ * which is cheap enough to do whenever the user comes back.
+ */
+function refreshInboxOnFocus() {
+  if (Date.now() - lastInboxRefresh < INBOX_REFRESH_AGE) return;
+  lastInboxRefresh = Date.now();
+
+  call(() => api.chats.list({ limit: 100 }), { context: 'inbox refresh', fallback: null }).then((res) => {
+    if (!res || state.searchQuery) return;
+    for (const chat of res.items || []) upsertChat(chat);
+    renderChats();
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Keyboard & menus
 // ---------------------------------------------------------------------------
@@ -303,6 +328,14 @@ async function boot() {
   initAssistant();
   wireEvents();
   wireKeyboard();
+
+  // Both, not just focus: switching away from the window often does not fire
+  // it, and coming back does not always. Together they cover the ways a
+  // desktop window actually comes back to the foreground.
+  window.addEventListener('focus', refreshInboxOnFocus);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshInboxOnFocus();
+  });
 
   $('#btn-new-chat').addEventListener('click', () => openNewChat());
   $('#btn-settings').addEventListener('click', () => openSettings());

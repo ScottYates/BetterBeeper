@@ -248,6 +248,83 @@ async function main() {
         return typeof out === 'string' && out.length > 0 || ('got ' + JSON.stringify(out));
       });
 
+      // --- the inbox preview points at something visible ------------------------
+      // Beeper's own preview is the newest message *it* has. A local delete is
+      // never sent, so Beeper goes on treating the removed message as the
+      // latest, and the sidebar used to show its text. The preview has to obey
+      // the same rule as the thread, or the inbox describes a conversation that
+      // is not on screen.
+      const seedChat = (chatID, list) => S.state.messages.set(chatID, list);
+      const msg = (id, extra) => ({ id, text: 'text of ' + id, timestamp: 1700000000000, ...extra });
+
+      reset();
+      seedChat('pv1', [msg('p1'), msg('p2')]);
+      add('the preview shows the newest message normally', () => {
+        const out = S.chatPreviewText({ id: 'pv1', preview: msg('p2') });
+        return out === 'text of p2' || ('got ' + JSON.stringify(out));
+      });
+
+      reset();
+      seedChat('pv2', [msg('p1'), msg('p2')]);
+      S.setMessageDeleted('p2', true);
+      add('the preview skips a message deleted on this device', () => {
+        const out = S.chatPreviewText({ id: 'pv2', preview: msg('p2') });
+        return out === 'text of p1' || ('got ' + JSON.stringify(out));
+      });
+
+      add('a deleted preview message is never what the inbox shows', () => {
+        // The direct claim: whatever the preview says, it is a message the
+        // thread actually draws.
+        reset();
+        seedChat('pv3', [msg('p1'), msg('p2'), msg('p3')]);
+        S.setMessageDeleted('p3', true);
+        const shown = S.chatPreviewText({ id: 'pv3', preview: msg('p3') });
+        const drawn = S.state.messages.get('pv3').filter((m) => !m.isHidden && !S.isMessageDeleted(m.id));
+        return drawn.some((m) => m.text === shown) || ('showed ' + JSON.stringify(shown));
+      });
+
+      add('a preview of only deleted messages is blank, not deleted text', () => {
+        reset();
+        seedChat('pv4', [msg('p1'), msg('p2')]);
+        S.setMessageDeleted('p1', true);
+        S.setMessageDeleted('p2', true);
+        const out = S.chatPreviewText({ id: 'pv4', preview: msg('p2') });
+        return out === '' || ('got ' + JSON.stringify(out));
+      });
+
+      add('a partially deleted chat falls back to the newest visible message', () => {
+        reset();
+        seedChat('pv5', [msg('p1'), msg('p2'), msg('p3')]);
+        S.setMessageDeleted('p2', true);
+        S.setMessageDeleted('p3', true);
+        const out = S.chatPreviewText({ id: 'pv5', preview: msg('p3') });
+        return out === 'text of p1' || ('got ' + JSON.stringify(out));
+      });
+
+      add('a chat we have not opened still shows the Beeper preview', () => {
+        // Most rows in the inbox have no messages loaded locally. Blanking
+        // those would be far worse than showing Beeper's own preview, so the
+        // local history is only a fallback for a preview we know is deleted.
+        reset();
+        const out = S.chatPreviewText({ id: 'pv-none', preview: msg('p9') });
+        return out === 'text of p9' || ('got ' + JSON.stringify(out));
+      });
+
+      add('a message Beeper deleted still reads as deleted', () => {
+        reset();
+        const out = S.chatPreviewText({ id: 'pv1', preview: msg('px', { isDeleted: true }) });
+        return out === 'Message deleted' || ('got ' + JSON.stringify(out));
+      });
+
+      add('an attachment preview still shows the file name', () => {
+        reset();
+        const out = S.chatPreviewText({
+          id: 'pv1',
+          preview: { id: 'pa', type: 'IMAGE', attachments: [{ fileName: 'notes.pdf' }] },
+        });
+        return out.indexOf('notes.pdf') >= 0 || ('got ' + JSON.stringify(out));
+      });
+
       reset();
       return JSON.stringify(cases);
     })()

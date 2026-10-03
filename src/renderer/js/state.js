@@ -406,12 +406,54 @@ export function setMessageDeleted(messageID, deleted) {
   return deletedMessages.has(messageID);
 }
 
+/** One message rendered as a preview line. */
+function previewLineFor(message) {
+  if (message.isDeleted) return 'Message deleted';
+  if (message.text) return message.text;
+  if (message.attachments?.length) return `📎 ${message.attachments[0].fileName || 'Attachment'}`;
+  if (message.type && message.type !== 'TEXT') return message.type.toLowerCase();
+  return '';
+}
+
+/**
+ * The newest message in a chat that the thread actually draws.
+ *
+ * Same rule as renderableMessages, and it has to be the same rule: a preview
+ * pointing at something the user cannot see is the sidebar describing a
+ * conversation that is not on screen.
+ */
+function newestVisiblePreviewText(chatID) {
+  const list = state.messages.get(chatID) || [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const message = list[i];
+    if (message.isHidden || isMessageDeleted(message.id)) continue;
+    const line = previewLineFor(message);
+    if (line) return line;
+  }
+  return '';
+}
+
+/**
+ * The inbox preview line.
+ *
+ * Beeper's `preview` is the newest message *it* has, which is not the newest
+ * message the user has: deleting on this device is local, so Beeper goes on
+ * treating the message the user removed as the latest, and the sidebar kept
+ * showing its text. With a run of deleted messages the preview looked pinned
+ * to something that was not in the thread, and shifted again on every incoming
+ * message - which reads as the inbox preview never settling.
+ */
 export function chatPreviewText(chat) {
   const preview = chat?.preview;
   if (!preview) return '';
-  if (preview.isDeleted) return 'Message deleted';
-  if (preview.text) return preview.text;
-  if (preview.attachments?.length) return `📎 ${preview.attachments[0].fileName || 'Attachment'}`;
-  if (preview.type && preview.type !== 'TEXT') return preview.type.toLowerCase();
-  return '';
+  if (isMessageDeleted(preview.id)) {
+    const loaded = state.messages.get(chat.id) || [];
+    const visible = newestVisiblePreviewText(chat.id);
+    if (visible) return visible;
+    // Nothing to show only counts as an answer if we have the history to know
+    // it. Most rows in the inbox have no messages loaded at all, and blanking
+    // those would be worse than the preview being a little out of date.
+    if (loaded.length) return '';
+  }
+  return previewLineFor(preview);
 }
