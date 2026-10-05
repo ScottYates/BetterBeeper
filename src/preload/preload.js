@@ -28,6 +28,11 @@ contextBridge.exposeInMainWorld('beeper', {
     bootstrap: () => invoke('app:bootstrap'),
     refreshDiscovery: () => invoke('app:refreshDiscovery'),
   },
+  updater: {
+    check: () => invoke('updater:check'),
+    download: () => invoke('updater:download'),
+    quit: () => invoke('updater:quit'),
+  },
   auth: {
     status: () => invoke('auth:status'),
     connect: () => invoke('auth:connect'),
@@ -96,6 +101,7 @@ contextBridge.exposeInMainWorld('beeper', {
     eventsFrame: (fn) => on('events:frame', fn),
     mcpStatus: (fn) => on('mcp:status', fn),
     assistantEvent: (fn) => on('assistant:event', fn),
+    updaterProgress: (fn) => on('updater:progress', fn),
     menuNewChat: (fn) => on('menu:newChat', fn),
     menuFocusSearch: (fn) => on('menu:focusSearch', fn),
     menuToggleAssistant: (fn) => on('menu:toggleAssistant', fn),

@@ -12,6 +12,7 @@ import { initThread, openChat, applyMessageEvent, closeThread } from './thread.j
 import { initAssistant, toggleAssistant, showToolsCatalog } from './assistant.js';
 import { openNewChat, openSettings, applyTheme } from './modals.js';
 import { initLayout } from './layout.js';
+import { checkForUpdatesOnLaunch } from './updates.js';
 
 let bootstrapped = false;
 
@@ -436,6 +437,13 @@ async function boot() {
   setInterval(() => {
     if (!$('#connect-screen').hidden) refreshConnectionStatus();
   }, 8000);
+
+  // Check for a new release well after startup, so it never competes with the
+  // first paint or with Beeper's own discovery call. Deliberately not awaited:
+  // the check is slow and network-dependent, and boot has already done its job.
+  setTimeout(() => {
+    checkForUpdatesOnLaunch().catch(() => {});
+  }, 12000);
 }
 
 boot();

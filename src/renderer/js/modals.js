@@ -5,6 +5,7 @@ import { api, call } from './api.js';
 import { state, bus, upsertChat, deletedList, clearDeletedMessages } from './state.js';
 import { openModal, closeModal, toast } from './ui.js';
 import { avatarNode } from './sidebar.js';
+import { checkNow } from './updates.js';
 
 /**
  * Text-size presets, as [zoom factor, label]. 1 is the size the UI was designed
@@ -265,6 +266,8 @@ export async function openSettings() {
     }));
   }
 
+  const autoUpdates = el('input', { type: 'checkbox', checked: settings.autoUpdates !== false });
+
   const notifyEnabled = el('input', { type: 'checkbox', checked: settings.notifyEnabled !== false });
   const notifyPreview = el('select');
   for (const [value, label] of [
@@ -467,9 +470,36 @@ export async function openSettings() {
 
     el('h4', { text: 'About', style: { margin: '20px 0 10px' } }),
     el(
+      'label',
+      { class: 'form-row', style: { display: 'flex', gap: '9px', alignItems: 'center' } },
+      autoUpdates,
+      el('span', { text: 'Check for updates automatically' }),
+    ),
+    el('p', {
+      class: 'muted tiny',
+      style: { marginTop: '-6px' },
+      text: 'Once a day. When one is found it asks before downloading anything.',
+    }),
+    el(
       'div',
       { class: 'form-row about-row' },
       el('span', { class: 'muted tiny', id: 'settings-version', text: versionLabel() }),
+      el('button', {
+        class: 'btn btn-sm',
+        text: 'Check for updates',
+        style: { marginRight: '2px' },
+        onClick: async (event) => {
+          const btn = event.currentTarget;
+          btn.disabled = true;
+          btn.textContent = 'Checking...';
+          try {
+            await checkNow();
+          } finally {
+            btn.disabled = false;
+            btn.textContent = 'Check for updates';
+          }
+        },
+      }),
       el('a', {
         class: 'about-link',
         href: RELEASES_URL,
@@ -507,6 +537,7 @@ export async function openSettings() {
             notifyMutedChats: notifyMutedChats.checked,
             notifySound: notifySound.checked,
             notifyWhenFocused: notifyWhenFocused.checked,
+            autoUpdates: autoUpdates.checked,
           };
           if (apiKey.value.trim()) patch.apiKey = apiKey.value.trim();
           if (apiKey.value === '') delete patch.apiKey;

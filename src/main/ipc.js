@@ -13,6 +13,7 @@ const { McpClient } = require('./mcp-client');
 const auth = require('./auth');
 const { runAssistantTurn } = require('./assistant');
 const mediaPath = require('./media-path');
+const updater = require('./updater');
 
 /** Wraps a handler so the renderer always gets {ok, data|error}. */
 function ok(data) {
@@ -148,6 +149,45 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   }));
 
   ipcMain.handle('app:refreshDiscovery', handle(async () => ok(await discover())));
+
+  // ---- updates ---------------------------------------------------------
+  //
+  // The renderer asks, the user decides, and the download streams progress back
+  // over a push channel. The install itself cannot happen here: the NSIS
+  // installer cannot replace the executable of a running process, so the last
+  // step stages a marker and quits, and the installer runs on the next launch.
+  // See updater.js for why that split is unavoidable rather than merely awkward.
+
+  ipcMain.handle('updater:check', handle(async () => {
+    const result = await updater.checkForUpdate({ current: app.getVersion() });
+    return ok({ ...result, ...updater.pendingStatus() });
+  }));
+
+  ipcMain.handle('updater:download', handle(async () => {
+    const result = await updater.checkForUpdate({ current: app.getVersion() });
+    if (!result.updateAvailable) return ok({ skipped: 'no-update' });
+    if (!result.asset) {
+      return ok({ skipped: result.reason || 'no-installer' });
+    }
+
+    broadcast('updater:progress', { phase: 'download', percent: 0, written: 0, total: result.asset.size || 0 });
+
+    const installer = await updater.downloadAsset(result.asset, (progress) => {
+      broadcast('updater:progress', { phase: 'download', ...progress });
+    });
+
+    const staged = updater.stageUpdate(installer);
+    broadcast('updater:progress', { phase: 'ready', percent: 100 });
+    return ok({ ...staged, version: result.version, requiresRestart: true });
+  }));
+
+  // Quitting is the main process's own business, but the renderer asks rather
+  // than reaching for it, so the "restart now" button and the auto-quit after a
+  // staged update go through one path.
+  ipcMain.handle('updater:quit', handle(async () => {
+    setTimeout(() => app.quit(), 150);
+    return ok(true);
+  }));
 
   ipcMain.handle('auth:status', handle(async () => {
     const token = tokenStore.read();

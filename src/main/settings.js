@@ -44,6 +44,10 @@ const DEFAULTS = {
   notifyMutedChats: false,
   notifySound: true,
   notifyWhenFocused: false,
+
+  // Check GitHub for a newer release once a day and *ask* before downloading
+  // anything. There is no silent path: the user always confirms first.
+  autoUpdates: true,
 };
 
 /**
