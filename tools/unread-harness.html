@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>unread-check harness</title>
+    <link rel="stylesheet" href="../src/renderer/styles.css" />
+    <style>
+      /* The real list is a fixed-width column inside the app shell. Sizing the
+         harness the same way keeps the row's flex layout, and therefore the
+         measured colours and weights, the ones the user actually sees. */
+      #app { width: 300px; background: var(--bg-elev); }
+    </style>
+  </head>
+  <body>
+    <!--
+      Loaded by tools/unread-check.js. It links the real stylesheet and carries
+      the one element renderChats() writes into by id, so the check measures
+      the CSS that ships rather than a reimplementation of it.
+    -->
+    <div id="app">
+      <div class="chat-list" id="chat-list"></div>
+    </div>
+  </body>
+</html>
