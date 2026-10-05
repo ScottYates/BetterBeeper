@@ -359,6 +359,39 @@ select { cursor: pointer; }
   padding: 8px 10px; border-radius: 8px;
   cursor: pointer; position: relative;
 }
+
+/* ---- Unread rows: a chat with new entries in it has to announce itself ----
+   The unread count badge was the only thing separating a chat with three new
+   messages from a chat you have already read, and an 18px pill at the end of a
+   long row is easy to skim straight past. The row now carries the state too,
+   on four independent axes, so it is findable while scanning the list rather
+   than only when you happen to read the badge:
+
+     - a left accent bar, the same edge the open row uses
+     - a heavier title
+     - a brighter preview line, lifted from --text-dim to --text
+     - the timestamp in the accent colour
+
+   Plus a faint accent wash across the row. All of it is token-driven so it
+   follows the theme, and none of it changes the row's height, so nothing in
+   the list shifts when a message arrives.
+
+   These are written *before* :hover and .is-active on purpose. All three have
+   the same specificity, so source order decides, and both of those states
+   should win over the unread wash: a hover you cannot see is a broken hover,
+   and the open row is the one you are already reading. */
+.chat-item.is-unread { background: var(--accent-soft); }
+.chat-item.is-unread::before {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--accent);
+}
+.chat-item.is-unread .chat-item-title { font-weight: 700; }
+.chat-item.is-unread .chat-item-preview { color: var(--text); }
+/* The timestamp is the faintest text in the row at 11px, so it carries the
+   accent tint as well as the weight. Neither this nor the title's bolder face
+   changes the row's height: the preview line already sets both line boxes. */
+.chat-item.is-unread .chat-item-time { color: var(--accent); font-weight: 600; }
+
 .chat-item:hover { background: var(--bg-hover); }
 .chat-item.is-active { background: #2b2b32; }
 .chat-item.is-active::before {
@@ -857,6 +890,33 @@ select { cursor: pointer; }
 }
 .about-link { font-size: 12.5px; color: var(--accent); text-decoration: none; }
 .about-link:hover { text-decoration: underline; }
+
+/* ---- Updates ----
+   The progress bar is deliberately small and inline rather than a full-screen
+   takeover: a 90 MB installer takes a while, and the user still has to read
+   which version is arriving. Fixed height so the bar does not jump as the
+   percentage label changes width under it. */
+.update-body > p { margin-bottom: 10px; }
+.update-notes {
+  margin-top: 12px; padding: 10px 12px;
+  background: var(--bg-elev-2); border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  max-height: 190px; overflow-y: auto;
+  white-space: pre-wrap; line-height: 1.45;
+}
+.update-bar {
+  height: 6px; margin: 4px 0 10px;
+  background: var(--bg-hover); border-radius: 999px;
+  overflow: hidden;
+}
+.update-bar-fill {
+  height: 100%; width: 0%;
+  background: var(--accent); border-radius: 999px;
+  transition: width 140ms linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-bar-fill { transition: none; }
+}
 /* The count and the button that acts on it sit on one line, like the About row. */
 .clear-deleted-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .clear-deleted-row .btn[disabled] { opacity: 0.5; cursor: default; }

@@ -184,6 +184,26 @@ function rowFlags(chat) {
 }
 
 /**
+ * Does this row have something the user has not read yet?
+ *
+ * Beeper reports it as a count, so the count is the whole test. The row class
+ * and the badge both read this one predicate on purpose: styling the row from
+ * a second, separately-written condition is how you end up with a tinted bold
+ * row next to a badge that says the chat is read, or the reverse. One source,
+ * two consequences.
+ */
+function isUnread(chat) {
+  return Number(chat?.unreadCount || 0) > 0;
+}
+
+/** The unread count pill, or nothing at all for a chat that is read. */
+function unreadBadge(chat) {
+  if (!isUnread(chat)) return null;
+  const count = Number(chat.unreadCount);
+  return el('div', { class: 'chat-unread', text: count > 99 ? '99+' : String(count) });
+}
+
+/**
  * A note-to-self chat.
  *
  * Beeper pins these above the rest of the list; pinning is about *position*,
@@ -205,7 +225,7 @@ function noteItem(chat) {
   return el(
     'div',
     {
-      class: `chat-item is-note${isActive ? ' is-active' : ''}`,
+      class: `chat-item is-note${isActive ? ' is-active' : ''}${isUnread(chat) ? ' is-unread' : ''}`,
       role: 'listitem',
       dataset: { chatId: chat.id, note: '1' },
       onClick: () => onSelectChat(chat.id),
@@ -230,9 +250,7 @@ function noteItem(chat) {
         { class: 'chat-item-bottom' },
         flags.length ? el('div', { class: 'chat-flags', text: flags.join(' ') }) : null,
         el('div', { class: 'chat-item-preview', text: chatPreviewText(chat) }),
-        chat.unreadCount > 0
-          ? el('div', { class: 'chat-unread', text: chat.unreadCount > 99 ? '99+' : String(chat.unreadCount) })
-          : null,
+        unreadBadge(chat),
       ),
     ),
     rowArchiveButton(chat),
@@ -301,7 +319,7 @@ function chatItem(chat) {
   return el(
     'div',
     {
-      class: `chat-item${isActive ? ' is-active' : ''}`,
+      class: `chat-item${isActive ? ' is-active' : ''}${isUnread(chat) ? ' is-unread' : ''}`,
       role: 'listitem',
       dataset: { chatId: chat.id },
       onClick: () => onSelectChat(chat.id),
@@ -329,9 +347,7 @@ function chatItem(chat) {
           class: 'chat-item-preview',
           text: chat.draft?.text ? `Draft: ${chat.draft.text}` : preview,
         }),
-        chat.unreadCount > 0
-          ? el('div', { class: 'chat-unread', text: chat.unreadCount > 99 ? '99+' : String(chat.unreadCount) })
-          : null,
+        unreadBadge(chat),
       ),
     ),
     rowArchiveButton(chat),

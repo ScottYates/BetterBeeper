@@ -91,6 +91,22 @@ chats, and send, with every action shown to you before it happens.
 - Labels follow state: the archive button reads "Archive chat" until you archive, then
   "Move back to inbox". The same applies to mute and pin
 
+**Updates**
+
+- The app checks GitHub for a newer release once a day, on launch, and **asks** before
+  downloading anything. There is no silent path. Turn it off under Settings > About, or press
+  **Check for updates** to ask on demand
+- Accepting shows a small progress bar while the installer downloads, then the app closes,
+  installs silently, and reopens by itself. Chat history, settings and the Beeper connection are
+  all untouched by an update
+- Declining is remembered, so a version you said no to is not offered again on every launch. Newer
+  versions still are
+- The install has to straddle a restart. The NSIS installer cannot replace the executable of a
+  running process, so the downloaded file is stashed and the installer is spawned detached on the
+  next launch, before any window is created. This is why the update is not applied in place
+- Version comparison is numeric and pre-release aware: 1.10.0 is newer than 1.9.0, and 1.4.0 is
+  newer than 1.4.0-beta.1, so an app on a final release is never offered a beta as an "update"
+
 **Chat list layout**
 
 - Collapsible search and filter rows under the Inbox header, matching Beeper's compact header
@@ -98,6 +114,22 @@ chats, and send, with every action shown to you before it happens.
   keeps them at the top by default, so unpinned they drop back into the recency order like any
   other chat. Archived chats drop out of the main list. Ordering is the only thing pinning
   changes; it never resizes a row
+
+**Unread rows**
+
+- A chat with new entries now announces itself on the row, not only through the count badge. It
+  used to be the badge and nothing else, and an 18px pill at the end of a 300px row is easy to skim
+  straight past, so finding what was new meant reading every badge rather than seeing it
+- The row carries the state on four independent axes: a left accent bar, a heavier title, a brighter
+  preview line lifted from `--text-dim` to `--text`, and the timestamp in the accent colour. Plus a
+  faint accent wash, so a row is findable while scanning the list
+- Nothing about it changes the row's height, so the list does not reflow when a message arrives.
+  The avatar sets the row height; the preview line and the badge are both shorter than it
+- Hover and the open row still win over the unread wash. All three states share one specificity, so
+  source order is what decides it, and the unread rules are written before both
+- The row class and the badge read one `isUnread()` predicate. Styling the row from a second,
+  separately written condition is how a tinted bold row ends up beside a badge saying the chat is
+  read, or the reverse
 
 **Message width**
 
@@ -199,6 +231,8 @@ npm run check:notify   # notification preference logic
 npm run check:send     # optimistic-send bubble absorption
 npm run check:rich      # message HTML sanitizing keeps the markup's structure
 npm run check:pin       # pinning moves the row and flags it, notes included
+npm run check:unread    # an unread row reads louder than a read one, in both themes
+npm run check:update    # version comparison and installer selection, no network needed
 npm run check:archive   # archiving survives a Beeper that accepts and ignores it
 npm run check:layout    # message bubbles use the full width of the chat pane
 npm run check:composer  # the composer placeholder names one person and stays one line
@@ -301,6 +335,7 @@ Open **Settings** from the gear icon in the sidebar.
 | Also notify for muted chats | Off by default, so muted chats stay quiet |
 | Play a sound | Silent notifications when off |
 | Notify while focused | Off by default, so you only hear about messages when the window is in the background |
+| Check for updates automatically | Once a day; always asks before downloading. Settings > About also has a manual check |
 
 Notifications never fire for your own outgoing messages, and clicking one restores and focuses
 the window. The logic lives in `src/main/notify.js` as pure functions, so it can be checked

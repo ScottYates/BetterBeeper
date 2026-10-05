@@ -50,6 +50,10 @@ export const api = {
   bootstrap: () => window.beeper.app.bootstrap(),
   refreshDiscovery: () => window.beeper.app.refreshDiscovery(),
 
+  updateCheck: () => window.beeper.updater.check(),
+  updateDownload: () => window.beeper.updater.download(),
+  updateQuit: () => window.beeper.updater.quit(),
+
   authStatus: () => window.beeper.auth.status(),
   connect: () => window.beeper.auth.connect(),
   manualConnect: (token) => window.beeper.auth.manual(token),

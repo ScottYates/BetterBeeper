@@ -22,6 +22,8 @@
     "check:layout": "electron tools/layout-check.js",
     "check:icons": "node tools/icon-check.mjs",
     "check:ascii": "node tools/ascii-check.js",
+    "check:unread": "electron tools/unread-check.js",
+    "check:update": "node tools/update-check.js",
     "check:syntax": "node tools/syntax-check.js",
     "check:released": "node tools/released-check.js",
     "check:composer": "electron tools/composer-check.js",

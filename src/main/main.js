@@ -16,8 +16,28 @@ const {
 
 const ipc = require('./ipc');
 const { shouldNotify, notificationBody } = require('./notify');
+const updater = require('./updater');
 
 const isDev = process.argv.includes('--dev');
+
+// A staged update has to be applied before the window exists, because the NSIS
+// installer cannot replace the executable of a running process. applyPendingUpdate
+// spawns the installer detached and then schedules the exit itself.
+//
+// This is a flag rather than an early `return` on purpose: the rest of this
+// module still has to be *loaded*, because app.whenReady() below registers the
+// quit handlers that let the exit complete cleanly. All it must not do is open a
+// window. A top-level `return` would work in CommonJS today and silently become
+// a SyntaxError the day this file is converted to ESM.
+let applyingUpdate = false;
+
+if (!isDev && !process.argv.includes('--no-update')) {
+  try {
+    applyingUpdate = updater.applyPendingUpdate();
+  } catch {
+    /* a failed apply just means starting normally */
+  }
+}
 
 /**
  * Electron names the `userData` folder after `productName`, so renaming the app
@@ -493,6 +513,11 @@ function wireNotifications() {
 }
 
 app.whenReady().then(async () => {
+  // An update is being installed: the installer needs this process gone before
+  // it can replace the executable, so no window is created and nothing else
+  // starts. applyPendingUpdate() has already scheduled the exit.
+  if (applyingUpdate) return;
+
   registerFileProtocol();
   buildMenu();
   services = ipc.register({
