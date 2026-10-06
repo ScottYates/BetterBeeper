@@ -28,6 +28,46 @@ function isCopyableUrl(srcURL) {
 }
 
 /**
+ * Parse a Range header against a known file size.
+ *
+ * Returns { start, end } inclusive, or null when the request is not a range
+ * this should answer with a partial response. `unsatisfiable` is true when the
+ * range is well formed but lies past the end of the file, which is a 416 and
+ * not a normal response.
+ *
+ * This exists because a media player does not read a video through once. It
+ * buffers ahead by asking for byte ranges, and it seeks by asking for more, so
+ * a handler that answers every request with the whole file hands the demuxer a
+ * stream it cannot frame - and the video fails a few seconds in, with a decode
+ * error, rather than at the start.
+ */
+function parseRange(header, size) {
+  if (typeof header !== 'string') return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m) return null;
+
+  const [, rawStart, rawEnd] = m;
+  // "bytes=-500" means the final 500 bytes, not an empty range from 0.
+  if (rawStart === '') {
+    if (rawEnd === '' || size <= 0) return { unsatisfiable: true };
+    const want = Number(rawEnd);
+    if (!Number.isFinite(want) || want <= 0) return { unsatisfiable: true };
+    const start = Math.max(0, size - want);
+    return { start, end: size - 1 };
+  }
+
+  const start = Number(rawStart);
+  if (!Number.isFinite(start) || start < 0) return { unsatisfiable: true };
+  if (start >= size) return { unsatisfiable: true };
+
+  let end = rawEnd === '' ? size - 1 : Number(rawEnd);
+  if (!Number.isFinite(end) || end < start) return { unsatisfiable: true };
+  // A client may ask past the end; the spec says clamp rather than fail.
+  end = Math.min(end, size - 1);
+  return { start, end };
+}
+
+/**
  * beeper-file://local/C:/Users/scott/photo.png -> C:\Users\scott\photo.png
  *
  * Mirrors the protocol handler in main.js, including its tolerance for callers
@@ -162,6 +202,7 @@ function decodeURIComponentSafe(value) {
 module.exports = {
   isCopyableUrl,
   beeperFilePath,
+  parseRange,
   localPathFrom,
   dataUrlBuffer,
   safeFileName,

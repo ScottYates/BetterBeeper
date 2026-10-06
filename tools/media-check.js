@@ -141,6 +141,78 @@ add('the window CSP allows beeper-file: for media', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Range requests.
+//
+// A media player does not read a video through once. It asks for byte ranges
+// to buffer ahead and to seek, and the protocol handler has to answer them or
+// the demuxer is handed a stream it cannot frame. The symptom is a video that
+// plays a few seconds and then dies with a decode error - at a different point
+// each time, which is what a streaming fault looks like rather than a corrupt
+// file.
+// ---------------------------------------------------------------------------
+
+add('a byte range is answered with the right slice', () => {
+  const r = mediaPath.parseRange('bytes=100-199', 1000);
+  return (r && r.start === 100 && r.end === 199) || ('got ' + JSON.stringify(r));
+});
+
+add('an open-ended range runs to the end of the file', () => {
+  const r = mediaPath.parseRange('bytes=500-', 1000);
+  return (r && r.start === 500 && r.end === 999) || ('got ' + JSON.stringify(r));
+});
+
+add('a range past the end is clamped, not refused', () => {
+  // A client asking for more than exists should get what there is.
+  const r = mediaPath.parseRange('bytes=900-5000', 1000);
+  return (r && r.start === 900 && r.end === 999) || ('got ' + JSON.stringify(r));
+});
+
+add('a suffix range means the last N bytes', () => {
+  const r = mediaPath.parseRange('bytes=-300', 1000);
+  return (r && r.start === 700 && r.end === 999) || ('got ' + JSON.stringify(r));
+});
+
+add('a suffix range larger than the file is the whole file', () => {
+  const r = mediaPath.parseRange('bytes=-5000', 1000);
+  return (r && r.start === 0 && r.end === 999) || ('got ' + JSON.stringify(r));
+});
+
+add('no range header means the whole file', () => {
+  return mediaPath.parseRange(undefined, 1000) === null || 'invented a range';
+});
+
+add('a range starting past the end is unsatisfiable, not silently wrong', () => {
+  const r = mediaPath.parseRange('bytes=2000-2100', 1000);
+  return (r && r.unsatisfiable === true) || ('got ' + JSON.stringify(r));
+});
+
+add('a malformed range is ignored rather than obeyed', () => {
+  for (const bad of ['bytes=abc-def', 'items=0-10', 'bytes=', 'bytes=-', '0-10', 'bytes=1-2-3']) {
+    const r = mediaPath.parseRange(bad, 1000);
+    if (r && !r.unsatisfiable) return 'accepted ' + JSON.stringify(bad) + ' as ' + JSON.stringify(r);
+  }
+  return true;
+});
+
+add('the protocol handler serves a real stream rather than net.fetch', () => {
+  // net.fetch over a file:// URL is not a streaming response the media stack
+  // can frame, which is what made long videos die mid-playback. The handler has
+  // to build the response itself.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.js'), 'utf8');
+  const handler = /protocol\.handle\('beeper-file'[\s\S]*?\n {2}\}\);/.exec(src);
+  if (!handler) return 'the beeper-file handler was not found in main.js';
+  // Comments in that handler explain why net.fetch was dropped, and explaining
+  // a thing by naming it would otherwise read as still doing it.
+  const body = handler[0].replace(/^\s*\/\/.*$/gm, '');
+  if (/net\.fetch/.test(body)) return 'the handler still delegates to net.fetch';
+  if (!/createReadStream/.test(body)) return 'the handler does not stream from disk';
+  if (!/parseRange/.test(body)) return 'the handler ignores Range headers';
+  if (!/Accept-Ranges/i.test(body)) return 'the handler never says it accepts ranges';
+  if (!/\b206\b/.test(body)) return 'the handler never answers a partial request';
+  return true;
+});
+
+// ---------------------------------------------------------------------------
 // Where the bytes are. This is the half that decides what gets written, so it
 // runs against real files in a real temp directory rather than being mocked.
 // ---------------------------------------------------------------------------

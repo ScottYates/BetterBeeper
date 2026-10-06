@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { Readable } = require('node:stream');
 const { pathToFileURL } = require('node:url');
 const {
   app,
@@ -17,6 +18,7 @@ const {
 const ipc = require('./ipc');
 const { shouldNotify, notificationBody } = require('./notify');
 const updater = require('./updater');
+const mediaPath = require('./media-path');
 
 const isDev = process.argv.includes('--dev');
 
@@ -110,11 +112,78 @@ function registerFileProtocol() {
         // C:/Users/... -> C:\Users\...
         filePath = filePath.replace(/\//g, '\\');
       }
-      return await net.fetch(pathToFileURL(filePath).toString());
+
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile()) {
+        return new Response('Not a file', { status: 404 });
+      }
+
+      // Serve the bytes here rather than handing the request to net.fetch.
+      //
+      // net.fetch over a file:// URL is not a streaming response the media
+      // stack can frame, and it answers no Range requests at all. A video
+      // player does not read a file through once - it buffers ahead by asking
+      // for byte ranges, and seeks by asking for more - so it was handed a
+      // stream it could not frame and died with a decode error a few seconds
+      // in, at a different point each time. Images never noticed, because a
+      // single unframed read is all they need.
+      const range = mediaPath.parseRange(request.headers.get('range'), stat.size);
+      if (range && range.unsatisfiable) {
+        return new Response(null, {
+          status: 416,
+          headers: { 'Content-Range': `bytes */${stat.size}`, 'Accept-Ranges': 'bytes' },
+        });
+      }
+
+      const start = range ? range.start : 0;
+      const end = range ? range.end : Math.max(0, stat.size - 1);
+
+      const nodeStream = fs.createReadStream(filePath, { start, end });
+      const body = Readable.toWeb(nodeStream);
+
+      const headers = {
+        'Content-Type': contentTypeFor(filePath),
+        'Content-Length': String(end - start + 1),
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-cache',
+      };
+      if (range) {
+        headers['Content-Range'] = `bytes ${start}-${end}/${stat.size}`;
+        return new Response(body, { status: 206, headers });
+      }
+      return new Response(body, { status: 200, headers });
     } catch (err) {
       return new Response(`Failed to load attachment: ${err.message}`, { status: 404 });
     }
   });
+}
+
+/** A content type the renderer will actually draw, from the extension. */
+function contentTypeFor(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const known = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.avif': 'image/avif',
+    '.bmp': 'image/bmp',
+    '.svg': 'image/svg+xml',
+    '.mp4': 'video/mp4',
+    '.m4v': 'video/mp4',
+    '.webm': 'video/webm',
+    '.mov': 'video/quicktime',
+    '.mp3': 'audio/mpeg',
+    '.m4a': 'audio/mp4',
+    '.ogg': 'audio/ogg',
+    '.wav': 'audio/wav',
+    '.json': 'application/json',
+    '.pdf': 'application/pdf',
+    '.txt': 'text/plain',
+    '.zip': 'application/zip',
+  };
+  return known[ext] || 'application/octet-stream';
 }
 
 const MIN_WIDTH = 720;
