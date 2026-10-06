@@ -331,6 +331,36 @@ export async function copyImage(srcUrl) {
 }
 
 /**
+ * Save any attachment that is not shown inline - a document, an archive, an
+ * audio file, anything the thread cannot draw itself.
+ *
+ * This is the only route out of the app for those, so it reports honestly: a
+ * cancelled dialog is silent, because the user just chose not to do it, while a
+ * real failure is worth a toast rather than a row that appears to do nothing.
+ */
+export async function saveAttachment(attachment) {
+  if (!attachment) return false;
+  if (!window.beeper?.assets?.saveAs) {
+    toast('Could not save this file.', 'error');
+    return false;
+  }
+
+  const res = await window.beeper.assets.saveAs(attachment);
+  if (res?.ok) {
+    const data = res.data;
+    if (data?.saved) {
+      toast(`Saved ${data.name || attachment.fileName || 'the file'}`, 'success', 2200);
+      return true;
+    }
+    // The user closed the dialog. Not an error, and saying so would be noise.
+    if (data?.cancelled) return false;
+  }
+
+  toast(res?.error?.message || 'Could not save this file.', 'error');
+  return false;
+}
+
+/**
  * Menu for a displayed image: open it, copy it out, or copy its address.
  *
  * Uses the same popover as the message menu rather than a native one, so it

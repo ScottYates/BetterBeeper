@@ -654,14 +654,26 @@ select { cursor: pointer; }
    one. The 340px cap is what Beeper itself uses, so the preview is at least
    consistent with the app it sits next to. */
 .att-image { max-width: 340px; max-height: 340px; border-radius: 11px; display: block; cursor: zoom-in; }
+/* Same cap and same reason as .att-image. A video carries its own controls, so
+   it is not clickable-to-enlarge, but keeping the footprint identical means a
+   message with both does not look lopsided. The black backing is what stops a
+   letterboxed video from showing the bubble through its bars. */
+.att-video {
+  max-width: 340px; max-height: 340px;
+  border-radius: 11px; display: block; background: #000;
+}
 .att-file {
   display: flex; align-items: center; gap: 9px;
   padding: 9px 12px; border-radius: 11px;
   background: var(--bg-hover); border: 1px solid var(--border);
-  font-size: 12.5px; color: inherit; text-decoration: none;
+  font-family: inherit; font-size: 12.5px; color: inherit; text-decoration: none;
+  text-align: left; width: 100%; cursor: pointer;
 }
 .att-file:hover { border-color: var(--accent); }
 .att-file .att-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-file .att-size { flex: none; color: var(--text-dim); font-size: 11.5px; }
+.att-file .att-save { flex: none; color: var(--text-dim); font-size: 13px; line-height: 1; }
+.att-file:hover .att-save, .att-file:focus-visible .att-save { color: var(--accent); }
 .msg.is-out .att-file { background: rgba(0, 0, 0, 0.16); border-color: rgba(255, 255, 255, 0.2); }
 
 /* opacity: 0 alone would leave these buttons clickable while invisible, which

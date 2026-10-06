@@ -14,6 +14,7 @@ import {
   escapeHtml,
 } from './util.js';
 import { api, call, callOk, FAILED } from './api.js';
+import { mediaKind } from './media-kind.js';
 import {
   state,
   bus,
@@ -34,7 +35,15 @@ import {
   hiddenList,
   deletedList,
 } from './state.js';
-import { toast, confirmDialog, openEmojiPicker, openPopover, openLightbox, imageMenu } from './ui.js';
+import {
+  toast,
+  confirmDialog,
+  openEmojiPicker,
+  openPopover,
+  openLightbox,
+  imageMenu,
+  saveAttachment,
+} from './ui.js';
 import { setArchived } from './chat-actions.js';
 import { avatarNode, renderChats, networkBadge } from './sidebar.js';
 
@@ -371,9 +380,16 @@ export async function pastedImages(dataTransfer) {
   return { images, rejected };
 }
 
-/** A pasted screenshot is a picture, not a document: do not label it as one. */
+/**
+ * A pasted screenshot is a picture, not a document, and a clip is neither.
+ * Labelling either as a document is a small lie on the chip the sender is
+ * looking at while deciding what they just attached.
+ */
 export function attachmentIcon(attachment) {
-  return String(attachment?.mimeType || '').startsWith('image/') ? '\u{1F5BC}' : '\u{1F4CE}';
+  const kind = mediaKind(attachment);
+  if (kind === 'image') return '\u{1F5BC}';
+  if (kind === 'video') return '\u{1F3AC}';
+  return '\u{1F4CE}';
 }
 
 /** Beeper's "Seen at 11:11 AM" line above the composer. */
@@ -948,29 +964,66 @@ function reactionsNode(message, selfID) {
 function attachmentsNode(message) {
   const wrap = el('div', { class: 'msg-attachments' });
   for (const attachment of message.attachments || []) {
-    const isImage = attachment.type === 'img' || /^image\//i.test(attachment.mimeType || '');
-    if (isImage) {
-      wrap.append(imageElement(attachment));
-    } else {
-      const node = el(
-        'a',
-        {
-          class: 'att-file',
-          href: '#',
-          onClick: async (event) => {
-            event.preventDefault();
-            const url = await resolveSrc(attachment);
-            if (url) api.shell.openExternal(url);
-          },
-        },
-        el('span', { text: '📎' }),
-        el('span', { class: 'att-name', text: attachment.fileName || 'Attachment' }),
-        el('span', { class: 'muted tiny', text: fileSize(attachment.fileSize) }),
-      );
-      wrap.append(node);
-    }
+    const kind = mediaKind(attachment);
+    if (kind === 'image') wrap.append(imageElement(attachment));
+    else if (kind === 'video') wrap.append(videoElement(attachment));
+    else wrap.append(fileNode(attachment));
   }
   return wrap;
+}
+
+/**
+ * A video plays in place, with its own controls.
+ *
+ * If it will not decode, it is swapped for the ordinary download row rather
+ * than left sitting there as a dead black rectangle: a file that claims to be
+ * a video but is not one should still be saveable, and should say what it is.
+ */
+function videoElement(attachment) {
+  const video = el('video', {
+    class: 'att-video',
+    controls: true,
+    preload: 'metadata',
+    playsinline: true,
+    title: attachment.fileName || 'video',
+  });
+
+  const fallback = () => {
+    if (!video.isConnected) return;
+    video.replaceWith(fileNode(attachment));
+  };
+
+  video.addEventListener('error', fallback);
+  resolveSrc(attachment).then((url) => {
+    if (url) video.src = url;
+    else fallback();
+  });
+  return video;
+}
+
+/**
+ * Anything that is not an image or a video.
+ *
+ * The whole row is the button, because this is the only way to get the file out
+ * of Beeper and a small target hidden at the right-hand end is exactly the
+ * thing nobody finds. The name is kept as text and never as markup: it comes
+ * from whoever sent the message.
+ */
+function fileNode(attachment) {
+  const name = attachment.fileName || 'Attachment';
+  return el(
+    'button',
+    {
+      class: 'att-file',
+      type: 'button',
+      title: `Save ${name}`,
+      onClick: () => saveAttachment(attachment),
+    },
+    el('span', { class: 'att-glyph', text: '📎' }),
+    el('span', { class: 'att-name', text: name }),
+    el('span', { class: 'att-size', text: fileSize(attachment.fileSize) }),
+    el('span', { class: 'att-save', text: '⬇' }),
+  );
 }
 
 const srcCache = new Map();

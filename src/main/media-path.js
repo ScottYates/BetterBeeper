@@ -74,9 +74,97 @@ function dataUrlBuffer(srcURL) {
   }
 }
 
+/** Longest name we will suggest. Comfortably inside every filesystem limit. */
+const MAX_NAME_LENGTH = 180;
+
+/**
+ * Turn a filename that arrived inside a message into one that is safe to
+ * suggest in a save dialog.
+ *
+ * This is a security boundary, not a tidy-up. `fileName` is chosen by whoever
+ * sent the message, and it is handed to `defaultPath` - so an attacker could
+ * send `..\..\..\Windows\System32\drivers\etc\hosts` and have the dialog start
+ * somewhere else entirely, or send an absolute path and have the user believe
+ * they are saving into their Downloads folder when they are not.
+ *
+ * So the result is always a bare filename in whatever directory the user
+ * actually picks, with no separators, no control characters, no reserved
+ * Windows device name, and nothing Windows itself would reject.
+ */
+function safeFileName(raw, fallback = 'attachment') {
+  const text = typeof raw === 'string' ? raw : '';
+
+  // Split first: this is what removes directories, including the "..\..\" case
+  // that survives naive character filtering.
+  const base = text.split(/[\\/]/).pop() || '';
+
+  const cleaned = base
+    .replace(/[\u0000-\u001f\u007f]/g, '') // control characters
+    .replace(/[<>:"|?*]/g, '_') // reserved on Windows
+    .replace(/[. ]+$/, '') // Windows silently drops these, so do not offer them
+    .trim();
+
+  // A bare "CON" is a device, not a filename, and Windows refuses it - and so
+  // it refuses "con.txt", because the reserved word is the stem either way.
+  if (!cleaned || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(cleaned)) return fallback;
+
+  return cleaned.length > MAX_NAME_LENGTH ? cleaned.slice(0, MAX_NAME_LENGTH) : cleaned;
+}
+
+/**
+ * Beeper is inconsistent about local media locations: message attachments come
+ * back as `file:///C:/...` URLs, while chat avatars are bare filesystem paths
+ * such as `C:\Users\...`. Both mean "a file on this machine".
+ *
+ * They are rewritten to `beeper-file://local/<path>`. The fixed `local` host
+ * keeps the drive letter inside the path segment, so a Windows drive can never
+ * be mistaken for a URL hostname.
+ *
+ * Anything already usable over http or data is passed straight through.
+ */
+function localMediaUrl(raw) {
+  if (!raw) return null;
+  const value = String(raw);
+
+  // Anything already carrying a scheme the renderer can load is left alone.
+  // beeper-file: matters most: it is what this function itself produces, so a
+  // value that already has one must not be rewritten or reported as unknown.
+  // http(s) and data: were already passed through. Deliberately not a general
+  // "has a scheme" test, because "C:\Users" also looks like one and is a path.
+  if (/^(https?|data|beeper-file):/i.test(value)) return value;
+
+  let filePath = null;
+  if (/^file:\/\//i.test(value)) {
+    filePath = decodeURIComponentSafe(value.replace(/^file:\/\/\/?/i, ''));
+  } else if (/^[a-z]:[\\/]/i.test(value) || value.startsWith('\\\\')) {
+    filePath = value;
+  } else if (value.startsWith('/')) {
+    filePath = value;
+  }
+  if (!filePath) return null;
+
+  return `beeper-file://local/${filePath.replace(/\\/g, '/').replace(/^\/+/, '')}`;
+}
+
+/** Passes anything already usable (http/data) through untouched. */
+function toRendererUrl(raw) {
+  return localMediaUrl(raw) ?? String(raw);
+}
+
+function decodeURIComponentSafe(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 module.exports = {
   isCopyableUrl,
   beeperFilePath,
   localPathFrom,
   dataUrlBuffer,
+  safeFileName,
+  localMediaUrl,
+  toRendererUrl,
 };

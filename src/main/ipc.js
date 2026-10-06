@@ -13,6 +13,7 @@ const { McpClient } = require('./mcp-client');
 const auth = require('./auth');
 const { runAssistantTurn } = require('./assistant');
 const mediaPath = require('./media-path');
+const assetSource = require('./asset-source');
 const updater = require('./updater');
 
 /** Wraps a handler so the renderer always gets {ok, data|error}. */
@@ -270,11 +271,42 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
 
   ipcMain.handle('assets:download', handle(async (input) => client.downloadAsset(input || {})));
 
+  // Saving is the only way out of the app for anything that is not an image or
+  // a video, so it has to accept whatever Beeper sends and must never let the
+  // message choose where the file lands - hence safeFileName on the suggestion.
+  ipcMain.handle('assets:saveAs', handle(async (attachment) => {
+    if (!attachment) throw new Error('There was nothing to save.');
+
+    const suggested = mediaPath.safeFileName(attachment.fileName, 'attachment');
+    const win = getWindow();
+    const choice = await dialog.showSaveDialog(win, {
+      title: 'Save attachment',
+      defaultPath: path.join(app.getPath('downloads'), suggested),
+      properties: ['createDirectory', 'showOverwriteConfirmation'],
+    });
+
+    // A cancelled dialog is not a failure, and must not read as one in the UI.
+    if (choice.canceled || !choice.filePath) return ok({ saved: false, cancelled: true });
+
+    const source = await assetSource.locateAttachment(attachment, (input) => client.downloadAsset(input));
+    if (source.localPath) {
+      await fs.promises.copyFile(source.localPath, choice.filePath);
+    } else {
+      // The rare remote case. Buffered rather than streamed, which is the wrong
+      // shape for a very large file but is not the common path.
+      const response = await fetch(source.url);
+      if (!response.ok) throw new Error(`Beeper's bridge answered ${response.status}.`);
+      await fs.promises.writeFile(choice.filePath, Buffer.from(await response.arrayBuffer()));
+    }
+
+    return ok({ saved: true, path: choice.filePath, name: path.basename(choice.filePath) });
+  }));
+
   ipcMain.handle('assets:resolve', handle(async (attachment) => {
     // Turn a possibly-remote attachment into something the renderer can load.
     if (!attachment) return null;
 
-    const local = localMediaUrl(attachment.srcURL || attachment.imgURL);
+    const local = mediaPath.localMediaUrl(attachment.srcURL || attachment.imgURL);
     if (local) return { ...attachment, url: local };
 
     try {
@@ -283,7 +315,7 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
         fileName: attachment.fileName,
         mimeType: attachment.mimeType,
       });
-      if (res?.srcURL) return { ...attachment, url: toRendererUrl(res.srcURL) };
+      if (res?.srcURL) return { ...attachment, url: mediaPath.toRendererUrl(res.srcURL) };
     } catch (err) {
       return { ...attachment, url: null, error: err.message };
     }
@@ -411,47 +443,6 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   }));
 
   return { client, events, mcp, settings, tokenStore, discover, startLive, stopLive, endpoints };
-}
-
-/**
- * Beeper is inconsistent about local media locations: message attachments come
- * back as `file:///C:/...` URLs, while chat avatars are bare filesystem paths
- * such as `C:\Users\...`. Both mean "a file on this machine".
- *
- * They are rewritten to `beeper-file://local/<path>`. The fixed `local` host
- * keeps the drive letter inside the path segment, so a Windows drive can never
- * be mistaken for a URL hostname.
- */
-function localMediaUrl(raw) {
-  if (!raw) return null;
-  const value = String(raw);
-
-  if (/^(https?|data):/i.test(value)) return value;
-
-  let filePath = null;
-  if (/^file:\/\//i.test(value)) {
-    filePath = decodeURIComponentSafe(value.replace(/^file:\/\/\/?/i, ''));
-  } else if (/^[a-z]:[\\/]/i.test(value) || value.startsWith('\\\\')) {
-    filePath = value;
-  } else if (value.startsWith('/')) {
-    filePath = value;
-  }
-  if (!filePath) return null;
-
-  return `beeper-file://local/${filePath.replace(/\\/g, '/').replace(/^\/+/, '')}`;
-}
-
-/** Passes anything already usable (http/data) through untouched. */
-function toRendererUrl(raw) {
-  return localMediaUrl(raw) ?? String(raw);
-}
-
-function decodeURIComponentSafe(value) {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
 }
 
 module.exports = { register };

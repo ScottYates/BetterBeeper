@@ -42,7 +42,8 @@
     "check:gifrebuild": "electron tools/gif-rebuild-check.js",
     "check:about": "electron tools/about-check.js",
     "check:actions": "electron tools/actions-check.js",
-    "check:installer": "node tools/installer-check.js"
+    "check:installer": "node tools/installer-check.js",
+    "check:media": "electron tools/media-check.js"
   },
   "devDependencies": {
     "electron": "^38.0.0",

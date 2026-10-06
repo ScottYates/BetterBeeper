@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld('beeper', {
     uploadBytes: (payload) => invoke('assets:uploadBytes', payload),
     download: (input) => invoke('assets:download', input),
     resolve: (attachment) => invoke('assets:resolve', attachment),
+    saveAs: (attachment) => invoke('assets:saveAs', attachment),
     pick: () => invoke('dialog:pickAttachment'),
   },
   images: {

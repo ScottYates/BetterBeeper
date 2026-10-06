@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>media-check harness</title>
+    <!--
+      The real stylesheet, on purpose. The video cap assertion measures the
+      width the browser actually gave the element, which depends on the real
+      max-width rule. Asserting the stylesheet's text instead would pass while
+      the rule was dead.
+    -->
+    <link rel="stylesheet" href="../src/renderer/styles.css" />
+  </head>
+  <body>
+    <!--
+      Two roots the real app has and this harness needs:
+
+        #toast-root  ui.js appends every toast here, and a successful save
+                     shows one. Without it, saving throws after it has
+                     already done the thing being asserted.
+        #mount       somewhere to put the rendered message so it can be
+                     measured. Nothing in the thread needs to be attached to
+                     the live chat list.
+    -->
+    <div id="toast-root" hidden></div>
+    <div id="mount"></div>
+  </body>
+</html>
