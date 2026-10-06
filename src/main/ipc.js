@@ -309,6 +309,14 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     // Turn a possibly-remote attachment into something the renderer can load.
     if (!attachment) return null;
 
+    // Our own copy first, if the history store has one. It is the only copy
+    // that is guaranteed to still be there after Beeper evicts its cache.
+    const mine = historyMedia.urlFor(
+      attachment.localMediaHash || '',
+      (attachment.fileName || '').includes('.') ? '.' + String(attachment.fileName).split('.').pop() : '',
+    );
+    if (mine) return { ...attachment, url: mine, ownedByUs: true };
+
     const local = mediaPath.localMediaUrl(attachment.srcURL || attachment.imgURL);
     if (local) return { ...attachment, url: local };
 
@@ -383,6 +391,28 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     store: historyStore,
     media: historyMedia,
     fetchPage: (chatID, params) => client.listMessages(chatID, params),
+    // Copy each attachment into our own store before the page is written, so
+    // the path to our copy travels with the message. Without this the whole
+    // store is only as permanent as Beeper's cache, which is not a promise.
+    adoptMedia: async (messages) => {
+      for (const message of messages) {
+        for (const attachment of message?.attachments || []) {
+          if (!attachment || attachment.localMediaHash) continue;
+          try {
+            const source = await assetSource.locateAttachment(attachment, (input) => client.downloadAsset(input));
+            if (!source.localPath) continue;
+            const adopted = historyMedia.adopt(source.localPath, attachment.fileName);
+            if (adopted) {
+              attachment.localMediaPath = adopted.relativePath;
+              attachment.localMediaHash = adopted.hash;
+            }
+          } catch {
+            // A picture that will not copy is a picture that may stop loading.
+            // It is not a reason to drop the message it belongs to.
+          }
+        }
+      }
+    },
     onProgress: (payload) => broadcast('history:progress', payload),
   });
 

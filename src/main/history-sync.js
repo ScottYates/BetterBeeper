@@ -34,7 +34,7 @@ const PAGE_LIMIT = 20;
  */
 const MAX_PAGES_PER_RUN = 500;
 
-function createHistorySync({ store, media, fetchPage, onProgress, maxPages = MAX_PAGES_PER_RUN } = {}) {
+function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, maxPages = MAX_PAGES_PER_RUN } = {}) {
   const queue = [];
   const queued = new Set();
   let running = null;
@@ -89,6 +89,13 @@ function createHistorySync({ store, media, fetchPage, onProgress, maxPages = MAX
       pages++;
 
       if (items.length) {
+        // Adopt the attachments before storing, so the path to our own copy
+        // goes into the payload. Storing first would mean re-writing every
+        // message that carried a picture a second time, which is exactly the
+        // kind of cost this feature is meant to remove.
+        if (typeof adoptMedia === 'function') {
+          await adoptMedia(items);
+        }
         for (const item of items) if (item?.id) seen.add(String(item.id));
         const ts = oldestOf(items);
         store.upsertMessages(chatID, items, { oldestTs: ts });

@@ -326,6 +326,104 @@ function fakeBeeper(pages, { failAfter = null, onPage } = {}) {
 }
 
 async function queueCases() {
+  await addAsync('the queue adopts a page\'s attachments before storing it', async () => {
+    // Caught live: Settings read "Attachments None yet" forever, because the
+    // media store existed but nothing ever handed it anything.
+    const pic = path.join(dir, 'picture.png');
+    fs.writeFileSync(pic, 'pretend png bytes');
+    let seenIds = null;
+
+    const beeper = {
+      calls: 0,
+      fetchPage: async (chatID) => {
+        beeper.calls++;
+        return {
+          items: [{
+            id: 'withpic',
+            timestamp: 1000,
+            text: 'look at this',
+            attachments: [{ id: 'a1', fileName: 'holiday photo.png', mimeType: 'image/png', srcURL: pic }],
+          }],
+          hasMore: false,
+          oldestCursor: 'withpic',
+        };
+      },
+    };
+
+    const sync = createHistorySync({
+      store,
+      media,
+      fetchPage: beeper.fetchPage,
+      adoptMedia: async (items) => {
+        for (const m of items) {
+          for (const att of m.attachments || []) {
+            if (att.localMediaHash) continue;
+            const adopted = media.adopt(att.srcURL, att.fileName);
+            if (adopted) {
+              att.localMediaPath = adopted.relativePath;
+              att.localMediaHash = adopted.hash;
+            }
+          }
+        }
+      },
+      onProgress: () => {},
+    });
+
+    sync.request('qp');
+    await sync.drain();
+
+    // Read it back out of the store: the path has to have survived the write,
+    // not merely been set on the object the fetcher handed over.
+    const stored = store.page('qp', { limit: 5 })[0];
+    seenIds = stored && stored.attachments ? stored.attachments[0] : null;
+    return (seenIds && /^[0-9a-f]{64}$/.test(seenIds.localMediaHash || ''))
+      || ('stored attachment was ' + JSON.stringify(seenIds));
+  });
+
+  await addAsync('a stored attachment resolves back to our own copy', async () => {
+    const stored = store.page('qp', { limit: 5 })[0];
+    const url = media.urlFor(stored.attachments[0].localMediaHash, '.png');
+    return Boolean(url) && url.includes(stored.attachments[0].localMediaHash)
+      || ('no url for our own copy: ' + url);
+  });
+
+  await addAsync('an attachment that will not copy does not lose its message', async () => {
+    const sync = createHistorySync({
+      store,
+      media,
+      fetchPage: async () => ({
+        items: [{
+          id: 'badpic',
+          timestamp: 2000,
+          text: 'this picture is broken',
+          attachments: [{ id: 'a2', fileName: 'gone.png', srcURL: path.join(dir, 'not-here.png') }],
+        }],
+        hasMore: false,
+        oldestCursor: 'badpic',
+      }),
+      adoptMedia: async (items) => {
+        for (const m of items) {
+          for (const att of m.attachments || []) {
+            const adopted = media.adopt(att.srcURL, att.fileName);
+            if (adopted) att.localMediaHash = adopted.hash;
+          }
+        }
+      },
+      onProgress: () => {},
+    });
+    sync.request('qbad');
+    await sync.drain();
+    return store.page('qbad', { limit: 5 }).length === 1 || 'the message went missing with its picture';
+  });
+
+  await addAsync('the queue still works with no media step at all', async () => {
+    const beeper = fakeBeeper(2);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('qnomed');
+    await sync.drain();
+    return store.chatStatus('qnomed').count === 40 || 'broke without adoptMedia';
+  });
+
   await addAsync('a full walk stores every page exactly once', async () => {
     const beeper = fakeBeeper(4);
     const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
