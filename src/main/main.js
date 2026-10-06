@@ -543,4 +543,12 @@ app.on('before-quit', () => {
   } catch {
     /* ignore */
   }
+  // Checkpoints the history database's write-ahead log instead of leaving it
+  // for the next launch to replay. Not closing it is safe, just untidy, and
+  // an in-flight backfill has no reason to outlive the window.
+  try {
+    services?.closeHistory?.();
+  } catch {
+    /* ignore */
+  }
 });

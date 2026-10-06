@@ -153,6 +153,61 @@ async function main() {
       add('scrolling back never calls Beeper', () =>
         asked.list === 0 || ('called messages.list ' + asked.list + ' times'));
 
+      // --- a backfill landing on the open chat -------------------------------
+      //
+      // Found live: opening a chat nobody had opened before drew "No messages
+      // here yet", and the thousands of messages the queue then fetched stayed
+      // invisible until the chat was opened a second time. The store filled up
+      // perfectly; the renderer was simply never told.
+      let progress = null;
+      let pageTwo = {
+        messages: [
+          { id: 'h-m1', chatID: 'h1', timestamp: 1000, text: 'stored message one', senderID: 's', senderName: 'Someone' },
+          { id: 'h-m2', chatID: 'h1', timestamp: 2000, text: 'stored message two', senderID: 's', senderName: 'Someone' },
+        ],
+        complete: true,
+      };
+      window.beeper.on = {
+        historyProgress: (fn) => { progress = fn; },
+      };
+      window.beeper.history.open = async () => envelope(pageTwo);
+
+      // Restart initThread so the real subscription is in place.
+      T.initThread();
+      await T.openChat('h1');
+      await new Promise((r) => setTimeout(r, 120));
+
+      add('the thread subscribes to the backfill queue', () =>
+        typeof progress === 'function' || 'no progress subscription');
+
+      // A chat id nobody has opened, so the store genuinely has nothing for it.
+      pageTwo = { messages: [], complete: false };
+      await T.openChat('h-empty');
+      await new Promise((r) => setTimeout(r, 120));
+      const emptyText = listEl.textContent || '';
+
+      pageTwo = {
+        messages: [
+          { id: 'b1', chatID: 'h-empty', timestamp: 1000, text: 'arrived from the backfill', senderID: 's', senderName: 'Someone' },
+          { id: 'b2', chatID: 'h-empty', timestamp: 2000, text: 'also arrived late', senderID: 's', senderName: 'Someone' },
+        ],
+        complete: true,
+      };
+      progress({ chatID: 'h-empty', state: 'done' });
+      await new Promise((r) => setTimeout(r, 200));
+
+      add('a chat with nothing stored yet says so', () =>
+        /No messages here yet/i.test(emptyText) || ('drew ' + JSON.stringify(emptyText.slice(0, 60))));
+
+      add('messages the backfill fetched appear without reopening', () =>
+        (listEl.textContent || '').includes('arrived from the backfill')
+        || ('thread still shows ' + JSON.stringify((listEl.textContent || '').slice(0, 60))));
+
+      add('the scroll-up hint goes away once the chat is complete', () => {
+        const hint = listEl.querySelector('.search-loading');
+        return !hint || !/scroll up/i.test(hint.textContent) || 'still offering to scroll for more';
+      });
+
       // --- search covers the local store -----------------------------------
       //
       // Beeper caps message search at 20 and only reaches what a bridge has

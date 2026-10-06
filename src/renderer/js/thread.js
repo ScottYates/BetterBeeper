@@ -65,8 +65,39 @@ let focusMessageID = null;
 let lastThreadSignature = null;
 const renderedNodes = new Map();
 
+/**
+ * React to the backfill queue.
+ *
+ * Without this the first time you open a chat is a dead end: the store is
+ * empty, history.open returns nothing, the thread draws "No messages here yet",
+ * and the thousands of messages then arriving in the main process are never
+ * told about - so the chat stays empty until you open it a second time.
+ */
+function onHistoryProgress(payload) {
+  if (!payload?.chatID) return;
+
+  if (payload.state === 'recovered') {
+    toast('The local history could not be read and has been reset.', 'error', 4000);
+    return;
+  }
+
+  // Only the open chat needs drawing; the rest will be right when they open.
+  if (payload.state !== 'done' || payload.chatID !== state.activeChatID) return;
+
+  call(() => api.history.open(payload.chatID), { context: 'history', fallback: null }).then((page) => {
+    if (!page || state.activeChatID !== payload.chatID) return;
+    hasMore = !page.complete;
+    for (const message of page.messages || []) upsertMessage(payload.chatID, message);
+    // Rebuilds only if something actually changed, so a tail refresh of an
+    // already-complete chat costs nothing.
+    onMessageUpserted();
+  });
+}
+
 export function initThread() {
   const composer = $('#composer');
+
+  window.beeper?.on?.historyProgress?.(onHistoryProgress);
 
   composer.addEventListener('input', () => {
     updateReplyPreview();
