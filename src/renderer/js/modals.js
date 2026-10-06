@@ -249,32 +249,6 @@ export async function openSettings() {
   const settings = (await call(() => api.settings.get(), { context: 'settings' })) || {};
   state.settings = { ...state.settings, ...settings };
 
-  const provider = el('select');
-  for (const [value, label] of [
-    ['openai', 'OpenAI-compatible (OpenAI, OpenRouter, Groq, Ollama, LM Studio, vLLM…)'],
-    ['anthropic', 'Anthropic'],
-  ]) {
-    provider.append(el('option', { value, text: label, selected: settings.provider === value }));
-  }
-
-  const baseUrl = el('input', {
-    type: 'text',
-    value: settings.baseUrl || '',
-    placeholder: 'https://api.openai.com/v1',
-    spellcheck: 'false',
-  });
-  const model = el('input', {
-    type: 'text',
-    value: settings.model || '',
-    placeholder: 'gpt-4o-mini',
-    spellcheck: 'false',
-  });
-  const apiKey = el('input', {
-    type: 'password',
-    value: '',
-    placeholder: settings.hasApiKey ? '•••••••• (stored)' : 'sk-…',
-    autocomplete: 'off',
-  });
   const theme = el('select');
   for (const value of ['system', 'dark', 'light']) {
     theme.append(el('option', { value, text: value, selected: (settings.theme || 'system') === value }));
@@ -356,28 +330,6 @@ export async function openSettings() {
   notifyEnabled.addEventListener('change', syncNotifyOptions);
   syncNotifyOptions();
 
-  const baseUrlField = el(
-    'div',
-    { class: 'form-row' },
-    el('label', { text: 'Base URL' }),
-    baseUrl,
-    el('p', {
-      class: 'hint',
-      text: 'Base URL of an OpenAI-compatible API. Leave the default for OpenAI; for Ollama use http://localhost:11434/v1.',
-    }),
-  );
-  const baseUrlHint = baseUrlField.querySelector('.hint');
-
-  provider.addEventListener('change', () => {
-    if (provider.value === 'anthropic') {
-      baseUrl.value = 'https://api.anthropic.com';
-      baseUrlHint.textContent = 'Leave as the default for Anthropic.';
-    } else if (baseUrl.value.includes('anthropic')) {
-      baseUrl.value = 'https://api.openai.com/v1';
-      baseUrlHint.textContent = baseUrlHint.textContent.replace('Anthropic', 'OpenAI');
-    }
-  });
-
   const body = el(
     'div',
     {},
@@ -448,25 +400,11 @@ export async function openSettings() {
       }),
     ),
 
-    el('h4', { text: 'Assistant', style: { margin: '20px 0 10px' } }),
-    el('div', { class: 'form-row' }, el('label', { text: 'Provider' }), provider),
-    baseUrlField,
-    el(
-      'div',
-      { class: 'form-grid' },
-      el('div', { class: 'form-row' }, el('label', { text: 'Model' }), model),
-      el('div', { class: 'form-row' }, el('label', { text: 'API key' }), apiKey),
-    ),
-    el('p', {
-      class: 'hint',
-      style: { marginTop: '-6px', marginBottom: '16px' },
-      text: 'The key is stored encrypted in your OS keychain and only ever used from the main process.',
-    }),
     el('button', {
       class: 'btn btn-sm',
       text: 'Show available MCP tools',
       style: { marginBottom: '22px' },
-      onClick: () => window.dispatchEvent(new CustomEvent('show-mcp-tools')),
+      onClick: () => showToolsCatalog(),
     }),
 
     el('h4', { text: 'Behaviour', style: { marginBottom: '10px' } }),
@@ -576,9 +514,6 @@ export async function openSettings() {
         text: 'Save',
         onClick: async () => {
           const patch = {
-            provider: provider.value,
-            baseUrl: baseUrl.value.trim(),
-            model: model.value.trim(),
             theme: theme.value,
             textScale: Number(textScale.value),
             sendOnEnter: sendOnEnter.checked,
@@ -590,8 +525,6 @@ export async function openSettings() {
             notifyWhenFocused: notifyWhenFocused.checked,
             autoUpdates: autoUpdates.checked,
           };
-          if (apiKey.value.trim()) patch.apiKey = apiKey.value.trim();
-          if (apiKey.value === '') delete patch.apiKey;
 
           const saved = await call(() => api.settings.set(patch), { context: 'save settings' });
           if (saved) {
@@ -611,6 +544,42 @@ export function applyTheme(theme) {
   const prefersLight = window.matchMedia?.('(prefers-color-scheme: light)').matches;
   const resolved = theme === 'system' ? (prefersLight ? 'light' : 'dark') : theme;
   document.documentElement.dataset.theme = resolved;
+}
+
+/**
+ * What Beeper's MCP server will let a client ask it to do.
+ *
+ * This outlived the assistant, which was the only thing that ever called the
+ * tools. Beeper still runs the server and the app still connects to it, so
+ * being able to see the catalogue is the honest reason to keep doing so.
+ */
+export async function showToolsCatalog() {
+  const body = el('div', { class: 'result-list' }, el('p', { class: 'muted', text: 'Loading MCP tools…' }));
+  openModal({ title: 'Beeper MCP tools', body });
+
+  const tools = (await call(() => api.mcp.tools(), { context: 'mcp tools', fallback: [] })) || [];
+  clear(body);
+  if (!tools.length) {
+    body.append(el('p', { class: 'muted', text: 'Beeper reported no MCP tools.' }));
+    return;
+  }
+  body.append(
+    el('p', { class: 'muted tiny', text: `${tools.length} tools exposed by Beeper’s MCP server:` }),
+  );
+  for (const tool of tools) {
+    body.append(
+      el(
+        'div',
+        { class: 'result-item', style: { cursor: 'default' } },
+        el(
+          'div',
+          { class: 'result-item-body' },
+          el('div', { class: 'result-item-title', text: tool.name || '(unnamed)' }),
+          tool.description ? el('div', { class: 'result-item-sub', text: tool.description }) : null,
+        ),
+      ),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

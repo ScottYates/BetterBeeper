@@ -3,9 +3,8 @@
 A desktop chat client for [Beeper Desktop](https://beeper.com), built on Beeper's
 [Desktop API](https://developers.beeper.com/desktop-api/).
 
-The chat UI talks to Beeper's REST API and its live WebSocket event stream. An optional AI
-assistant panel talks to Beeper's built-in **MCP** server, so a model can search and read your
-chats, and send, with every action shown to you before it happens.
+The chat UI talks to Beeper's REST API and its live WebSocket event stream. Beeper's built-in
+**MCP** server is also connected at startup, and the tools it publishes can be listed from Settings.
 
 > No screenshots in this repository. The development captures of this app show real contact
 > names, phone numbers and private message text, so they are not published. The one image below
@@ -179,18 +178,16 @@ chats, and send, with every action shown to you before it happens.
 - Messages, reactions and chat state update in place. The open chat is always subscribed, even
   when it is not one of the most recent
 
-**Assistant (MCP)**
+**MCP**
 
-- Connects to Beeper's built-in MCP server at `http://localhost:23373/v0/mcp`
-- Streams its replies and shows every tool it calls, with arguments and results
-- Bring your own model: any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, Ollama, LM
-  Studio, vLLM) or Anthropic. The key is encrypted in your OS keychain and is only used from the
-  main process
+- Connects to Beeper's built-in MCP server at `http://localhost:23373/v0/mcp` on startup, and reports
+  its status in the connect banner
+- Settings lists the tools the server publishes, with their names and descriptions
 
 **Security**
 
 - OAuth 2.0 + PKCE with dynamic client registration, so there is no manual token copy-paste
-- Access token and AI key encrypted at rest through Electron `safeStorage` (DPAPI on Windows)
+- Access token encrypted at rest through Electron `safeStorage` (DPAPI on Windows)
 - `contextIsolation` on, `nodeIntegration` off, strict CSP
 - Message HTML passes through a DOM-based allowlist sanitizer, so a chat cannot inject markup
 - Local media is served over a dedicated `beeper-file://` protocol instead of disabling
@@ -239,6 +236,7 @@ npm run check:composer  # the composer placeholder names one person and stays on
 npm run check:paste     # a pasted image becomes an attachment; a text paste is not swallowed
 npm run check:imagecopy # which image URLs may be copied, and how they map back to bytes
 npm run check:api       # the preload surface, the IPC handlers and the renderer agree
+npm run check:settings  # a save keeps unknown settings and drops the retired ones
 npm run check:visibility # hiding and locally deleting a message, and surviving a restart
 npm run check:gif       # an animated GIF really advances frames on screen
 npm run check:gifrebuild # the thread is only rebuilt when what it draws changed
@@ -322,10 +320,6 @@ Open **Settings** from the gear icon in the sidebar.
 
 | Setting | Notes |
 | --- | --- |
-| Assistant provider | `OpenAI-compatible` or `Anthropic` |
-| Base URL | for example `https://api.openai.com/v1`, or `http://localhost:11434/v1` for Ollama |
-| Model | Model identifier, for example `gpt-4o-mini` |
-| API key | Stored encrypted; blank means "keep the existing key" |
 | Theme | `system`, `dark`, `light` |
 | Text size | `Small` through `Largest` (90% to 150%). Scales the whole UI and is restored before the first paint |
 | Enter to send | Off to use `Ctrl/Cmd+Enter` instead |
@@ -378,7 +372,6 @@ after the first install under the new name. It is unused and safe to delete.
 | --- | --- |
 | `Ctrl/Cmd + N` | New chat |
 | `Ctrl/Cmd + F` or `Ctrl/Cmd + K` | Focus search |
-| `Ctrl/Cmd + Shift + A` | Toggle the assistant panel |
 | `Enter` / `Shift+Enter` | Send / newline |
 | `Esc` | Close the open chat; close menus, popovers, modals and the image viewer first |
 | Wheel | Scroll the list under the cursor; zoom inside the image viewer window |
@@ -395,18 +388,17 @@ src/
     config.js        endpoint map, OAuth constants, page sizes, timeouts
     auth.js          OAuth 2.0 + PKCE, RFC 7591 client registration, loopback redirect
     token-store.js   encrypted token persistence
-    settings.js      preferences + encrypted AI key
+    settings.js      preferences
     beeper-client.js REST client (chats, messages, assets, contacts, search)
     beeper-ws.js     WebSocket event stream with backoff reconnection
     mcp-client.js    MCP client for Beeper's built-in server
-    assistant.js     tool-calling loop against an OpenAI-compatible or Anthropic model
     ipc.js           the whole renderer-facing IPC surface
   preload/
     preload.js       contextBridge: the only surface the renderer can reach
   renderer/
     index.html       app shell
     styles.css       design tokens, dark/light themes
-    js/              main, sidebar, thread, assistant, modals, state, api, ui, util
+    js/              main, sidebar, thread, modals, state, api, ui, util
     viewer.html      the image-viewer window's own shell
     viewer.css       viewer chrome: zoom badge, toolbar, hint
     js/viewer.js     viewer zoom / pan / close, standalone (no preload, sandboxed)
@@ -652,12 +644,12 @@ Each of these caused a real bug here.
   npm run check:live
   ```
 
-### Why REST for the UI and MCP for the assistant
+### Why REST for the UI, and MCP alongside it
 
 The REST API is cheaper and typed: it returns the exact schemas the UI needs, and the WebSocket
 gives real-time push. MCP is designed for agents, and it already declares Beeper's whole
-capability surface as tools, so the assistant does not need a second hand-written schema, and
-Beeper evolves it independently.
+capability surface as tools that Beeper evolves independently. This app does not drive a model, but
+it still connects so the tool catalogue stays visible and honest.
 
 ### IPC contract
 

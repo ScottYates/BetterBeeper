@@ -88,10 +88,8 @@ contextBridge.exposeInMainWorld('beeper', {
     status: () => invoke('events:status'),
     debug: () => invoke('events:debug'),
   },
-  assistant: {
+  mcp: {
     tools: () => invoke('mcp:tools'),
-    ask: (history) => invoke('assistant:ask', history),
-    callTool: (name, args) => invoke('assistant:callTool', name, args),
   },
   settings: {
     get: () => invoke('settings:get'),
@@ -108,11 +106,9 @@ contextBridge.exposeInMainWorld('beeper', {
     eventsReady: (fn) => on('events:ready', fn),
     eventsFrame: (fn) => on('events:frame', fn),
     mcpStatus: (fn) => on('mcp:status', fn),
-    assistantEvent: (fn) => on('assistant:event', fn),
     updaterProgress: (fn) => on('updater:progress', fn),
     menuNewChat: (fn) => on('menu:newChat', fn),
     menuFocusSearch: (fn) => on('menu:focusSearch', fn),
-    menuToggleAssistant: (fn) => on('menu:toggleAssistant', fn),
     historyProgress: (fn) => on('history:progress', fn),
   },
 });

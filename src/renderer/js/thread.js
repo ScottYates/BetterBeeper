@@ -86,7 +86,9 @@ function onHistoryProgress(payload) {
 
   call(() => api.history.open(payload.chatID), { context: 'history', fallback: null }).then((page) => {
     if (!page || state.activeChatID !== payload.chatID) return;
-    hasMore = !page.complete;
+    // Same rule as opening the chat: what is behind this page in the store,
+    // not whether the backfill just finished.
+    hasMore = Boolean(page.hasMore);
     for (const message of page.messages || []) upsertMessage(payload.chatID, message);
     // Rebuilds only if something actually changed, so a tail refresh of an
     // already-complete chat costs nothing.
@@ -117,10 +119,10 @@ export function initThread() {
   // message. Anchored to the composer, the paste fired at the document and the
   // composer never heard about it.
   document.addEventListener('paste', (event) => {
-    // Only the chat composer claims an image. Anywhere else - the assistant,
-    // the search box, the token field - a paste is left alone.
+    // Only the chat composer claims an image. Anywhere else - the
+    // search box, the token field - a paste is left alone.
     const target = event.target;
-    if (target?.closest?.('#assistant-input, #search-input, #manual-token')) return;
+    if (target?.closest?.('#search-input, #manual-token')) return;
     if (!currentChat) return;
     // A screenshot arrives as a clipboard *file* with no text beside it, so the
     // textarea has nothing to insert and the paste would look like nothing
@@ -253,7 +255,11 @@ export async function openChat(chatID, { focusMessageID: focusId } = {}) {
     return;
   }
 
-  hasMore = !page?.complete;
+  // Whether to offer scroll-back. This is what the store says is behind this
+  // page, NOT whether the backfill has finished: a fully-synced chat can hold
+  // thousands of messages past the opening page, and treating `complete` as
+  // "there is nothing older" made all of them unreachable.
+  hasMore = Boolean(page?.hasMore);
   const items = page?.messages || [];
   for (const message of items) {
     upsertMessage(chatID, message);

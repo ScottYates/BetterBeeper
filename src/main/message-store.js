@@ -220,6 +220,42 @@ function openMessageStore(userDataDir, { onRecover } = {}) {
       return rows.map((row) => safeParse(row.payload)).reverse();
     },
 
+    /**
+     * A page of messages, plus whether anything older sits behind it.
+     *
+     * `hasMore` here means "our database holds older messages than these". That
+     * is a different question from whether Beeper has anything older for us,
+     * and answering both with the same flag made every message behind the
+     * opening page unreachable the moment a backfill finished. Measured on the
+     * real store: 9,561 messages stored, 198 drawn, scrolling up loaded nothing.
+     *
+     * One extra row is fetched and dropped, so the answer is exact rather than
+     * guessed from whether the page happened to come back full.
+     */
+    pageWithMore(chatID, { before, limit = OPEN_PAGE } = {}) {
+      const take = Math.max(1, limit) + 1;
+      const rows = before
+        ? db.prepare(`
+              SELECT m.payload FROM messages m
+               WHERE m.chatID = ? AND m.gone = 0
+                 AND ( m.ts < (SELECT ts FROM messages WHERE chatID = ? AND id = ?)
+                    OR (m.ts = (SELECT ts FROM messages WHERE chatID = ? AND id = ?) AND m.id < ?) )
+               ORDER BY m.ts DESC, m.id DESC
+               LIMIT ?
+            `).all(chatID, chatID, before, chatID, before, before, take)
+        : db.prepare(`
+              SELECT payload FROM messages
+               WHERE chatID = ? AND gone = 0
+               ORDER BY ts DESC, id DESC
+               LIMIT ?
+            `).all(chatID, take);
+
+      return {
+        messages: rows.slice(0, limit).map((row) => safeParse(row.payload)).reverse(),
+        hasMore: rows.length > limit,
+      };
+    },
+
     newest(chatID, limit = OPEN_PAGE) {
       const rows = db.prepare(`
         SELECT payload FROM messages

@@ -11,7 +11,6 @@ const { BeeperClient, BeeperError } = require('./beeper-client');
 const { BeeperEvents } = require('./beeper-ws');
 const { McpClient } = require('./mcp-client');
 const auth = require('./auth');
-const { runAssistantTurn } = require('./assistant');
 const mediaPath = require('./media-path');
 const assetSource = require('./asset-source');
 const { openMessageStore, OPEN_PAGE } = require('./message-store');
@@ -490,9 +489,12 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   }
 
   ipcMain.handle('history:open', handle(async (chatID) => {
-    if (!chatID) return ok({ messages: [], complete: false });
+    if (!chatID) return ok({ messages: [], hasMore: false, complete: false });
     const status = historyStore.chatStatus(chatID);
-    const messages = historyStore.newest(chatID, OPEN_PAGE);
+    // hasMore comes from the store, not from `complete`. A finished backfill
+    // says Beeper has nothing older; it says nothing about the thousands of
+    // messages already sitting in this database.
+    const { messages, hasMore } = historyStore.pageWithMore(chatID, { limit: OPEN_PAGE });
     // Ask the queue to bring this chat up to date in the background. A chat
     // already complete costs one page; an unfinished one resumes where it
     // stopped.
@@ -500,6 +502,7 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     const sync = historySync.status();
     return ok({
       messages,
+      hasMore,
       complete: status.complete,
       syncing: sync.running === chatID,
       queued: sync.queued.includes(chatID),
@@ -508,13 +511,17 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
 
   ipcMain.handle('history:page', handle(async (chatID, { before, limit } = {}) => {
     if (!chatID) return ok({ messages: [], hasMore: false, complete: false });
-    const messages = historyStore.page(chatID, { before, limit: limit || 50 });
+    const { messages, hasMore } = historyStore.pageWithMore(chatID, {
+      before,
+      limit: limit || 50,
+    });
     const status = historyStore.chatStatus(chatID);
     return ok({
       messages,
-      // While the chat is still being filled in there may be more coming even
-      // when this page came back short, so the thread keeps its spinner up.
-      hasMore: status.complete ? messages.length > 0 : true,
+      // Whatever is behind this page in the store, independent of whether the
+      // backfill has finished. The thread keeps its scroll-up affordance up
+      // for as long as this stays true, and drops it only at the real start.
+      hasMore,
       complete: status.complete,
     });
   }));
@@ -564,7 +571,7 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   // Diagnostic: what the live socket has actually seen.
   ipcMain.handle('events:debug', handle(async () => ok(events.debugState())));
 
-  // ---- assistant --------------------------------------------------------
+  // ---- settings and diagnostics -----------------------------------------
 
   ipcMain.handle('settings:get', handle(() => settings.read()));
   ipcMain.handle('settings:set', handle((patch) => {
@@ -581,46 +588,6 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     const res = await mcp.connect();
     if (!res.ok) return fail({ message: res.error, code: 'mcp_unavailable' });
     return ok(res.tools);
-  }));
-
-  ipcMain.handle('assistant:ask', handle(async (history) => {
-    const config = settings.read();
-    if (!config.model) {
-      throw Object.assign(new Error('No AI model configured. Open Settings to add one.'), {
-        code: 'no_model',
-      });
-    }
-
-    const res = await mcp.connect();
-    if (!res.ok) throw Object.assign(new Error(res.error), { code: 'mcp_unavailable' });
-
-    broadcast('assistant:event', { type: 'turn_start' });
-
-    const onEvent = (evt) => broadcast('assistant:event', evt);
-
-    try {
-      const result = await runAssistantTurn({
-        config,
-        history,
-        tools: mcp.tools,
-        callTool: (name, args) => mcp.callTool(name, args),
-        onEvent,
-      });
-      return ok({ text: result.text });
-    } catch (err) {
-      onEvent({ type: 'error', message: err.message });
-      throw err;
-    }
-  }));
-
-  ipcMain.handle('assistant:clear', handle(() => ok(true)));
-
-  // Invoke a single Beeper MCP tool directly. Used by the assistant's tool
-  // loop, and exposed so a tool can be run on its own from diagnostics.
-  ipcMain.handle('assistant:callTool', handle(async (name, args) => {
-    const res = await mcp.connect();
-    if (!res.ok) throw Object.assign(new Error(res.error), { code: 'mcp_unavailable' });
-    return ok(await mcp.callTool(name, args || {}));
   }));
 
   return {

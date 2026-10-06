@@ -266,6 +266,78 @@ add('recording a title does not disturb the rest of the chat row', () => {
 // above, not by a test that cannot fail.
 
 // ---------------------------------------------------------------------------
+// hasMore: what is behind this page in OUR database
+//
+// `complete` and `hasMore` answer two different questions. Reading the first as
+// the second made every message behind the opening page unreachable the moment a
+// backfill finished - worst for exactly the chats that had been synced best.
+// Measured on the real store: 9,561 messages stored, 198 drawn, scrolling up
+// loaded nothing.
+// ---------------------------------------------------------------------------
+
+add('a page says whether anything older sits behind it', () => {
+  const rows = [];
+  for (let i = 0; i < 30; i++) rows.push(msg('pm' + i, 1000 + i, 'pageable message ' + i));
+  store.upsertMessages('c-page', rows, {});
+
+  const first = store.pageWithMore('c-page', { limit: 10 });
+  return first.messages.length === 10 && first.hasMore === true
+    || ('got ' + first.messages.length + ' messages, hasMore=' + first.hasMore);
+});
+
+add('a page at the true beginning reports nothing behind it', () => {
+  const last = store.pageWithMore('c-page', { limit: 100 });
+  return (last.hasMore === false && last.messages.length === 30)
+    || ('got ' + last.messages.length + ' messages, hasMore=' + last.hasMore);
+});
+
+add('paging backwards walks the whole stored chat', () => {
+  const seen = [];
+  let before = null;
+  let guard = 0;
+  for (;;) {
+    const page = store.pageWithMore('c-page', { before, limit: 7 });
+    seen.push(...page.messages.map((m) => m.id));
+    if (!page.hasMore || guard++ > 20) break;
+    before = page.messages[0].id;
+  }
+  return seen.length === 30 || ('walked ' + seen.length + ' of 30');
+});
+
+add('a finished backfill still has older messages to offer', () => {
+  // The exact bug: this chat is complete, and asking for its first page must
+  // still say there is more behind it. A complete chat with one message passes
+  // either way, which is why this uses a chat with plenty behind it.
+  // setComplete, not reconcile: reconcile with an empty `seen` would tombstone
+  // the chat and prove the opposite.
+  store.setComplete('c-page', 1000);
+  const page = store.pageWithMore('c-page', { limit: 5 });
+  return store.isComplete('c-page') === true && page.hasMore === true
+    || ('complete=' + store.isComplete('c-page') + ', hasMore=' + page.hasMore);
+});
+
+add('a chat with one message is not left offering scroll-back forever', () => {
+  // The other half of the same rule: with nothing behind it, hasMore must be
+  // false so the thread stops offering to scroll into emptiness.
+  const single = store.pageWithMore('c-tiny', { limit: 10 });
+  return single.messages.length === 0 && single.hasMore === false
+    || ('got ' + single.messages.length + ', hasMore=' + single.hasMore);
+});
+
+add('the thread decides scroll-back from hasMore, not from complete', () => {
+  // A source-level guard, and the only one available for this line. The two
+  // renderer cases that exercise it properly live in check:historyrender, which
+  // cannot open a chat twice and so cannot cover the complete-and-has-more
+  // combination here.
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'js', 'thread.js'),
+    'utf8',
+  );
+  return !/hasMore\s*=\s*!\s*\w+\??\.\s*complete/.test(src)
+    || 'the thread derives hasMore from `complete` again';
+});
+
+// ---------------------------------------------------------------------------
 // Recording titles
 //
 // The original bug: chats.title was a column nothing ever wrote, so every

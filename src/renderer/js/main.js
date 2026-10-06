@@ -9,8 +9,7 @@ import {
   setView, currentView, renderViewChrome, VIEWS,
 } from './sidebar.js';
 import { initThread, openChat, applyMessageEvent, closeThread } from './thread.js';
-import { initAssistant, toggleAssistant, showToolsCatalog } from './assistant.js';
-import { openNewChat, openSettings, applyTheme } from './modals.js';
+import { openNewChat, openSettings, showToolsCatalog, applyTheme } from './modals.js';
 import { initLayout } from './layout.js';
 import { checkForUpdatesOnLaunch } from './updates.js';
 
@@ -294,13 +293,11 @@ function wireKeyboard() {
 
   window.beeper.on.menuNewChat(() => openNewChat());
   window.beeper.on.menuFocusSearch(() => focusSearch());
-  window.beeper.on.menuToggleAssistant(() => toggleAssistant());
 
   bus.on('chat:open', (chatID, opts) => openChat(chatID, opts));
   bus.on('chat:activated', () => subscribeVisibleChats());
   bus.on('chat:close', () => closeActiveChat());
   window.addEventListener('open-settings', () => openSettings());
-  window.addEventListener('show-mcp-tools', () => showToolsCatalog());
 }
 
 // ---------------------------------------------------------------------------
@@ -311,8 +308,7 @@ async function boot() {
   if (bootstrapped) return;
   bootstrapped = true;
 
-  onApiError(({ context, message, code }) => {
-    if (code === 'no_model') return; // surfaced inside the assistant panel
+  onApiError(({ context, message }) => {
     toast(message || `Error during ${context}`, 'error', 4200);
   });
 
@@ -326,7 +322,6 @@ async function boot() {
     onSelectView: () => closeThread(),
   });
   initThread();
-  initAssistant();
   wireEvents();
   wireKeyboard();
 
@@ -340,7 +335,6 @@ async function boot() {
 
   $('#btn-new-chat').addEventListener('click', () => openNewChat());
   $('#btn-settings').addEventListener('click', () => openSettings());
-  $('#btn-assistant').addEventListener('click', () => toggleAssistant());
 
   // Beeper keeps search hidden until the magnifier is clicked.
   $('#btn-focus-search').addEventListener('click', () => {

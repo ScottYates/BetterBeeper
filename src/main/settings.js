@@ -2,15 +2,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { safeStorage } = require('electron');
 
 const DEFAULTS = {
-  provider: 'openai',
-  baseUrl: 'https://api.openai.com/v1',
-  model: '',
-  apiKey: '',
-  maxTokens: 2048,
-  baseUrlOverride: '',
   markReadOnOpen: true,
   sendOnEnter: true,
   theme: 'system',
@@ -51,63 +44,54 @@ const DEFAULTS = {
 };
 
 /**
- * App settings. The AI API key is the only sensitive value here, so it is
- * encrypted with the OS keychain; everything else is plain JSON.
+ * Keys the removed assistant used to write, dropped on every read and every
+ * save. `apiKey` is the plaintext fallback older builds used when safeStorage
+ * was unavailable, so it is a real secret sitting in the clear and must not
+ * linger; the rest are just dead configuration that would only mislead.
+ *
+ * This list is deliberately explicit. The alternative - stripping anything not
+ * in DEFAULTS - would also throw away settings written by a *newer* build,
+ * which is a much worse failure than leaving a stale model name on disk.
+ */
+const RETIRED = ['apiKeyEnc', 'apiKey', 'hasApiKey', 'model', 'provider', 'baseUrl', 'baseUrlOverride', 'maxTokens'];
+
+/**
+ * App settings. Nothing here is sensitive any more: the one value that was,
+ * the assistant's API key, is read as retired and never returned.
  */
 class SettingsStore {
   constructor(dir) {
     this.file = path.join(dir, 'settings.json');
   }
 
-  read() {
-    let stored = {};
+  /** The file exactly as stored, including keys nothing reads any more. */
+  raw() {
     try {
-      stored = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      return JSON.parse(fs.readFileSync(this.file, 'utf8')) || {};
     } catch {
-      stored = {};
+      return {};
     }
+  }
 
-    let apiKey = DEFAULTS.apiKey;
-    if (stored.apiKeyEnc) {
-      try {
-        if (safeStorage.isEncryptionAvailable()) {
-          apiKey = safeStorage.decryptString(Buffer.from(stored.apiKeyEnc, 'base64'));
-        }
-      } catch {
-        apiKey = '';
-      }
-    } else if (typeof stored.apiKey === 'string') {
-      apiKey = stored.apiKey;
-    }
-
-    const { apiKeyEnc, apiKey: _legacy, ...rest } = stored;
-    return {
-      ...DEFAULTS,
-      ...rest,
-      apiKey,
-      hasApiKey: Boolean(apiKey),
-      apiKey: undefined,
-    };
+  read() {
+    // A key from an earlier version is dropped on the way out rather than
+    // read, decrypted and carried around. It has no reader any more, and a
+    // secret sitting decrypted in a settings object is a liability, not a
+    // feature. The stale values stay on disk until write() below removes them.
+    const stored = this.raw();
+    for (const key of RETIRED) delete stored[key];
+    return { ...DEFAULTS, ...stored };
   }
 
   write(patch) {
-    const current = this.read();
-    const next = { ...current, ...patch };
-
-    const payload = { ...next };
-    delete payload.hasApiKey;
-
-    if (patch.apiKey !== undefined) {
-      if (patch.apiKey) {
-        payload.apiKeyEnc = safeStorage.isEncryptionAvailable()
-          ? safeStorage.encryptString(String(patch.apiKey)).toString('base64')
-          : undefined;
-        payload.apiKey = safeStorage.isEncryptionAvailable() ? undefined : String(patch.apiKey);
-      } else {
-        delete payload.apiKeyEnc;
-        delete payload.apiKey;
-      }
-    }
+    // Built from raw() rather than from read() on purpose. Both produce the
+    // same object today, but only this one says what it is doing: the retired
+    // keys are removed from the file on the way out. Sourced from read(), the
+    // removal would be an incidental side effect of read()'s stripping, which
+    // is the kind of thing that quietly stops being true.
+    const stored = this.raw();
+    for (const key of RETIRED) delete stored[key];
+    const payload = { ...DEFAULTS, ...stored, ...patch };
 
     const tmp = `${this.file}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');

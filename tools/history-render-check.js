@@ -94,7 +94,11 @@ async function main() {
                 { id: 'h-m2', chatID: 'h1', timestamp: 2000, text: 'stored message two', senderID: 's', senderName: 'Someone' },
                 { id: 'h-m1', chatID: 'h1', timestamp: 1000, text: 'stored message one', senderID: 's', senderName: 'Someone' },
               ],
+              // complete: Beeper has not synced the whole chat. hasMore: the
+              // store holds messages older than this page. They used to be the
+              // same question and now they are not - see thread.js.
               complete: false,
+              hasMore: true,
             });
           },
           page: async () => {
@@ -133,10 +137,10 @@ async function main() {
           || ('thread drew ' + JSON.stringify(text.slice(0, 80)));
       });
 
-      add('an unfinished chat still offers to scroll for more', () => {
+      add('a chat with older messages on disk offers to scroll for more', () => {
         const hint = listEl.querySelector('.search-loading');
         return (hint && /scroll up/i.test(hint.textContent))
-          || 'no scroll-up affordance on an incomplete chat';
+          || 'no scroll-up affordance although the store reported hasMore';
       });
 
       // Scrolling back must read from disk too, driven the way a user drives
@@ -207,7 +211,14 @@ async function main() {
         (listEl.textContent || '').includes('arrived from the backfill')
         || ('thread still shows ' + JSON.stringify((listEl.textContent || '').slice(0, 60))));
 
-      add('the scroll-up hint goes away once the chat is complete', () => {
+      // hasMore decides this, not complete. "The backfill is finished" and
+      // "there is nothing older on disk" are different sentences, and only the
+      // second one means the end of the thread has been reached. pageTwo has
+      // no hasMore, so the hint goes.
+      //
+      // No backticks in here: this whole block is a String.raw template, and a
+      // backtick in a comment silently ends the string.
+      add('the scroll-up hint goes away when there is nothing older on disk', () => {
         const hint = listEl.querySelector('.search-loading');
         return !hint || !/scroll up/i.test(hint.textContent) || 'still offering to scroll for more';
       });

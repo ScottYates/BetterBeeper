@@ -104,9 +104,8 @@ export const api = {
     status: () => window.beeper.history.status(),
   },
 
-  assistant: {
-    tools: () => window.beeper.assistant.tools(),
-    ask: (history) => window.beeper.assistant.ask(history),
+  mcp: {
+    tools: () => window.beeper.mcp.tools(),
   },
 
   settings: {

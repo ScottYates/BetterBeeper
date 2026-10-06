@@ -484,8 +484,6 @@ function buildMenu() {
           click: send('menu:focusSearch'),
         },
         { type: 'separator' },
-        { label: 'Toggle Assistant', accelerator: 'CmdOrCtrl+Shift+A', click: send('menu:toggleAssistant') },
-        { type: 'separator' },
         { role: 'reload' },
         { role: 'toggleDevTools' },
         { type: 'separator' },

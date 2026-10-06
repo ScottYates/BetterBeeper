@@ -28,7 +28,6 @@
   --radius: 10px;
   --radius-lg: 16px;
   --sidebar-w: 300px;
-  --assistant-w: 400px;
   --splitter-w: 5px;
 
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
@@ -252,9 +251,6 @@ select { cursor: pointer; }
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   grid-template-columns: var(--sidebar-w) var(--splitter-w) minmax(0, 1fr);
-}
-.app.with-assistant {
-  grid-template-columns: var(--sidebar-w) var(--splitter-w) minmax(0, 1fr) var(--assistant-w);
 }
 
 /* Drag handle between the conversation list and the thread. It is painted in
@@ -801,59 +797,6 @@ select { cursor: pointer; }
   transition: opacity 120ms ease;
 }
 .notify-options.is-disabled { opacity: 0.42; }
-
-/* ---------------- Assistant ---------------- */
-.assistant-pane {
-  display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
-  background: var(--bg-elev); border-left: 1px solid var(--border);
-}
-.assistant-header {
-  display: flex; align-items: flex-start; justify-content: space-between;
-  padding: 13px 14px; border-bottom: 1px solid var(--border); flex: none;
-}
-.assistant-log {
-  flex: 1; overflow-y: auto; padding: 14px;
-  display: flex; flex-direction: column; gap: 12px; min-height: 0;
-}
-.assistant-input-row {
-  display: flex; gap: 8px; align-items: flex-end;
-  padding: 12px 14px 14px; border-top: 1px solid var(--border); flex: none;
-}
-.assistant-input-row textarea { flex: 1; min-height: 38px; max-height: 150px; border-radius: 19px; padding: 9px 14px; }
-
-.bubble {
-  max-width: 92%; padding: 9px 12px; border-radius: 13px;
-  font-size: 13.5px; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
-}
-.bubble.user { align-self: flex-end; background: var(--bubble-out); color: #fff; border-bottom-right-radius: 4px; }
-.bubble.assistant { align-self: flex-start; background: var(--bubble-in); border: 1px solid var(--border-soft); }
-.bubble.error { align-self: stretch; background: var(--danger-soft); color: var(--danger); border: 1px solid rgba(255,107,107,0.3); white-space: pre-wrap; }
-.bubble .mention { color: var(--text-faint); font-size: 11.5px; display: block; margin-bottom: 3px; }
-
-.tool-activity {
-  align-self: stretch; font-size: 12px;
-  border: 1px dashed var(--border); border-radius: 10px;
-  padding: 8px 11px; background: var(--bg-elev-2);
-}
-.tool-activity .tool-name { font-weight: 650; font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
-.tool-activity .tool-args {
-  font-family: var(--mono); font-size: 11px; color: var(--text-dim);
-  margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere;
-  max-height: 130px; overflow: auto;
-}
-.tool-activity.is-error { border-color: var(--danger); }
-.tool-activity.is-error .tool-name { color: var(--danger); }
-
-.assistant-empty { color: var(--text-dim); font-size: 13px; text-align: center; padding: 30px 14px; }
-.assistant-empty h4 { margin-bottom: 8px; color: var(--text); }
-.typing { display: inline-flex; gap: 3px; padding: 4px 0; }
-.typing span {
-  width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint);
-  animation: blink 1.3s ease-in-out infinite;
-}
-.typing span:nth-child(2) { animation-delay: 0.18s; }
-.typing span:nth-child(3) { animation-delay: 0.36s; }
-@keyframes blink { 0%, 60%, 100% { opacity: 0.25; } 30% { opacity: 1; } }
 
 /* =========================================================================
    Tooltips (replaces native `title` on the icon buttons)
