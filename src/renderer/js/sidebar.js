@@ -450,7 +450,7 @@ async function runSearch() {
   clear(list);
   list.append(el('div', { class: 'search-loading', text: 'Searching…' }));
 
-  const [chats, messages] = await Promise.all([
+  const [chats, remote, local] = await Promise.all([
     wantChats
       ? call(() => api.chats.search({ query, limit: 50 }), { context: 'chat search', fallback: null })
       : null,
@@ -458,15 +458,40 @@ async function runSearch() {
       // 20 is the ceiling Beeper accepts for message search; asking for more is a 400.
       ? call(() => api.messages.search({ query, limit: 20 }), { context: 'message search', fallback: null })
       : null,
+    wantMessages
+      // The local store answers with everything it holds, which is neither
+      // capped at 20 nor limited to what a bridge has indexed. It only knows
+      // about chats that have been opened, so Beeper's answer is merged in
+      // rather than replaced.
+      ? call(() => api.history.search(query, { limit: 50 }), { context: 'local search', fallback: null })
+      : null,
   ]);
 
   if (token !== searchToken) return; // a newer search superseded this one
 
-  searchResults = { chats: chats?.items || [], messages: messages?.items || [] };
+  const merged = mergeMessageHits(remote?.items || [], local || []);
+  searchResults = { chats: chats?.items || [], messages: merged };
   searchMode = wantMessages ? 'messages' : 'chats';
 
   if (wantChats) for (const chat of searchResults.chats) upsertChat(chat);
   renderSearchResults(query);
+}
+
+/**
+ * Local first, because it reaches further back, then Beeper's for the chats the
+ * store has never seen. Deduplicated by message id so a message both sides know
+ * about appears once.
+ */
+function mergeMessageHits(remoteItems, localItems) {
+  const seen = new Set();
+  const out = [];
+  for (const hit of [...localItems, ...remoteItems]) {
+    const key = `${hit.chatID || ''}|${hit.id || ''}`;
+    if (!hit.id || seen.has(key)) continue;
+    seen.add(key);
+    out.push(hit);
+  }
+  return out;
 }
 
 function renderSearchResults(query) {
@@ -498,7 +523,7 @@ function renderSearchResults(query) {
     list.append(
       el('div', {
         class: 'empty-note',
-        text: 'No matches. Beeper only searches message history it has indexed for your bridges.',
+        text: 'No matches. Beeper only searches history it has indexed, and the local store only knows chats you have opened.',
       }),
     );
   }

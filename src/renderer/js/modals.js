@@ -45,6 +45,41 @@ function deletedCountText() {
   return `${n} hidden on this device`;
 }
 
+/** Human-readable size. Same scale the thread uses for attachments. */
+function bytesLabel(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+/**
+ * The History section's numbers, filled in once the main process answers.
+ *
+ * Rendered as a placeholder and then filled rather than awaited inline, so
+ * opening Settings never waits on a disk walk to size the media folder.
+ */
+function historyStatRow() {
+  const row = el('div', { class: 'history-stats-inner' }, el('span', { class: 'muted tiny', text: 'Measuring…' }));
+
+  call(() => api.history.status(), { context: 'history', fallback: null }).then((s) => {
+    if (!s) {
+      row.replaceChildren(el('span', { class: 'muted tiny', text: 'History is not available yet.' }));
+      return;
+    }
+    const syncing = s.running ? 'Fetching older messages…' : s.queued ? `${s.queued} chat${s.queued === 1 ? '' : 's'} queued` : 'Up to date';
+    row.replaceChildren(
+      el('div', { class: 'form-row' }, el('label', { text: 'Stored' }), el('span', { text: `${s.messages || 0} message${s.messages === 1 ? '' : 's'} in ${s.chats || 0} chat${s.chats === 1 ? '' : 's'}` })),
+      el('div', { class: 'form-row' }, el('label', { text: 'Database' }), el('span', { text: bytesLabel(s.bytes) })),
+      el('div', { class: 'form-row' }, el('label', { text: 'Attachments' }), el('span', { text: s.mediaCount ? `${s.mediaCount} file${s.mediaCount === 1 ? '' : 's'}, ${bytesLabel(s.mediaBytes)}` : 'None yet' })),
+      el('div', { class: 'form-row' }, el('label', { text: 'Status' }), el('span', { text: syncing })),
+    );
+  });
+
+  return row;
+}
+
 // ---------------------------------------------------------------------------
 // New chat
 // ---------------------------------------------------------------------------
@@ -396,6 +431,16 @@ export async function openSettings() {
         text: 'Deleting on this device removes a message from this app only; Beeper keeps it. Clearing the list makes those messages visible again.',
       }),
     ),
+
+    el('h4', { text: 'History', style: { margin: '20px 0 10px' } }),
+    // Measured, never estimated. "Fully self-contained" is worth very little
+    // if it quietly fills the disk, so the real numbers are on screen.
+    el('div', { class: 'history-stats' }, historyStatRow()),
+    el('p', {
+      class: 'hint',
+      style: { marginTop: '-6px', marginBottom: '16px' },
+      text: 'Every message you have opened is kept on this computer, so history survives a restart and search reaches further back than Beeper can. Beeper still decides what exists.',
+    }),
 
     el('h4', { text: 'Assistant', style: { margin: '20px 0 10px' } }),
     el('div', { class: 'form-row' }, el('label', { text: 'Provider' }), provider),

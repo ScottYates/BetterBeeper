@@ -674,6 +674,10 @@ select { cursor: pointer; }
 .att-file .att-size { flex: none; color: var(--text-dim); font-size: 11.5px; }
 .att-file .att-save { flex: none; color: var(--text-dim); font-size: 13px; line-height: 1; }
 .att-file:hover .att-save, .att-file:focus-visible .att-save { color: var(--accent); }
+.history-stats { display: block; margin-bottom: 16px; }
+.history-stats-inner { display: flex; flex-direction: column; gap: 2px; }
+.history-stats-inner .form-row { justify-content: space-between; }
+
 .msg.is-out .att-file { background: rgba(0, 0, 0, 0.16); border-color: rgba(255, 255, 255, 0.2); }
 
 /* opacity: 0 alone would leave these buttons clickable while invisible, which

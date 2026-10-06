@@ -152,6 +152,81 @@ async function main() {
 
       add('scrolling back never calls Beeper', () =>
         asked.list === 0 || ('called messages.list ' + asked.list + ' times'));
+
+      // --- search covers the local store -----------------------------------
+      //
+      // Beeper caps message search at 20 and only reaches what a bridge has
+      // indexed. The local store is merged in for everything else, and a
+      // message both sides know about must not appear twice.
+      const M = await import(${JSON.stringify(js('modals.js'))});
+      const B = await import(${JSON.stringify(js('sidebar.js'))});
+
+      const overlap = { id: 'h-m1', chatID: 'h1', text: 'stored message one', senderName: 'Someone' };
+      let remoteHits = [];
+      let localHits = [
+        overlap,
+        { id: 'h-m2', chatID: 'h1', text: 'stored message two', senderName: 'Someone' },
+      ];
+      window.beeper.messages.search = async () => envelope({ items: remoteHits });
+      window.beeper.history.search = async () => envelope(localHits);
+      window.beeper.chats.search = async () => envelope({ items: [] });
+      window.beeper.chats.list = async () => envelope([]);
+
+      B.initSidebar({ onSelectChat: () => {}, onSelectView: () => {} });
+      const searchInput = document.getElementById('search-input');
+      searchInput.value = 'stored';
+      searchInput.dispatchEvent(new Event('input'));
+      await new Promise((r) => setTimeout(r, 700));
+      const chatList = document.getElementById('chat-list');
+
+      const countOf = (text, needle) => (text.split(needle).length - 1);
+
+      add('search shows local hits', () =>
+        (chatList.textContent || '').includes('stored message two') || 'no local hit drawn');
+
+      add('a message both sides know about is drawn once', () =>
+        countOf(chatList.textContent || '', 'stored message one') === 1
+        || ('drawn ' + countOf(chatList.textContent || '', 'stored message one') + ' times'));
+
+      // --- settings reports measured numbers, not written-in ones -----------
+      window.beeper.history.status = async () =>
+        envelope({
+          messages: 4242,
+          chats: 7,
+          bytes: 1234567,
+          mediaCount: 3,
+          mediaBytes: 987654321,
+          running: null,
+          queued: 0,
+        });
+
+      await M.openSettings();
+      await new Promise((r) => setTimeout(r, 150));
+      const stats = document.querySelector('.history-stats-inner');
+      const statsText = stats ? stats.textContent : '';
+
+      add('settings has a history section', () => statsText.length > 0 || 'section missing');
+
+      add('the stored message count comes from the main process', () =>
+        statsText.includes('4242') || ('got ' + JSON.stringify(statsText.slice(0, 80))));
+
+      add('the database size is the real byte count', () =>
+        statsText.includes('1.2 MB') || ('got ' + JSON.stringify(statsText.slice(0, 120))));
+
+      add('the attachment total is measured too', () =>
+        statsText.includes('3 files, 941.9 MB') || ('got ' + JSON.stringify(statsText.slice(0, 160))));
+
+      add('the history section is visible without scrolling', () => {
+        const body = document.querySelector('.modal-body');
+        if (!body || !stats) return 'nothing to measure';
+        const box = stats.getBoundingClientRect();
+        const view = body.getBoundingClientRect();
+        return box.top >= view.top && box.bottom <= view.bottom
+          || ('section at ' + Math.round(box.top) + '-' + Math.round(box.bottom)
+            + ' inside ' + Math.round(view.top) + '-' + Math.round(view.bottom));
+      });
+
+      document.getElementById('modal-root')?.replaceChildren();
       }
     })()
   `;
