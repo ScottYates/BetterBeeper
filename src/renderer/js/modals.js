@@ -381,7 +381,23 @@ export async function openSettings() {
   const body = el(
     'div',
     {},
-    // First on purpose. The modal body scrolls, and this section sat 240px below
+    // History first, on purpose. The modal body caps at 86vh and scrolls, and this
+    // section measured 302-550 inside a 107-484 body - present in the DOM,
+    // answering every "is it there" check, and 66px below the fold where nobody
+    // would ever scroll to find it. A history store that quietly fills the disk
+    // and a backfill the user cannot see are both things you only find out
+    // about too late, so the numbers go where they cannot be missed.
+    el('h4', { text: 'History', style: { marginBottom: '10px' } }),
+    // Measured, never estimated. "Fully self-contained" is worth very little
+    // if it quietly fills the disk, so the real numbers are on screen.
+    el('div', { class: 'history-stats' }, historyStatRow()),
+    el('p', {
+      class: 'hint',
+      style: { marginTop: '-6px', marginBottom: '18px' },
+      text: 'Every message you open is kept on this computer, so history survives a restart and search reaches further back than Beeper can. Beeper still decides what exists.',
+    }),
+
+    // First of the rest on purpose. The modal body scrolls, and this section sat 240px below
     // the fold at a 115% text scale - which is the same as not existing: it was
     // in the DOM, every check that asked whether it was *there* passed, and
     // nobody could find it. The only way back after deleting a message on this
@@ -431,16 +447,6 @@ export async function openSettings() {
         text: 'Deleting on this device removes a message from this app only; Beeper keeps it. Clearing the list makes those messages visible again.',
       }),
     ),
-
-    el('h4', { text: 'History', style: { margin: '20px 0 10px' } }),
-    // Measured, never estimated. "Fully self-contained" is worth very little
-    // if it quietly fills the disk, so the real numbers are on screen.
-    el('div', { class: 'history-stats' }, historyStatRow()),
-    el('p', {
-      class: 'hint',
-      style: { marginTop: '-6px', marginBottom: '16px' },
-      text: 'Every message you have opened is kept on this computer, so history survives a restart and search reaches further back than Beeper can. Beeper still decides what exists.',
-    }),
 
     el('h4', { text: 'Assistant', style: { margin: '20px 0 10px' } }),
     el('div', { class: 'form-row' }, el('label', { text: 'Provider' }), provider),

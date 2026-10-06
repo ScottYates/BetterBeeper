@@ -33,6 +33,10 @@ function buildHarness() {
     // Strip every script, whatever it is, so nothing tries to boot the app.
     .replace(/<script\b[\s\S]*?<\/script>/gi, '')
     // The page is served from tools/, so the app's relative asset paths move.
+    // styles.css is linked bare in index.html rather than as "./styles.css",
+    // and missing it means the harness lays out with no CSS at all - which
+    // makes every "is it below the fold" question answer itself optimistically.
+    .replace(/href="styles\.css"/g, 'href="../src/renderer/styles.css"')
     .replace(/(href|src)="\.\//g, '$1="../src/renderer/');
   fs.writeFileSync(HARNESS, stripped);
 }
@@ -256,7 +260,10 @@ async function main() {
         });
 
       await M.openSettings();
-      await new Promise((r) => setTimeout(r, 150));
+      // Long enough for the measured figures to arrive. The section starts as a
+      // one-line placeholder and grows into four rows, so measuring too early
+      // measures the short version - which is exactly the version that fits.
+      await new Promise((r) => setTimeout(r, 700));
       const stats = document.querySelector('.history-stats-inner');
       const statsText = stats ? stats.textContent : '';
 
@@ -288,7 +295,15 @@ async function main() {
 
   await app.whenReady();
   harnessGuard(app, { label: 'check:historyrender' });
-  const win = new BrowserWindow({ show: false, width: 1100, height: 780 });
+  // Sized to the real app's content area, measured from the running build:
+// 845 x 656 CSS px at 115% text scale. A wider window wraps the rows less and
+// makes the modal shorter, so a generous harness answers "is it below the fold"
+// optimistically - which is how this very section shipped 14px out of view the
+// first time.
+const win = new BrowserWindow({ show: false, width: 845, height: 656 });
+// Text scale is a Chromium zoom (see applyTextScale in main.js), and the
+// user's setting is 115%.
+win.webContents.setZoomFactor(1.15);
   await win.loadFile(HARNESS);
   const result = await win.webContents.executeJavaScript(harness, true);
   app.exit(0);
