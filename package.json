@@ -1,7 +1,7 @@
 {
   "name": "better-beeper",
   "productName": "Better Beeper",
-  "version": "1.9.4",
+  "version": "1.9.5",
   "private": true,
   "description": "A desktop chat client for Beeper, built on the Beeper Desktop REST API, WebSocket events, and the built-in MCP server.",
   "main": "src/main/main.js",
