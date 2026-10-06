@@ -27,6 +27,9 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+// Pure node, like everything else here, so this module still unit-tests
+// without Electron. It has no dependency on the store, so no cycle.
+const mediaPath = require('./media-path');
 
 /**
  * Extensions worth keeping on the filename, so the folder is readable rather
@@ -175,10 +178,22 @@ function openMediaStore(userDataDir) {
     },
 
     /** A file:// URL the renderer can load through the beeper-file protocol. */
+    /**
+     * A URL the renderer can load, or null.
+     *
+     * beeper-file:, not file://. The thumbnail happened to render either way,
+     * because a file:// document may load a file:// image - which is exactly
+     * why this went unnoticed - but the image viewer only accepts the schemes
+     * the main process hands it, and a file:// URL is not one of them. Every
+     * click on a stored photo was dropped.
+     *
+     * Built by the same helper every other local file uses, so there is one
+     * spelling of a local URL in this app rather than two.
+     */
     urlFor(hash) {
       const full = this.pathFor(hash);
       if (!full) return null;
-      return 'file:///' + full.replace(/\\/g, '/').replace(/^\/+/, '');
+      return mediaPath.toRendererUrl(full);
     },
 
     count() {

@@ -23,6 +23,7 @@ const { openMessageStore } = require(path.join(__dirname, '..', 'src', 'main', '
 const { openMediaStore } = require(path.join(__dirname, '..', 'src', 'main', 'media-store.js'));
 const { createHistorySync } = require(path.join(__dirname, '..', 'src', 'main', 'history-sync.js'));
 const { makeTitleRecorder } = require(path.join(__dirname, '..', 'src', 'main', 'chat-titles.js'));
+const mediaPath = require(path.join(__dirname, '..', 'src', 'main', 'media-path.js'));
 
 const cases = [];
 
@@ -386,6 +387,61 @@ add('a stored file keeps a readable extension', () => {
   return (r && r.relativePath.endsWith('.mp4') === true) || ('got ' + JSON.stringify(r));
 });
 
+// ---------------------------------------------------------------------------
+// The URL the store hands the renderer
+//
+// The image viewer silently refuses any URL whose scheme is not on the
+// allowlist in ipc.js, which is why a stored photo appeared in the thread but
+// did nothing when clicked: the thumbnail loaded, the click was dropped.
+//
+// The allowlist is read out of ipc.js rather than copied here, so this check
+// follows the source instead of drifting away from it.
+// ---------------------------------------------------------------------------
+
+const ipcSource = fs.readFileSync(
+  path.join(__dirname, '..', 'src', 'main', 'ipc.js'),
+  'utf8',
+);
+const viewerAllow = /!\/\^\(([^)]*)\):\/i\.test\(srcURL\)/.exec(ipcSource);
+
+add('the viewer allowlist in ipc.js can be found to read', () =>
+  Boolean(viewerAllow && viewerAllow[1]) || 'the images:openViewer allowlist moved');
+
+add('a stored image is given a URL the viewer will accept', () => {
+  if (!viewerAllow) return 'cannot check: the allowlist was not found';
+  const allow = new RegExp('^(' + viewerAllow[1] + '):', 'i');
+  const r = media.adopt(mediaSrc, { fileName: 'viewme.png', mimeType: 'image/png' });
+  const url = media.urlFor(r.hash);
+  if (!url) return 'no URL at all for a stored file';
+  return allow.test(url)
+    || ('the viewer would refuse ' + url.slice(0, 40) + '... (allowlist: ' + viewerAllow[1] + ')');
+});
+
+add('a stored image URL points back at the file we stored', () => {
+  // The right scheme is not enough on its own: the URL also has to decode to
+  // the real bytes on disk. Asserting both together is what makes this a test
+  // rather than a string comparison.
+  const r = media.adopt(mediaSrc, { fileName: 'a name with spaces.png', mimeType: 'image/png' });
+  const url = media.urlFor(r.hash);
+  const stored = media.pathFor(r.hash);
+  if (!/^beeper-file:/i.test(url)) return 'not a beeper-file URL: ' + url.slice(0, 34) + '...';
+  const back = mediaPath.beeperFilePath(url);
+  if (!back) return 'could not read a path back out of ' + url.slice(0, 40);
+  return path.resolve(back) === path.resolve(stored)
+    || ('points at ' + back + ' rather than ' + stored);
+});
+
+add('a stored image URL is built the same way as every other local file', () => {
+  // One spelling of a local URL, not two. Two is how a file:// URL ended up
+  // being handed to a viewer that only accepts beeper-file:.
+  const r = media.adopt(mediaSrc, { fileName: 'same.png', mimeType: 'image/png' });
+  const fromStore = media.urlFor(r.hash);
+  const fromHelper = mediaPath.toRendererUrl(media.pathFor(r.hash));
+  return fromStore === fromHelper
+    || ('store says ' + fromStore.slice(0, 34) + ', helper says ' + fromHelper.slice(0, 34));
+});
+
+// ---------------------------------------------------------------------------
 // The policy that every attachment is kept, whatever it is. This started life
 // as "images only", which quietly meant a video sent in March was gone by June.
 add('every kind of attachment is pulled down, not just pictures', () => {
