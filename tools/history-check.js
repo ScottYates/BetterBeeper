@@ -475,7 +475,37 @@ async function queueCases() {
       || ('after first pass: ' + copiedOnFirstPass + ', after tail refresh: ' + hash);
   });
 
-  await addAsync('a full walk stores every page exactly once', async () => {
+  add('a sweep walks the whole store in insertion order', () => {
+  store.upsertMessages('qs1', [msg('z1', 1000, 'one'), msg('z2', 2000, 'two')], {});
+  store.upsertMessages('qs2', [msg('z3', 3000, 'three')], {});
+
+  // Walk it the way the startup sweep does: in pages, following rowid.
+  let cursor = 0;
+  const seen = [];
+  for (let i = 0; i < 200; i++) {
+    const page = store.afterRowid(cursor, 50);
+    if (!page.length) break;
+    cursor = page[page.length - 1].rowid;
+    for (const row of page) seen.push(row.message.id);
+  }
+
+  const at = (id) => seen.indexOf(id);
+  const ordered = at('z1') >= 0 && at('z2') > at('z1') && at('z3') > at('z2');
+  const once = seen.filter((id) => id === 'z1' || id === 'z2' || id === 'z3').length === 3;
+  return (ordered && once) || ('z1 at ' + at('z1') + ', z2 at ' + at('z2') + ', z3 at ' + at('z3') + ' of ' + seen.length);
+});
+
+add('the sweep returns the whole payload, not a summary', () => {
+  store.upsertMessages('qs3', [msg('z9', 9000, 'sweep me', { attachments: [{ id: 'p1', fileName: 'a.png' }] })], {});
+  const rows = store.afterRowid(0, 500).filter((r) => r.message.id === 'z9');
+  const att = rows[0]?.message?.attachments?.[0];
+  return (att && att.fileName === 'a.png') || ('lost the attachment: ' + JSON.stringify(rows[0]?.message?.attachments));
+});
+
+add('sweeping an empty store yields nothing rather than looping', () =>
+  Array.isArray(store.afterRowid(999999, 10)) || 'did not return an array');
+
+await addAsync('a full walk stores every page exactly once', async () => {
     const beeper = fakeBeeper(4);
     const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
     sync.request('q1');

@@ -308,6 +308,18 @@ function openMessageStore(userDataDir, { onRecover } = {}) {
       );
     },
 
+    /** A page of stored messages in insertion order, for background sweeps. */
+    afterRowid(rowid, limit = 200) {
+      return db.prepare(`
+        SELECT rowid, chatID, payload FROM messages
+         WHERE rowid > ? ORDER BY rowid ASC LIMIT ?
+      `).all(rowid ?? 0, limit).map((r) => ({
+        rowid: Number(r.rowid),
+        chatID: String(r.chatID),
+        message: safeParse(r.payload),
+      }));
+    },
+
     /** Ids we already hold for a chat, used to seed a resumed backfill. */
     knownIds(chatID) {
       return db.prepare('SELECT id FROM messages WHERE chatID = ? AND gone = 0').all(chatID)

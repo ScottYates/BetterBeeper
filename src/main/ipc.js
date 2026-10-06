@@ -154,6 +154,14 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
 
   ipcMain.handle('app:refreshDiscovery', handle(async () => ok(await discover())));
 
+  // Deferred until after discovery so the first chat can open immediately
+  // rather than queueing behind a disk sweep.
+  setTimeout(() => {
+    adoptStoredMedia().catch((err) => {
+      console.warn('[history] could not copy stored attachments:', err.message);
+    });
+  }, 5000);
+
   // ---- updates ---------------------------------------------------------
   //
   // The renderer asks, the user decides, and the download streams progress back
@@ -415,6 +423,52 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     },
     onProgress: (payload) => broadcast('history:progress', payload),
   });
+
+  /**
+   * Copy attachments for messages that were stored before media adoption
+   * existed.
+   *
+   * Those chats are marked complete and will never be re-walked, so without
+   * this their pictures stay exactly as temporary as Beeper's cache while
+   * everything around them is local. No network is needed: the payload already
+   * holds the source path, so this is a disk copy rather than another fetch.
+   */
+  async function adoptStoredMedia() {
+    let cursor = 0;
+    let adopted = 0;
+    for (let batch = 0; batch < 500; batch++) {
+      const rows = historyStore.afterRowid(cursor, 200);
+      if (!rows.length) break;
+      cursor = rows[rows.length - 1].rowid;
+
+      for (const row of rows) {
+        const message = row.message;
+        const attachments = message?.attachments || [];
+        if (!attachments.length) continue;
+        let changed = false;
+        for (const attachment of attachments) {
+          if (!attachment || attachment.localMediaHash) continue;
+          try {
+            const source = await assetSource.locateAttachment(attachment, (input) => client.downloadAsset(input));
+            if (!source.localPath) continue;
+            const got = historyMedia.adopt(source.localPath, attachment.fileName);
+            if (got) {
+              attachment.localMediaPath = got.relativePath;
+              attachment.localMediaHash = got.hash;
+              changed = true;
+              adopted++;
+            }
+          } catch {
+            /* the file is gone; the message stays */
+          }
+        }
+        if (changed) historyStore.upsertMessages(row.chatID, [message]);
+      }
+      broadcast('history:progress', { state: 'adopting', adopted });
+    }
+    if (adopted) console.log(`[history] copied ${adopted} stored attachments into the local media folder`);
+    return adopted;
+  }
 
   ipcMain.handle('history:open', handle(async (chatID) => {
     if (!chatID) return ok({ messages: [], complete: false });
