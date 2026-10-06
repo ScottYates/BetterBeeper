@@ -14,6 +14,9 @@ const auth = require('./auth');
 const { runAssistantTurn } = require('./assistant');
 const mediaPath = require('./media-path');
 const assetSource = require('./asset-source');
+const { openMessageStore, OPEN_PAGE } = require('./message-store');
+const { openMediaStore } = require('./media-store');
+const { createHistorySync } = require('./history-sync');
 const updater = require('./updater');
 
 /** Wraps a handler so the renderer always gets {ok, data|error}. */
@@ -360,6 +363,81 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     return ok(res.filePaths.map((p) => ({ path: p, name: path.basename(p) })));
   }));
 
+  // ---- local history ----------------------------------------------------
+  //
+  // Beeper serves a page of at most 20 messages and forgets nothing, but it
+  // only replays what it still holds, and it replays it on every visit. This
+  // is the local record that stops that mattering: opened instantly, survives a
+  // restart, and readable while Beeper is unreachable.
+
+  const historyStore = openMessageStore(userData, {
+    onRecover: ({ reason }) => {
+      // Say so plainly. A store that silently starts empty is indistinguishable
+      // from having lost the history, and this one really was lost.
+      console.warn('[history] the local database was unreadable and has been reset:', reason);
+      broadcast('history:progress', { state: 'recovered', error: reason });
+    },
+  });
+  const historyMedia = openMediaStore(userData);
+  const historySync = createHistorySync({
+    store: historyStore,
+    media: historyMedia,
+    fetchPage: (chatID, params) => client.listMessages(chatID, params),
+    onProgress: (payload) => broadcast('history:progress', payload),
+  });
+
+  ipcMain.handle('history:open', handle(async (chatID) => {
+    if (!chatID) return ok({ messages: [], complete: false });
+    const status = historyStore.chatStatus(chatID);
+    const messages = historyStore.newest(chatID, OPEN_PAGE);
+    // Ask the queue to bring this chat up to date in the background. A chat
+    // already complete costs one page; an unfinished one resumes where it
+    // stopped.
+    historySync.request(chatID);
+    const sync = historySync.status();
+    return ok({
+      messages,
+      complete: status.complete,
+      syncing: sync.running === chatID,
+      queued: sync.queued.includes(chatID),
+    });
+  }));
+
+  ipcMain.handle('history:page', handle(async (chatID, { before, limit } = {}) => {
+    if (!chatID) return ok({ messages: [], hasMore: false, complete: false });
+    const messages = historyStore.page(chatID, { before, limit: limit || 50 });
+    const status = historyStore.chatStatus(chatID);
+    return ok({
+      messages,
+      // While the chat is still being filled in there may be more coming even
+      // when this page came back short, so the thread keeps its spinner up.
+      hasMore: status.complete ? messages.length > 0 : true,
+      complete: status.complete,
+    });
+  }));
+
+  // Live messages are written straight through, so the store stays current
+  // without waiting for the next backfill.
+  ipcMain.handle('history:upsert', handle(async (chatID, message) => {
+    if (!chatID || !message?.id) return ok({ written: 0 });
+    return ok({ written: historyStore.upsertMessages(chatID, [message]) });
+  }));
+
+  ipcMain.handle('history:search', handle(async (query, opts) =>
+    ok(historyStore.search(query, opts || {}))));
+
+  ipcMain.handle('history:status', handle(async () => {
+    const stats = historyStore.stats();
+    const sync = historySync.status();
+    return ok({
+      ...stats,
+      running: sync.running,
+      queued: sync.queued.length,
+      mediaBytes: historyMedia.totalBytes(),
+      mediaCount: historyMedia.count(),
+    });
+  }));
+
   ipcMain.handle('shell:openExternal', handle(async (url) => {
     if (!/^https?:\/\//i.test(String(url))) throw new Error('Refusing to open non-http URL.');
     await shell.openExternal(String(url));
@@ -442,7 +520,25 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     return ok(await mcp.callTool(name, args || {}));
   }));
 
-  return { client, events, mcp, settings, tokenStore, discover, startLive, stopLive, endpoints };
+  return {
+    client,
+    events,
+    mcp,
+    settings,
+    tokenStore,
+    discover,
+    startLive,
+    stopLive,
+    endpoints,
+    historyStore,
+    historySync,
+    // Closed on quit so WAL is checkpointed rather than left to be replayed on
+    // the next launch.
+    closeHistory: () => {
+      historySync.stop();
+      historyStore.close();
+    },
+  };
 }
 
 module.exports = { register };

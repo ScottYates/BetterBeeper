@@ -204,23 +204,26 @@ export async function openChat(chatID, { focusMessageID: focusId } = {}) {
   const listEl = $('#message-list');
   listEl.append(el('div', { class: 'search-loading', text: 'Loading messages…' }));
 
-  // Latest page.
-  const page = await call(() => api.messages.list(chatID, { limit: 50 }), {
-    context: 'messages',
+  // Read from the local store, not from Beeper. This returns before any
+  // network call finishes, so a chat opens instantly and still opens when
+  // Beeper is unreachable; the main process brings it up to date behind us.
+  const page = await call(() => api.history.open(chatID), {
+    context: 'history',
+    fallback: { messages: [], complete: false, failed: true },
   });
 
   clear(listEl);
   renderedNodes.clear();
 
-  if (!page) {
+  if (page?.failed) {
     listEl.append(
       el('div', { class: 'empty-note', text: 'Could not load messages. Beeper may still be indexing this chat.' }),
     );
     return;
   }
 
-  hasMore = Boolean(page.hasMore);
-  const items = page.items || [];
+  hasMore = !page?.complete;
+  const items = page?.messages || [];
   for (const message of items) {
     upsertMessage(chatID, message);
   }
@@ -1314,15 +1317,17 @@ async function loadOlder() {
   const listEl = $('#message-list');
   const previousHeight = listEl.scrollHeight;
 
+  // Read from disk. No cursor round trip, so scrolling back stays instant
+  // however far back it goes, and works with Beeper switched off.
   const page = await call(
-    () => api.messages.list(chatID, { cursor: oldest.id, direction: 'before', limit: 50 }),
+    () => api.history.page(chatID, { before: oldest.id, limit: 50 }),
     { context: 'older messages' },
   );
   loadingOlder = false;
   if (!page || state.activeChatID !== chatID) return;
 
   hasMore = Boolean(page.hasMore);
-  for (const message of page.items || []) upsertMessage(chatID, message);
+  for (const message of page.messages || []) upsertMessage(chatID, message);
 
   onMessageUpserted();
   // Keep the viewport anchored to the message the user was looking at.
@@ -1575,7 +1580,14 @@ export function applyMessageEvent(frame) {
   const chatID = frame.chatID;
   if (chatID !== state.activeChatID) return;
   for (const entry of frame.entries || []) {
-    if (entry?.id) upsertMessage(chatID, { ...entry, chatID });
+    if (!entry?.id) continue;
+    const message = { ...entry, chatID };
+    upsertMessage(chatID, message);
+    // Write straight through to the local store. Without this the store only
+    // learns about a message when some backfill happens to walk over it, and
+    // the newest message in the app would be the one most likely to be missing
+    // from its own history.
+    api.history.upsert(chatID, message);
   }
 }
 

@@ -96,6 +96,14 @@ export const api = {
     subscribe: (chatIDs) => window.beeper.events.subscribe(chatIDs),
   },
 
+  history: {
+    open: (chatID) => window.beeper.history.open(chatID),
+    page: (chatID, opts) => window.beeper.history.page(chatID, opts),
+    upsert: (chatID, message) => window.beeper.history.upsert(chatID, message),
+    search: (query, opts) => window.beeper.history.search(query, opts),
+    status: () => window.beeper.history.status(),
+  },
+
   assistant: {
     tools: () => window.beeper.assistant.tools(),
     ask: (history) => window.beeper.assistant.ask(history),

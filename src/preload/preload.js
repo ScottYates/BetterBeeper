@@ -76,6 +76,13 @@ contextBridge.exposeInMainWorld('beeper', {
     openViewer: (srcURL, alt) => invoke('images:openViewer', { srcURL, alt }),
     copy: (srcURL) => invoke('images:copy', { srcURL }),
   },
+  history: {
+    open: (chatID) => invoke('history:open', chatID),
+    page: (chatID, opts) => invoke('history:page', chatID, opts),
+    upsert: (chatID, message) => invoke('history:upsert', chatID, message),
+    search: (query, opts) => invoke('history:search', query, opts),
+    status: () => invoke('history:status'),
+  },
   events: {
     subscribe: (chatIDs) => invoke('events:subscribe', chatIDs),
     status: () => invoke('events:status'),
@@ -106,5 +113,6 @@ contextBridge.exposeInMainWorld('beeper', {
     menuNewChat: (fn) => on('menu:newChat', fn),
     menuFocusSearch: (fn) => on('menu:focusSearch', fn),
     menuToggleAssistant: (fn) => on('menu:toggleAssistant', fn),
+    historyProgress: (fn) => on('history:progress', fn),
   },
 });

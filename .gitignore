@@ -26,3 +26,6 @@ Thumbs.db
 # negation below unreachable.
 /docs/*
 !/docs/network-glyphs.png
+
+# Generated from index.html by check:historyrender on every run
+/tools/.history-render-harness.html

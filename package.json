@@ -44,7 +44,8 @@
     "check:actions": "electron tools/actions-check.js",
     "check:installer": "node tools/installer-check.js",
     "check:media": "electron tools/media-check.js",
-    "check:history": "node tools/history-check.js"
+    "check:history": "node tools/history-check.js",
+    "check:historyrender": "electron tools/history-render-check.js"
   },
   "devDependencies": {
     "electron": "^38.0.0",
