@@ -319,10 +319,7 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
 
     // Our own copy first, if the history store has one. It is the only copy
     // that is guaranteed to still be there after Beeper evicts its cache.
-    const mine = historyMedia.urlFor(
-      attachment.localMediaHash || '',
-      (attachment.fileName || '').includes('.') ? '.' + String(attachment.fileName).split('.').pop() : '',
-    );
+    const mine = historyMedia.urlFor(attachment.localMediaHash || '');
     if (mine) return { ...attachment, url: mine, ownedByUs: true };
 
     const local = mediaPath.localMediaUrl(attachment.srcURL || attachment.imgURL);
@@ -409,7 +406,7 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
           try {
             const source = await assetSource.locateAttachment(attachment, (input) => client.downloadAsset(input));
             if (!source.localPath) continue;
-            const adopted = historyMedia.adopt(source.localPath, attachment.fileName);
+            const adopted = historyMedia.adopt(source.localPath, attachment);
             if (adopted) {
               attachment.localMediaPath = adopted.relativePath;
               attachment.localMediaHash = adopted.hash;
@@ -451,7 +448,7 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
           try {
             const source = await assetSource.locateAttachment(attachment, (input) => client.downloadAsset(input));
             if (!source.localPath) continue;
-            const got = historyMedia.adopt(source.localPath, attachment.fileName);
+            const got = historyMedia.adopt(source.localPath, attachment);
             if (got) {
               attachment.localMediaPath = got.relativePath;
               attachment.localMediaHash = got.hash;

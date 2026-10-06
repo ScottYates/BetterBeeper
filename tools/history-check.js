@@ -247,44 +247,196 @@ const media = openMediaStore(dir);
 const mediaSrc = path.join(dir, 'source.bin');
 fs.writeFileSync(mediaSrc, 'media bytes that must survive');
 
-add('adopt copies the file under a hash name', () => {
-  const r = media.adopt(mediaSrc, 'holiday photo.jpg');
+add('an image is stored', () => {
+  const r = media.adopt(mediaSrc, { fileName: 'holiday photo.jpg', mimeType: 'image/jpeg' });
+  return r && /^[0-9a-f]{64}$/.test(r.hash) || ('got ' + JSON.stringify(r));
+});
+
+// Everything gets pulled down. The bytes live on disk either way, never in the
+// database, so the only question is whether this machine has a copy at all -
+// and a video or a document scrolled past months ago will not still be in a
+// cache Beeper is free to evict.
+for (const [label, attachment] of [
+  ['a video', { fileName: 'clip.mp4', mimeType: 'video/mp4' }],
+  ['a video with no mime type', { fileName: 'holiday.mov' }],
+  ['an archive', { fileName: 'backup.zip', mimeType: 'application/x-zip-compressed' }],
+  ['a pdf', { fileName: 'report.pdf', mimeType: 'application/pdf' }],
+  ['audio', { fileName: 'song.mp3', mimeType: 'audio/mpeg' }],
+]) {
+  add(`${label} is pulled down to the filesystem`, () => {
+    const r = media.adopt(mediaSrc, attachment);
+    return (r && /^[0-9a-f]{64}$/.test(r.hash)) || ('refused: ' + JSON.stringify(r));
+  });
+}
+
+add('a stored file keeps a readable extension', () => {
+  // Distinct bytes, or content addressing does its job and returns the copy
+  // some earlier test made from the same content under a different name.
+  const unique = path.join(dir, 'unique-clip.mp4');
+  fs.writeFileSync(unique, 'bytes no other test has written');
+  const r = media.adopt(unique, { fileName: 'clip.mp4', mimeType: 'video/mp4' });
+  return (r && r.relativePath.endsWith('.mp4') === true) || ('got ' + JSON.stringify(r));
+});
+
+// The policy that every attachment is kept, whatever it is. This started life
+// as "images only", which quietly meant a video sent in March was gone by June.
+add('every kind of attachment is pulled down, not just pictures', () => {
+  const kinds = [
+    ['holiday.png', 'image/png'],
+    ['clip.mp4', 'video/mp4'],
+    ['song.mp3', 'audio/mpeg'],
+    ['report.pdf', 'application/pdf'],
+    ['backup.zip', 'application/zip'],
+    ['notes.txt', 'text/plain'],
+    ['data.json', 'application/json'],
+    ['no-extension-at-all', 'application/octet-stream'],
+    ['weird.name.with.dots.v2.tar.gz', 'application/gzip'],
+  ];
+  const skipped = [];
+  for (const [i, [fileName, mimeType]] of kinds.entries()) {
+    // Distinct bytes per kind, so content addressing returns this one's copy.
+    const src = path.join(dir, `kind-${i}.bin`);
+    fs.writeFileSync(src, `unique bytes for ${fileName}`);
+    if (!media.adopt(src, { fileName, mimeType })) skipped.push(fileName);
+  }
+  return skipped.length === 0 || 'never stored: ' + skipped.join(', ');
+});
+
+add('an attachment with no name at all is still stored', () => {
+  const src = path.join(dir, 'nameless.bin');
+  fs.writeFileSync(src, 'bytes from an attachment with no filename');
+  const r = media.adopt(src, { mimeType: 'application/octet-stream' });
+  return (r && media.has(r.hash)) || 'refused an attachment that has no name';
+});
+
+// The claim that matters: the database holds records, the filesystem holds
+// bytes. If that ever quietly reversed, every attachment would end up inline
+// in SQLite and the store would balloon by the size of the media itself.
+add('attachment bytes never end up inside the database', () => {
+  const big = Buffer.alloc(700 * 1024, 0x41);
+  const bigPath = path.join(dir, 'big.bin');
+  fs.writeFileSync(bigPath, big);
+
+  // A megabyte-scale attachment, stored.
+  const adopted = media.adopt(bigPath, { fileName: 'clip.mp4', mimeType: 'video/mp4' });
+  if (!adopted) return 'the file was not stored at all';
+
+  store.upsertMessages('qbig', [{
+    id: 'big1',
+    timestamp: 1000,
+    text: 'a large attachment',
+    senderID: 's',
+    senderName: 'x',
+    // What the store records: a reference, not the bytes.
+    attachments: [{ id: 'b1', fileName: 'clip.mp4', mimeType: 'video/mp4', fileSize: big.length, localMediaHash: adopted.hash }],
+  }], {});
+
+  const row = store.page('qbig', { limit: 1 })[0];
+  const payloadBytes = Buffer.byteLength(JSON.stringify(row));
+  return payloadBytes < 2000
+    || ('a single record grew to ' + payloadBytes + ' bytes - the bytes are going into the database');
+});
+
+add('the database stays small next to the media it points at', () => {
+  const dbBytes = fs.statSync(store.file).size;
+  const mediaBytes = media.totalBytes();
+  // The database is records; the media folder is bytes. They live in different
+  // places and stay that way.
+  return dbBytes < 8 * 1024 * 1024 || ('the database is already ' + Math.round(dbBytes / 1024 / 1024) + ' MB');
+});
+
+add('an image with no mime type is stored by its extension', () => {
+  const r = media.adopt(mediaSrc, { fileName: 'holiday.png' });
+  return Boolean(r && r.hash) || 'refused a .png with no mime type';
+});
+
+add('adopting still copies the file under a hash name', () => {
+  const r = media.adopt(mediaSrc, { fileName: 'holiday photo.jpg', mimeType: 'image/jpeg' });
   return r && /^[0-9a-f]{64}$/.test(r.hash) || ('got ' + JSON.stringify(r));
 });
 
 add('the stored name never contains the message filename', () => {
-  const r = media.adopt(mediaSrc, '../../evil.jpg');
+  const r = media.adopt(mediaSrc, { fileName: '../../evil.jpg', mimeType: 'image/jpeg' });
   return r && !r.relativePath.includes('..') && !r.relativePath.includes('evil')
     || ('got ' + JSON.stringify(r));
 });
 
 add('a traversal filename cannot escape the media root', () => {
-  const r = media.adopt(mediaSrc, '../../evil.jpg');
+  const r = media.adopt(mediaSrc, { fileName: '../../evil.jpg', mimeType: 'image/jpeg' });
   const full = path.join(media.root, r.relativePath);
   return path.resolve(full).startsWith(path.resolve(media.root)) || ('wrote to ' + full);
 });
 
 add('the same bytes are stored once', () => {
-  const a = media.adopt(mediaSrc, 'one.jpg');
-  const b = media.adopt(mediaSrc, 'two.jpg');
+  const a = media.adopt(mediaSrc, { fileName: 'one.mp4', mimeType: 'video/mp4' });
+  const b = media.adopt(mediaSrc, { fileName: 'two.mp4', mimeType: 'video/mp4' });
   return a.hash === b.hash || 'stored twice';
 });
 
 add('a missing source returns null rather than throwing', () =>
-  media.adopt(path.join(dir, 'nope.bin'), 'x.jpg') === null || 'threw');
-
-add('an extension that is not worth keeping is dropped', () => {
-  const r = media.adopt(mediaSrc, 'thing.bin');
-  return !r.relativePath.endsWith('.bin') || ('kept ' + r.relativePath);
-});
+  media.adopt(path.join(dir, 'nope.bin'), { fileName: 'x.jpg', mimeType: 'image/jpeg' }) === null || 'threw');
 
 add('stored media can be found again by its hash', () => {
-  const r = media.adopt(mediaSrc, 'again.jpg');
-  return media.has(r.hash) && Boolean(media.pathFor(r.hash, '.jpg')) || 'lost the file';
+  const r = media.adopt(mediaSrc, { fileName: 'again.mp4', mimeType: 'video/mp4' });
+  return media.has(r.hash) && Boolean(media.pathFor(r.hash)) || 'lost the file';
 });
 
 add('media reports its own size', () =>
   media.totalBytes() > 0 && media.count() > 0 || 'reported nothing');
+
+// The extension is a convenience, not part of a file's identity, so a lookup
+// by hash has to work without the caller knowing how the name was spelled.
+add('a stored file is found by hash alone, whatever it is named', () => {
+  const r = media.adopt(mediaSrc, { fileName: 'clip.mp4', mimeType: 'video/mp4' });
+  const name = path.basename(r.relativePath);
+  if (name === r.hash) return 'stored with no extension to find it by';
+  return media.pathFor(r.hash) === path.join(media.root, r.relativePath)
+    || 'could not find ' + name + ' from its hash alone';
+});
+
+add('a file named with an extension still resolves to the same bytes', () => {
+  const r = media.adopt(mediaSrc, { fileName: 'clip.mp4', mimeType: 'video/mp4' });
+  const found = media.pathFor(r.hash);
+  return found && fs.readFileSync(found).equals(fs.readFileSync(mediaSrc))
+    || 'resolved to something else';
+});
+
+add('a hash that was never stored resolves to nothing', () =>
+  media.pathFor('0'.repeat(64)) === null || 'invented a file');
+
+add('a name that merely starts with the hash is not a match', () => {
+  // A hash that was never adopted, so there is no correct answer to find by
+  // accident. An interrupted copy leaves a ".part" beside the target, and
+  // neither it nor a stray backup is the attachment.
+  const orphan = 'a1b2c3d4'.repeat(8);
+  const dir = path.join(media.root, orphan.slice(0, 2));
+  fs.mkdirSync(dir, { recursive: true });
+  const junk = ['.part', '.bak', '.tmp'].map((tail) => path.join(dir, orphan + tail));
+  for (const j of junk) fs.writeFileSync(j, 'not the attachment');
+  try {
+    const found = media.pathFor(orphan);
+    if (!found) return true;
+    if (junk.includes(found)) return 'returned ' + path.basename(found);
+    return 'invented ' + path.basename(found);
+  } finally {
+    for (const j of junk) fs.unlinkSync(j);
+    fs.rmdirSync(dir);
+  }
+});
+
+add('the real file still wins when junk sits beside it', () => {
+  const r = media.adopt(mediaSrc, { fileName: 'clip.mp4', mimeType: 'video/mp4' });
+  const real = path.join(media.root, r.relativePath);
+  const junk = [real + '.part', real + '.bak'];
+  for (const j of junk) fs.writeFileSync(j, 'not the attachment');
+  try {
+    const found = media.pathFor(r.hash);
+    if (junk.includes(found)) return 'returned ' + path.basename(found);
+    return found && fs.readFileSync(found).equals(fs.readFileSync(mediaSrc)) ? true : 'returned the wrong bytes';
+  } finally {
+    for (const j of junk) fs.unlinkSync(j);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // The backfill queue
@@ -358,7 +510,7 @@ async function queueCases() {
         for (const m of items) {
           for (const att of m.attachments || []) {
             if (att.localMediaHash) continue;
-            const adopted = media.adopt(att.srcURL, att.fileName);
+            const adopted = media.adopt(att.srcURL, att);
             if (adopted) {
               att.localMediaPath = adopted.relativePath;
               att.localMediaHash = adopted.hash;
@@ -382,7 +534,7 @@ async function queueCases() {
 
   await addAsync('a stored attachment resolves back to our own copy', async () => {
     const stored = store.page('qp', { limit: 5 })[0];
-    const url = media.urlFor(stored.attachments[0].localMediaHash, '.png');
+    const url = media.urlFor(stored.attachments[0].localMediaHash);
     return Boolean(url) && url.includes(stored.attachments[0].localMediaHash)
       || ('no url for our own copy: ' + url);
   });
@@ -404,7 +556,7 @@ async function queueCases() {
       adoptMedia: async (items) => {
         for (const m of items) {
           for (const att of m.attachments || []) {
-            const adopted = media.adopt(att.srcURL, att.fileName);
+            const adopted = media.adopt(att.srcURL, att);
             if (adopted) att.localMediaHash = adopted.hash;
           }
         }
@@ -453,7 +605,7 @@ async function queueCases() {
       adoptMedia: async (items) => {
         for (const m of items) {
           for (const att of m.attachments || []) {
-            const adopted = media.adopt(att.srcURL, att.fileName);
+            const adopted = media.adopt(att.srcURL, att);
             if (adopted) att.localMediaHash = adopted.hash;
           }
         }
