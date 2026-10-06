@@ -34,15 +34,21 @@ CREATE TABLE IF NOT EXISTS chats (
   complete       INTEGER DEFAULT 0
 );
 
+-- Keyed on (chatID, id), not id alone. Beeper message ids are normally
+  -- globally unique, but a cache keyed only on id silently loses a message if
+  -- that ever stops being true: the second chat's row overwrites the first
+  -- chat's, and one of them then renders short. Every read is already scoped
+  -- by chatID, so the composite key costs nothing and cannot lose one.
 CREATE TABLE IF NOT EXISTS messages (
-  id         TEXT PRIMARY KEY,
+  id         TEXT NOT NULL,
   chatID     TEXT NOT NULL,
   ts         INTEGER NOT NULL,
   senderID   TEXT,
   senderName TEXT,
   text       TEXT,
   payload    TEXT NOT NULL,
-  gone       INTEGER DEFAULT 0
+  gone       INTEGER DEFAULT 0,
+  PRIMARY KEY (chatID, id)
 );
 
 CREATE INDEX IF NOT EXISTS messages_chat_ts ON messages(chatID, ts, id);
@@ -155,7 +161,7 @@ function openMessageStore(userDataDir, { onRecover } = {}) {
       const put = db.prepare(`
         INSERT INTO messages (id, chatID, ts, senderID, senderName, text, payload, gone)
         VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-        ON CONFLICT(id) DO UPDATE SET
+        ON CONFLICT(chatID, id) DO UPDATE SET
           ts         = excluded.ts,
           senderID   = excluded.senderID,
           senderName = excluded.senderName,
@@ -205,11 +211,11 @@ function openMessageStore(userDataDir, { onRecover } = {}) {
       const rows = db.prepare(`
             SELECT m.payload FROM messages m
              WHERE m.chatID = ? AND m.gone = 0
-               AND ( m.ts < (SELECT ts FROM messages WHERE id = ?)
-                  OR (m.ts = (SELECT ts FROM messages WHERE id = ?) AND m.id < ?) )
+               AND ( m.ts < (SELECT ts FROM messages WHERE chatID = ? AND id = ?)
+                  OR (m.ts = (SELECT ts FROM messages WHERE chatID = ? AND id = ?) AND m.id < ?) )
              ORDER BY m.ts DESC, m.id DESC
              LIMIT ?
-          `).all(chatID, before, before, before, limit);
+          `).all(chatID, chatID, before, chatID, before, before, limit);
 
       return rows.map((row) => safeParse(row.payload)).reverse();
     },
@@ -239,12 +245,12 @@ function openMessageStore(userDataDir, { onRecover } = {}) {
 
       if (complete) {
         const rows = db.prepare('SELECT id FROM messages WHERE chatID = ? AND gone = 0').all(chatID);
-        const gone = db.prepare('UPDATE messages SET gone = 1 WHERE id = ?');
+        const gone = db.prepare('UPDATE messages SET gone = 1 WHERE chatID = ? AND id = ?');
         db.exec('BEGIN');
         try {
           for (const row of rows) {
             if (!seen.has(String(row.id))) {
-              gone.run(row.id);
+              gone.run(chatID, row.id);
               tombstoned++;
             }
           }
@@ -300,6 +306,21 @@ function openMessageStore(userDataDir, { onRecover } = {}) {
       return Boolean(
         db.prepare('SELECT complete FROM chats WHERE chatID = ?').get(chatID)?.complete,
       );
+    },
+
+    /** Ids we already hold for a chat, used to seed a resumed backfill. */
+    knownIds(chatID) {
+      return db.prepare('SELECT id FROM messages WHERE chatID = ? AND gone = 0').all(chatID)
+        .map((row) => String(row.id));
+    },
+
+    /** The oldest thing we hold for a chat, which is where a resume starts. */
+    oldestMessage(chatID) {
+      const row = db.prepare(`
+        SELECT id, ts FROM messages WHERE chatID = ? AND gone = 0
+         ORDER BY ts ASC, id ASC LIMIT 1
+      `).get(chatID);
+      return row ? { id: String(row.id), ts: Number(row.ts) } : null;
     },
 
     /**

@@ -20,6 +20,8 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { openMessageStore } = require(path.join(__dirname, '..', 'src', 'main', 'message-store.js'));
+const { openMediaStore } = require(path.join(__dirname, '..', 'src', 'main', 'media-store.js'));
+const { createHistorySync } = require(path.join(__dirname, '..', 'src', 'main', 'history-sync.js'));
 
 const cases = [];
 
@@ -104,6 +106,23 @@ add('writing the same id twice updates rather than duplicating', () => {
 
 add('an empty chat pages to nothing rather than throwing', () =>
   store.page('nope', { limit: 10 }).length === 0 || 'threw');
+
+add('the same message id in two chats is kept in both', () => {
+  // Caught by building the backfill queue: a fake Beeper that handed the same
+  // ids to two chats lost one of them entirely, because the key was id alone.
+  store.upsertMessages('dupA', [msg('same-id', 1000, 'in A')], {});
+  store.upsertMessages('dupB', [msg('same-id', 1000, 'in B')], {});
+  const a = store.page('dupA', { limit: 5 }).map((m) => m.text).join(',');
+  const b = store.page('dupB', { limit: 5 }).map((m) => m.text).join(',');
+  return (a === 'in A' && b === 'in B') || ('A=' + a + ' B=' + b);
+});
+
+add('tombstoning one chat leaves the other with the same id alone', () => {
+  store.upsertMessages('dupA', [msg('same-id', 1000, 'in A')], {});
+  store.reconcile('dupA', [], { complete: true, oldestTs: 1000 });
+  const b = store.page('dupB', { limit: 5 }).map((m) => m.text).join(',');
+  return b === 'in B' || ('B=' + b);
+});
 
 add('a message with no timestamp still stores', () => {
   store.upsertMessages('c1b', [msg('notime', undefined, 'no clock')], {});
@@ -220,13 +239,278 @@ add('stats report a file on disk', () => {
   return s.messages > 0 && s.bytes > 0 || JSON.stringify(s);
 });
 
-store.close();
-fs.rmSync(dir, { recursive: true, force: true });
+// ---------------------------------------------------------------------------
+// Media
+// ---------------------------------------------------------------------------
 
-let failed = 0;
-for (const [name, ok, detail] of cases) {
-  if (!ok) failed++;
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : `  [${detail}]`}`);
+const media = openMediaStore(dir);
+const mediaSrc = path.join(dir, 'source.bin');
+fs.writeFileSync(mediaSrc, 'media bytes that must survive');
+
+add('adopt copies the file under a hash name', () => {
+  const r = media.adopt(mediaSrc, 'holiday photo.jpg');
+  return r && /^[0-9a-f]{64}$/.test(r.hash) || ('got ' + JSON.stringify(r));
+});
+
+add('the stored name never contains the message filename', () => {
+  const r = media.adopt(mediaSrc, '../../evil.jpg');
+  return r && !r.relativePath.includes('..') && !r.relativePath.includes('evil')
+    || ('got ' + JSON.stringify(r));
+});
+
+add('a traversal filename cannot escape the media root', () => {
+  const r = media.adopt(mediaSrc, '../../evil.jpg');
+  const full = path.join(media.root, r.relativePath);
+  return path.resolve(full).startsWith(path.resolve(media.root)) || ('wrote to ' + full);
+});
+
+add('the same bytes are stored once', () => {
+  const a = media.adopt(mediaSrc, 'one.jpg');
+  const b = media.adopt(mediaSrc, 'two.jpg');
+  return a.hash === b.hash || 'stored twice';
+});
+
+add('a missing source returns null rather than throwing', () =>
+  media.adopt(path.join(dir, 'nope.bin'), 'x.jpg') === null || 'threw');
+
+add('an extension that is not worth keeping is dropped', () => {
+  const r = media.adopt(mediaSrc, 'thing.bin');
+  return !r.relativePath.endsWith('.bin') || ('kept ' + r.relativePath);
+});
+
+add('stored media can be found again by its hash', () => {
+  const r = media.adopt(mediaSrc, 'again.jpg');
+  return media.has(r.hash) && Boolean(media.pathFor(r.hash, '.jpg')) || 'lost the file';
+});
+
+add('media reports its own size', () =>
+  media.totalBytes() > 0 && media.count() > 0 || 'reported nothing');
+
+// ---------------------------------------------------------------------------
+// The backfill queue
+// ---------------------------------------------------------------------------
+
+/**
+ * A fake Beeper serving a fixed number of 20-message pages, then the end.
+ *
+ * Page counts are per chat and ids are unique per chat, because a single
+ * global counter quietly makes this fake lie: it hands out the same message
+ * ids to every chat, which is not something Beeper does, and it hides bugs
+ * where one chat's write lands in another.
+ */
+function fakeBeeper(pages, { failAfter = null, onPage } = {}) {
+  const calls = [];
+  const perChat = new Map();
+  return {
+    calls,
+    fetchPage: async (chatID, { cursor, direction, limit } = {}) => {
+      const index = (perChat.get(chatID) || 0) + 1;
+      perChat.set(chatID, index);
+      calls.push({ chatID, cursor, direction, limit });
+      if (typeof onPage === 'function') onPage(calls.length);
+      if (failAfter !== null && calls.length > failAfter) throw new Error('bridge is down');
+
+      const items = [];
+      const base = (pages - index) * 1000;
+      for (let i = 0; i < 20; i++) {
+        items.push(msg(`${chatID}-p${index}-${i}`, base - i, `page ${index} message ${i}`));
+      }
+      const last = items.length - 1;
+      return {
+        items,
+        hasMore: index < pages,
+        oldestCursor: items[last].id,
+      };
+    },
+  };
 }
-console.log(`\n${cases.length - failed}/${cases.length} checks passed`);
-process.exit(failed ? 1 : 0);
+
+async function queueCases() {
+  await addAsync('a full walk stores every page exactly once', async () => {
+    const beeper = fakeBeeper(4);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('q1');
+    await sync.drain();
+    const s = store.chatStatus('q1');
+    return s.count === 80 || ('stored ' + s.count + ' of 80');
+  });
+
+  await addAsync('a completed chat is marked complete', async () => {
+    const beeper = fakeBeeper(3);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('q2');
+    await sync.drain();
+    return store.isComplete('q2') || 'never completed';
+  });
+
+  await addAsync('a complete chat is never walked again', async () => {
+    // The whole point. Re-opening a completed chat must cost one page.
+    const beeper = fakeBeeper(3);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('q3');
+    await sync.drain();
+    const before = beeper.calls.length;
+
+    sync.request('q3');
+    await sync.drain();
+    const after = beeper.calls.length - before;
+    return after === 1 || ('re-walked a complete chat in ' + after + ' calls');
+  });
+
+  await addAsync('a resumed run does not tombstone the earlier run', async () => {
+    // First run is cut short, second finishes. The messages the first run
+    // stored are real and must survive the second run's reconcile.
+    const pages = [
+      fakeBeeper(3),
+      null,
+    ];
+    pages[1] = {
+      calls: [],
+      fetchPage: async (chatID, { cursor, direction } = {}) => {
+        pages[1].calls.push({ cursor, direction });
+        if (direction === 'before') {
+          return { items: [msg('tail', 500, 'from the interrupted run')], hasMore: false, oldestCursor: 'tail' };
+        }
+        return { items: [], hasMore: false };
+      },
+    };
+
+    const sync1 = createHistorySync({ store, media, fetchPage: pages[0].fetchPage, onProgress: () => {}, maxPages: 1 });
+    sync1.request('q4');
+    await sync1.drain();
+    const afterFirst = store.chatStatus('q4').count;
+    if (store.isComplete('q4')) return 'the capped run marked the chat complete';
+
+    const sync2 = createHistorySync({ store, media, fetchPage: pages[1].fetchPage, onProgress: () => {} });
+    sync2.request('q4');
+    await sync2.drain();
+
+    const s = store.chatStatus('q4');
+    return (afterFirst === 20 && s.count === 21)
+      || ('after first ' + afterFirst + ', after resume ' + s.count);
+  });
+
+  await addAsync('a failed fetch leaves the chat incomplete', async () => {
+    const beeper = fakeBeeper(5, { failAfter: 1 });
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('q5');
+    await sync.drain();
+    return store.isComplete('q5') === false || 'a failed run marked the chat complete';
+  });
+
+  await addAsync('a failed fetch tombstones nothing', async () => {
+    store.upsertMessages('q6', [msg('safe1', 1000, 'safe'), msg('safe2', 2000, 'also safe')], {});
+    let calls = 0;
+    const sync = createHistorySync({
+      store,
+      media,
+      fetchPage: async () => {
+        calls++;
+        throw new Error('bridge is down');
+      },
+      onProgress: () => {},
+    });
+    sync.request('q6');
+    await sync.drain();
+    const drawn = store.page('q6', { limit: 10 }).map((m) => m.id).join(',');
+    return drawn === 'safe1,safe2' || ('got ' + drawn);
+  });
+
+  await addAsync('a repeated cursor does not loop forever', async () => {
+    let calls = 0;
+    const sync = createHistorySync({
+      store,
+      media,
+      fetchPage: async () => {
+        calls++;
+        // Always claims more, but never moves the cursor.
+        return { items: [msg('s' + calls, 1000 + calls, 'stuck')], hasMore: true, oldestCursor: 's1' };
+      },
+      onProgress: () => {},
+    });
+    sync.request('q7');
+    await sync.drain();
+    return calls <= 3 || ('looped ' + calls + ' times on a cursor that never moved');
+  });
+
+  await addAsync('a stalled cursor does not mark the chat complete', async () => {
+    return store.isComplete('q7') === false || 'a stalled run claimed to be complete';
+  });
+
+  await addAsync('requesting the same chat twice queues it once', async () => {
+    const beeper = fakeBeeper(2);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('q8');
+    sync.request('q8');
+    sync.request('q8');
+    await sync.drain();
+    return beeper.calls.length <= 2 || ('fetched ' + beeper.calls.length + ' pages for one chat');
+  });
+
+  await addAsync('progress is reported so the UI can show it', async () => {
+    const states = [];
+    const beeper = fakeBeeper(2);
+    const sync = createHistorySync({
+      store,
+      media,
+      fetchPage: beeper.fetchPage,
+      onProgress: (p) => states.push(p.state),
+    });
+    sync.request('q9');
+    await sync.drain();
+    const wanted = ['started', 'done'];
+    return wanted.every((s) => states.includes(s)) || ('got ' + JSON.stringify(states));
+  });
+
+  await addAsync('two chats are both walked', async () => {
+    const beeper = fakeBeeper(2);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('qa');
+    sync.request('qb');
+    await sync.drain();
+    return (store.chatStatus('qa').count === 40 && store.chatStatus('qb').count === 40)
+      || ('qa ' + store.chatStatus('qa').count + ', qb ' + store.chatStatus('qb').count);
+  });
+
+  await addAsync('stop() stops starting new work', async () => {
+    const beeper = fakeBeeper(2);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.stop();
+    const accepted = sync.request('qc');
+    await sync.drain();
+    return accepted === false && beeper.calls.length === 0 || 'kept working after stop';
+  });
+}
+
+async function addAsync(name, fn) {
+  let ok = false;
+  let detail = '';
+  try {
+    const r = await fn();
+    ok = r === true;
+    if (r !== true) detail = String(r);
+  } catch (e) {
+    ok = false;
+    detail = e.message;
+  }
+  cases.push([name, ok, detail]);
+}
+
+async function main() {
+  await queueCases();
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  let failed = 0;
+  for (const [name, ok, detail] of cases) {
+    if (!ok) failed++;
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : `  [${detail}]`}`);
+  }
+  console.log(`\n${cases.length - failed}/${cases.length} checks passed`);
+  process.exit(failed ? 1 : 0);
+}
+
+main().catch((err) => {
+  console.error('failed:', err.message);
+  process.exit(1);
+});
