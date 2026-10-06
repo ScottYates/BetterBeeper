@@ -424,6 +424,57 @@ async function queueCases() {
     return store.chatStatus('qnomed').count === 40 || 'broke without adoptMedia';
   });
 
+  await addAsync('a complete chat adopts media in its newest page too', async () => {
+    // Otherwise a photo arriving in an already-finished chat is never copied,
+    // and the store stays exactly as temporary as Beeper's cache for the one
+    // case that matters most: the newest message.
+    //
+    // The picture appears only on the second fetch, so it can only have been
+    // copied by the tail refresh. Letting the first backfill see it too would
+    // make the check pass whether or not refreshTail adopts anything.
+    const pic = path.join(dir, 'fresh.png');
+    fs.writeFileSync(pic, 'a newly arrived picture');
+    let call = 0;
+
+    const sync = createHistorySync({
+      store,
+      media,
+      fetchPage: async (chatID) => {
+        call++;
+        const fresh = call > 1;
+        const items = [{
+          id: 'tail-pic',
+          timestamp: 1000 + call,
+          text: fresh ? 'here is a picture' : 'plain text',
+          attachments: fresh ? [{ id: 'n1', fileName: 'fresh.png', srcURL: pic }] : [],
+        }];
+        return { items, hasMore: false, oldestCursor: items[0].id };
+      },
+      adoptMedia: async (items) => {
+        for (const m of items) {
+          for (const att of m.attachments || []) {
+            const adopted = media.adopt(att.srcURL, att.fileName);
+            if (adopted) att.localMediaHash = adopted.hash;
+          }
+        }
+      },
+      onProgress: () => {},
+    });
+
+    sync.request('qm1');
+    await sync.drain();
+    const afterFirst = store.page('qm1', { limit: 5 })[0];
+    const copiedOnFirstPass = Boolean((afterFirst.attachments || [])[0]?.localMediaHash);
+
+    sync.request('qm1');
+    await sync.drain();
+    const afterSecond = store.page('qm1', { limit: 5 })[0];
+    const hash = (afterSecond.attachments || [])[0]?.localMediaHash;
+
+    return (!copiedOnFirstPass && /^[0-9a-f]{64}$/.test(hash || ''))
+      || ('after first pass: ' + copiedOnFirstPass + ', after tail refresh: ' + hash);
+  });
+
   await addAsync('a full walk stores every page exactly once', async () => {
     const beeper = fakeBeeper(4);
     const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });

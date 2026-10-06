@@ -58,6 +58,12 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
     const page = await fetchPage(chatID, { limit: PAGE_LIMIT });
     const items = page?.items || [];
     if (items.length) {
+      // Same reason as the walk: a photo arriving in a chat we have already
+      // finished backfilling still has to get copied, or it is only as
+      // permanent as Beeper's cache.
+      if (typeof adoptMedia === 'function') {
+        await adoptMedia(items);
+      }
       store.upsertMessages(chatID, items, { oldestTs: oldestOf(items) });
     }
     store.setLastSynced(chatID, Date.now());
