@@ -226,6 +226,112 @@ function fixture(name, contents) {
   return filePath;
 }
 
+// ---------------------------------------------------------------------------
+// Which files beeper-file: is allowed to read.
+//
+// The renderer cannot see the disk, so the scheme is a capability: whatever it
+// serves, the renderer can draw. Unbounded, one crafted URL reads a file the
+// user never shared, and nothing in the UI would look wrong.
+//
+// These run against real directories in a real temp tree rather than mock
+// strings, because the three ways out of a directory - `..`, a sibling that
+// shares the root's name, and a link inside the root - are filesystem
+// behaviours, not string comparisons.
+// ---------------------------------------------------------------------------
+
+const SCOPE = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-scope-'));
+const MEDIA_ROOT = path.join(SCOPE, 'history-media');
+const OUTSIDE = path.join(SCOPE, 'outside');
+fs.mkdirSync(path.join(MEDIA_ROOT, 'ab'), { recursive: true });
+fs.mkdirSync(OUTSIDE, { recursive: true });
+
+const ALLOWED_FILE = path.join(MEDIA_ROOT, 'ab', 'photo.png');
+fs.writeFileSync(ALLOWED_FILE, 'ALLOWED-BYTES');
+const PRIVATE_FILE = path.join(OUTSIDE, 'private.txt');
+fs.writeFileSync(PRIVATE_FILE, 'NOT-FOR-THE-RENDERER');
+
+// A sibling whose name starts with the root's, which is what a naive
+// startsWith(root) accepts.
+const EVIL_SIBLING = MEDIA_ROOT + '-evil';
+fs.mkdirSync(EVIL_SIBLING, { recursive: true });
+fs.writeFileSync(path.join(EVIL_SIBLING, 'private.txt'), 'NOT-FOR-THE-RENDERER');
+
+// A directory junction pointing out of the root. Windows allows these without
+// elevation, and realpath follows them, so this is the escape that resolving
+// the path alone does not stop. A file symlink would test the same code path
+// but needs Developer Mode to create, so it is deliberately not used.
+const ESCAPE = path.join(MEDIA_ROOT, 'escape');
+fs.symlinkSync(OUTSIDE, ESCAPE, 'junction');
+
+// Before anything is registered, which is the state the module is in from load
+// until main.js calls allowMediaRoot. It has to refuse rather than wave
+// everything through: the alternative is a window where the protocol answers
+// for the whole disk.
+add('with no root registered yet, nothing is served', () => {
+  return mediaPath.isAllowedMediaPath(ALLOWED_FILE) === false
+    || 'served a file before any root was registered';
+});
+
+mediaPath.allowMediaRoot(MEDIA_ROOT);
+
+add('a file inside an allowed directory is served', () => {
+  return mediaPath.isAllowedMediaPath(ALLOWED_FILE) === true || 'refused a file it owns';
+});
+
+add('a file outside every allowed directory is refused', () => {
+  return mediaPath.isAllowedMediaPath(PRIVATE_FILE) === false || 'served a file outside the roots';
+});
+
+add('a traversal out of an allowed directory is refused', () => {
+  const sneaky = path.join(MEDIA_ROOT, '..', 'outside', 'private.txt');
+  return mediaPath.isAllowedMediaPath(sneaky) === false || '`..` walked out of the root';
+});
+
+add('a sibling directory sharing the root name is refused', () => {
+  return mediaPath.isAllowedMediaPath(path.join(EVIL_SIBLING, 'private.txt')) === false
+    || 'history-media-evil counted as history-media';
+});
+
+add('a link inside an allowed directory cannot point out of it', () => {
+  return mediaPath.isAllowedMediaPath(path.join(ESCAPE, 'private.txt')) === false
+    || 'followed a junction out of the root';
+});
+
+add('a path that does not exist is refused rather than assumed safe', () => {
+  return mediaPath.isAllowedMediaPath(path.join(MEDIA_ROOT, 'ab', 'nope.png')) === false
+    || 'invented permission for a missing file';
+});
+
+add('a relative path is judged against the roots, not the process cwd', () => {
+  return mediaPath.isAllowedMediaPath('history-media/ab/photo.png') === false
+    || 'resolved a bare relative name into permission';
+});
+
+add('the handler refuses a path outside the roots before it stats one', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'main.js'), 'utf8');
+  const handler = /protocol\.handle\('beeper-file'[\s\S]*?\n {2}\}\);/.exec(src);
+  if (!handler) return 'the beeper-file handler was not found in main.js';
+  const guard = handler[0].indexOf('isAllowedMediaPath');
+  if (guard === -1) return 'the handler never calls isAllowedMediaPath';
+  if (handler[0].indexOf('statSync') < guard) return 'the handler stats the path before checking it';
+  if (handler[0].indexOf('createReadStream') < guard) return 'the handler streams before checking it';
+  return true;
+});
+
+add('the two directories that hold chat media are the ones registered', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'main.js'), 'utf8');
+  // To the end of the line, not to the first ")": the argument is itself a
+  // path.join(...) and stopping at its paren reads as a root that names neither
+  // directory, which is a confusing way to pass this check.
+  const roots = [...src.matchAll(/allowMediaRoot\(([^\n]*)\)/g)].map((m) => m[1]);
+  if (roots.length !== 2) return `registered ${roots.length} roots: ${roots.join(' | ')}`;
+  if (!roots.some((r) => /'history-media'/.test(r))) return 'the history-media root is not registered';
+  if (!roots.some((r) => /BeeperTexts/.test(r))) return 'the BeeperTexts root is not registered';
+  // A literal absolute path here would pin the protocol to one user's machine.
+  if (roots.some((r) => /[A-Za-z]:\\/.test(r))) return 'a root is hardcoded to an absolute path';
+  return true;
+});
+
 async function locateCases() {
   const neverCalled = () => {
     throw new Error('the bridge was consulted for a file already on disk');

@@ -17,6 +17,8 @@
  * Kept free of Electron imports so it can be unit tested with plain node.
  */
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { fileURLToPath } = require('node:url');
 
 /** Schemes the renderer may ask us to read. Everything else is refused. */
@@ -25,6 +27,98 @@ const COPYABLE_SCHEMES = /^(beeper-file|file|data):/i;
 /** True when this URL is one the renderer is allowed to have copied. */
 function isCopyableUrl(srcURL) {
   return typeof srcURL === 'string' && COPYABLE_SCHEMES.test(srcURL);
+}
+
+// ---------------------------------------------------------------------------
+// Which files beeper-file: is allowed to read.
+//
+// The renderer cannot see this file system, and it asks for bytes by URL. That
+// makes the scheme a capability: anything it will serve, the renderer can read.
+// Left unbounded it is a read primitive for the whole disk - one crafted
+// attribute in a message, or one string reaching an <img src>, and a file the
+// user never shared is being read and drawn in the window.
+//
+// So the set of readable directories is decided here, in the main process, and
+// the renderer never gets to widen it. Two directories actually hold chat
+// media, and main.js registers them at startup:
+//
+//   <userData>/history-media          our own copies, content-addressed
+//   <appData>/BeeperTexts             Beeper Desktop's own cache, which is
+//                                     where attachments and avatars live until
+//                                     we adopt them into the first one
+//
+// Everything else is refused, including paths inside the user profile that
+// look reasonable.
+// ---------------------------------------------------------------------------
+
+/** Roots registered by the main process at startup. Empty means refuse all. */
+let allowedRoots = [];
+
+/**
+ * Register a directory beeper-file: may read from.
+ *
+ * Both the plain and the symlink-resolved form are kept. Windows user profiles
+ * are routinely junctions, so the path Electron hands us and the path the
+ * filesystem reports can legitimately differ; checking against one of the two
+ * and then requiring the same for the candidate's realpath keeps that from
+ * either failing closed on ordinary files or passing through a link.
+ */
+function allowMediaRoot(root) {
+  if (typeof root !== 'string' || !root) return;
+  const resolved = path.resolve(root);
+  if (!allowedRoots.includes(resolved)) allowedRoots.push(resolved);
+  try {
+    const real = fs.realpathSync.native(resolved);
+    if (!allowedRoots.includes(real)) allowedRoots.push(real);
+  } catch {
+    // The directory does not exist yet. Beeper creates its cache lazily and we
+    // register at startup, so this is ordinary, not an error.
+  }
+}
+
+/** The registered roots, for diagnostics and for the checks to assert on. */
+function allowedMediaRoots() {
+  return allowedRoots.slice();
+}
+
+/** Windows paths compare case-insensitively; POSIX ones do not. */
+const fold = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);
+
+/**
+ * True when `candidate` is `root` itself or sits inside it.
+ *
+ * The separator is the whole point. `root + candidate.startsWith(root)` accepts
+ * C:\...\history-media-evil\secrets.txt for the root C:\...\history-media, so
+ * the comparison has to be against a root that already ends in a separator.
+ */
+function withinRoot(candidate, root) {
+  const c = fold(candidate);
+  const r = fold(root.endsWith(path.sep) ? root : root + path.sep);
+  return c === fold(root) || c.startsWith(r);
+}
+
+/**
+ * True when a local path may be served over beeper-file:.
+ *
+ * Resolved before comparison, so `..` segments cannot walk out of a root, and
+ * re-checked through realpath, so a link *inside* an allowed directory cannot
+ * point out of it. A path that cannot be resolved is refused rather than
+ * assumed safe.
+ */
+function isAllowedMediaPath(filePath) {
+  if (typeof filePath !== 'string' || !filePath) return false;
+  if (!allowedRoots.length) return false;
+
+  const resolved = path.resolve(filePath);
+  if (!allowedRoots.some((root) => withinRoot(resolved, root))) return false;
+
+  let real;
+  try {
+    real = fs.realpathSync.native(resolved);
+  } catch {
+    return false;
+  }
+  return allowedRoots.some((root) => withinRoot(real, root));
 }
 
 /**
@@ -208,4 +302,7 @@ module.exports = {
   safeFileName,
   localMediaUrl,
   toRendererUrl,
+  allowMediaRoot,
+  allowedMediaRoots,
+  isAllowedMediaPath,
 };

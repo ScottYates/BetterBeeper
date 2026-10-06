@@ -191,7 +191,9 @@ The chat UI talks to Beeper's REST API and its live WebSocket event stream. Beep
 - `contextIsolation` on, `nodeIntegration` off, strict CSP
 - Message HTML passes through a DOM-based allowlist sanitizer, so a chat cannot inject markup
 - Local media is served over a dedicated `beeper-file://` protocol instead of disabling
-  `webSecurity`
+  `webSecurity`. That scheme is scoped to the two directories that actually hold chat media -
+  this app's `history-media` folder and Beeper Desktop's own cache - and resolves `..` and
+  symlinks before deciding, so it cannot be turned into a reader for the rest of the disk
 
 ---
 

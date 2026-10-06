@@ -95,6 +95,19 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 function registerFileProtocol() {
+  // Decide up front which directories this scheme may read. The renderer asks
+  // for bytes by URL and cannot see the disk itself, so an unbounded scheme is
+  // a read primitive for the whole machine - one crafted URL and a file the
+  // user never shared is drawn in the window. Main owns this list; the renderer
+  // cannot add to it.
+  //
+  // Exactly two directories hold chat media:
+  //   history-media  our own copies, content-addressed by hash
+  //   BeeperTexts    Beeper Desktop's own cache, where attachments and avatars
+  //                  live until we adopt them into the first one
+  mediaPath.allowMediaRoot(path.join(app.getPath('userData'), 'history-media'));
+  mediaPath.allowMediaRoot(path.join(app.getPath('appData'), 'BeeperTexts'));
+
   protocol.handle('beeper-file', async (request) => {
     try {
       const url = new URL(request.url);
@@ -111,6 +124,13 @@ function registerFileProtocol() {
       if (process.platform === 'win32') {
         // C:/Users/... -> C:\Users\...
         filePath = filePath.replace(/\//g, '\\');
+      }
+
+      // Before anything touches the disk. Resolves `..` first and re-checks
+      // through realpath, so neither a traversal in the URL nor a link inside
+      // an allowed directory reaches a file outside them.
+      if (!mediaPath.isAllowedMediaPath(filePath)) {
+        return new Response('Not a permitted media path', { status: 403 });
       }
 
       const stat = fs.statSync(filePath);
