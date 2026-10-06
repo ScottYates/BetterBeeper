@@ -125,6 +125,25 @@ try {
   } finally {
     fs.rmSync(empty, { recursive: true, force: true });
   }
+
+  // --- the dev build must not write into release/ ----------------------------
+  // This is what made the locked folder matter at all. A handle from Defender
+  // or the search indexer stayed on release\win-unpacked.tmp, and every build
+  // then died with EBUSY on a file that could not be deleted or even renamed.
+  // The build going somewhere fresh is the fix; this is the guard on it.
+  const scripts = require(path.join(ROOT, 'package.json')).scripts;
+  check('npm run dist does not invoke electron-builder directly', !/\belectron-builder\b/.test(scripts.dist || ''),
+    scripts.dist);
+  check('npm run dist goes through the scratch builder', /\btools\/dist\.js\b/.test(scripts.dist || ''),
+    scripts.dist);
+
+  const distSource = fs.readFileSync(path.join(ROOT, 'tools', 'dist.js'), 'utf8');
+  check('the scratch builder passes an explicit output directory',
+    /config\.directories\.output=/.test(distSource));
+  check('the scratch builder never names release/ as its output',
+    !/directories\.output=release['"/]/.test(distSource)
+      && !/directories\.output=release\`/.test(distSource));
+  check('the scratch builder never publishes on its own', /--publish=never/.test(distSource));
 } finally {
   fs.rmSync(stage, { recursive: true, force: true });
 }

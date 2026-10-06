@@ -10,8 +10,9 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "dist": "electron-builder --win --x64 && node tools/install-update.js",
-    "dist:only": "electron-builder --win --x64",
+    "dist": "node tools/dist.js",
+    "dist:only": "node tools/dist.js --no-install",
+    "dist:scratch": "electron-builder --win --x64 --config.directories.output=release-scratch --publish=never",
     "deploy": "node tools/install-update.js",
     "deploy:check": "node tools/install-update.js --check",
     "check:notify": "node tools/notify-check.js",
