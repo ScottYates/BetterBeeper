@@ -22,6 +22,7 @@ const path = require('node:path');
 const { openMessageStore } = require(path.join(__dirname, '..', 'src', 'main', 'message-store.js'));
 const { openMediaStore } = require(path.join(__dirname, '..', 'src', 'main', 'media-store.js'));
 const { createHistorySync } = require(path.join(__dirname, '..', 'src', 'main', 'history-sync.js'));
+const { makeTitleRecorder } = require(path.join(__dirname, '..', 'src', 'main', 'chat-titles.js'));
 
 const cases = [];
 
@@ -212,6 +213,113 @@ add('search can be scoped to chats', () => {
 
 add('search scoped to an empty chat list returns nothing', () =>
   store.search('needle', { limit: 10, chatIDs: [] }).length === 0 || 'ignored the scope');
+
+// A row of messages with no name on it is close to useless when you are the one
+// looking for it, and Beeper is not always there to say what the chat was.
+//
+// These use their own chat and their own word, because earlier checks rewrite
+// the shared fixtures - a check that depends on a neighbour's data is really
+// testing that neighbour's ordering.
+add('a chat title can be recorded and read back', () => {
+  store.upsertMessages('c-titled', [msg('t1', 5000, 'a uniquely greppable sentence')], {});
+  store.setTitle('c-titled', 'Mike Fazio');
+  const hits = store.search('greppable', { limit: 10 });
+  return hits.length === 1 && hits[0].chatTitle === 'Mike Fazio'
+    || ('got ' + hits.length + ' hits, title ' + JSON.stringify(hits[0]?.chatTitle));
+});
+
+add('a chat title is not invented for a chat that has one', () => {
+  // The control for the check above: an unnamed chat must not borrow a name
+  // from a neighbouring row just because the join is loose.
+  store.upsertMessages('c-untitled', [msg('u1', 5001, 'another greppable sentence')], {});
+  const hits = store.search('greppable', { limit: 10 });
+  const untitled = hits.find((h) => h.chatID === 'c-untitled');
+  return untitled && untitled.chatTitle === null
+    || ('got ' + JSON.stringify(untitled?.chatTitle));
+});
+
+add('a chat title can be recorded for a chat with no messages', () => {
+  // setTitle upserts its own row, so naming a chat does not require having
+  // synced it first - which is the case for a chat that only ever appears in
+  // search results.
+  store.setTitle('c-never-synced', 'Never Opened');
+  return (store.chatStatus('c-never-synced').count === 0)
+    || 'naming a chat invented messages in it';
+});
+
+add('recording a title does not disturb the rest of the chat row', () => {
+  store.reconcile('c-titled', ['t1'], { complete: true, oldestTs: 1000 });
+  const before = store.chatStatus('c-titled');
+  store.setTitle('c-titled', 'Mike Fazio');
+  const after = store.chatStatus('c-titled');
+  return (after.complete === before.complete
+      && after.oldestSyncedTs === before.oldestSyncedTs
+      && after.count === before.count)
+    || 'renaming a chat reset its sync state: '
+      + JSON.stringify({ before, after });
+});
+
+// The LIKE fallback carries the same title join. It is defensive code, and
+// ftsQuery escapes every quote, so no input reaches it - there is deliberately
+// no check here claiming otherwise. It is kept correct by mirroring the query
+// above, not by a test that cannot fail.
+
+// ---------------------------------------------------------------------------
+// Recording titles
+//
+// The original bug: chats.title was a column nothing ever wrote, so every
+// synced chat was nameless. These cover the recording half, which is where it
+// actually went wrong.
+// ---------------------------------------------------------------------------
+
+const remember = makeTitleRecorder(() => store);
+
+add('titles are recorded from a chat page', () => {
+  remember({ items: [{ id: 'c-page', title: 'Mike Fazio' }, { id: 'c-other', title: 'Signal' }] });
+  return store.chatTitle('c-page') === 'Mike Fazio' || 'did not record the page title';
+});
+
+add('titles are recorded from a single chat', () => {
+  // chats:get answers with the chat itself, not a page of them.
+  remember({ id: 'c-single', title: 'Clara Stephens' });
+  return store.chatTitle('c-single') === 'Clara Stephens' || 'did not record a single chat';
+});
+
+add('titles are recorded from a bare array', () => {
+  remember([{ id: 'c-array', title: 'Array Chat' }]);
+  return store.chatTitle('c-array') === 'Array Chat' || 'did not record from an array';
+});
+
+add('a chat with no title is skipped rather than stored blank', () => {
+  remember({ items: [{ id: 'c-blank', title: '   ' }, { id: 'c-noname' }, { title: 'No id' }] });
+  return store.chatTitle('c-blank') === null && store.chatTitle('c-noname') === null
+    || 'stored an empty title';
+});
+
+add('a renamed chat keeps only its current title', () => {
+  remember({ items: [{ id: 'c-page', title: 'Mike Fazio (work)' }] });
+  return store.chatTitle('c-page') === 'Mike Fazio (work)' || 'kept the stale name';
+});
+
+add('recording titles before the store opens does not throw', () => {
+  // The chat handlers are registered before the store is opened, so this is a
+  // real ordering, not a defensive fantasy.
+  const tooEarly = makeTitleRecorder(() => null);
+  return tooEarly({ items: [{ id: 'c-early', title: 'Too Early' }] }) === 0
+    || 'claimed to have recorded something with no store';
+});
+
+add('a page with nothing usable in it is not a failure', () => {
+  const n = remember({ items: [] });
+  remember(null);
+  remember(undefined);
+  remember({});
+  return n === 0 || 'counted titles in an empty page';
+});
+
+add('the recorder reports how many titles it wrote', () =>
+  remember({ items: [{ id: 'c-count1', title: 'A' }, { id: 'c-count2', title: 'B' }] }) === 2
+    || 'miscounted');
 
 add('an unbalanced quote is searched for literally instead of throwing', () => {
   store.search('"unbalanced', { limit: 10 });

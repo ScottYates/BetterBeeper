@@ -288,6 +288,13 @@ function openMessageStore(userDataDir, { onRecover } = {}) {
       `).run(chatID, title ?? null);
     },
 
+    /** The name this machine last saw for a chat, or null. */
+    chatTitle(chatID) {
+      if (typeof chatID !== 'string' || !chatID) return null;
+      const row = db.prepare('SELECT title FROM chats WHERE chatID = ?').get(chatID);
+      return row?.title ?? null;
+    },
+
     chatStatus(chatID) {
       const row = db.prepare(`
         SELECT complete, oldestSyncedTs, lastSyncedAt FROM chats WHERE chatID = ?
@@ -356,9 +363,10 @@ function openMessageStore(userDataDir, { onRecover } = {}) {
       params.push(limit);
 
       const select = `
-        SELECT m.chatID, m.id, m.text, m.ts, m.senderID, m.senderName
+        SELECT m.chatID, m.id, m.text, m.ts, m.senderID, m.senderName, c.title AS chatTitle
           FROM messages_fts f
           JOIN messages m ON m.rowid = f.rowid
+          LEFT JOIN chats c ON c.chatID = m.chatID
          WHERE messages_fts MATCH ? AND m.gone = 0${scope}
          ORDER BY m.ts DESC
          LIMIT ?
@@ -372,10 +380,11 @@ function openMessageStore(userDataDir, { onRecover } = {}) {
         // FTS5 still refuses, fall back to a plain scan rather than returning
         // nothing: a slower answer beats no answer.
         rows = db.prepare(`
-          SELECT chatID, id, text, ts, senderID, senderName
-            FROM messages
-           WHERE gone = 0 AND text LIKE ?${scope}
-           ORDER BY ts DESC
+          SELECT m.chatID, m.id, m.text, m.ts, m.senderID, m.senderName, c.title AS chatTitle
+            FROM messages m
+            LEFT JOIN chats c ON c.chatID = m.chatID
+           WHERE m.gone = 0 AND m.text LIKE ?${scope}
+           ORDER BY m.ts DESC
            LIMIT ?
         `).all(`%${String(rawQuery).replace(/[%_]/g, '')}%`, ...(wanted || []), limit);
       }
@@ -386,6 +395,9 @@ function openMessageStore(userDataDir, { onRecover } = {}) {
         ts: row.ts,
         senderID: row.senderID,
         senderName: row.senderName,
+        // Beeper can name the chat even when this machine has never been told
+        // its title, so an absent name here is normal rather than a failure.
+        chatTitle: row.chatTitle || null,
       }));
     },
 

@@ -531,6 +531,10 @@ function renderSearchResults(query) {
 
 function messageHit(message) {
   const chat = state.chats.get(message.chatID);
+  // The local store knows the chat's name even when this session never loaded
+  // it, which is the whole reason that name is kept on disk. A hit from an
+  // old chat is close to useless if it can only be identified by its sender.
+  const chatName = chat?.title || message.chatTitle || '';
   const text = message.text || message.type || 'message';
   return el(
     'div',
@@ -538,11 +542,11 @@ function messageHit(message) {
       class: 'result-item',
       onClick: () => onSelectChat(message.chatID, { focusMessageID: message.id }),
     },
-    avatarNode(chat, chat?.title || message.senderName || '?', 'sm'),
+    avatarNode(chat, chatName || message.senderName || '?', 'sm'),
     el(
       'div',
       { class: 'result-item-body message-hit' },
-      el('div', { class: 'result-item-sub', text: `${chat?.title || 'Chat'} · ${message.senderName || 'Unknown'}` }),
+      el('div', { class: 'result-item-sub', text: `${chatName || 'Chat'} · ${message.senderName || 'Unknown'}` }),
       el('div', {
         class: 'result-item-title',
         html: highlight(text.slice(0, 140), state.searchQuery),

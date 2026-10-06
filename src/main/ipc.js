@@ -17,6 +17,7 @@ const assetSource = require('./asset-source');
 const { openMessageStore, OPEN_PAGE } = require('./message-store');
 const { openMediaStore } = require('./media-store');
 const { createHistorySync } = require('./history-sync');
+const { makeTitleRecorder } = require('./chat-titles');
 const updater = require('./updater');
 
 /** Wraps a handler so the renderer always gets {ok, data|error}. */
@@ -62,6 +63,15 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   const userData = app.getPath('userData');
   const tokenStore = new TokenStore(userData);
   const settings = new SettingsStore(userData);
+
+  // Opened further down, once the client is known to be reachable. Declared
+  // here because the chat handlers above already hold every title this app
+  // will ever be told, and the history store is the only place worth keeping
+  // them: without it, a synced chat can only be identified by its id.
+  let historyStore = null;
+
+  // Runs on the paths that already fetch chats, so it costs nothing extra.
+  const rememberChatTitles = makeTitleRecorder(() => historyStore);
 
   // Live endpoint discovery, refreshed on startup and whenever Beeper restarts.
   const endpoints = {
@@ -246,9 +256,21 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
 
   ipcMain.handle('accounts:list', handle(() => client.listAccounts()));
   ipcMain.handle('contacts:list', handle((accountID, params) => client.listContacts(accountID, params || {})));
-  ipcMain.handle('chats:list', handle((params) => client.listChats(params || {})));
-  ipcMain.handle('chats:search', handle((params) => client.searchChats(params || {})));
-  ipcMain.handle('chats:get', handle((chatID, params) => client.getChat(chatID, params || {})));
+  ipcMain.handle('chats:list', handle(async (params) => {
+    const page = await client.listChats(params || {});
+    rememberChatTitles(page);
+    return page;
+  }));
+  ipcMain.handle('chats:search', handle(async (params) => {
+    const page = await client.searchChats(params || {});
+    rememberChatTitles(page);
+    return page;
+  }));
+  ipcMain.handle('chats:get', handle(async (chatID, params) => {
+    const chat = await client.getChat(chatID, params || {});
+    rememberChatTitles([chat]);
+    return chat;
+  }));
   ipcMain.handle('chats:patch', handle((chatID, patch) => client.patchChat(chatID, patch)));
   ipcMain.handle('chats:archive', handle((chatID, archived) => client.archiveChat(chatID, archived !== false)));
   ipcMain.handle('chats:markRead', handle((chatID, messageID) => client.markChatRead(chatID, messageID)));
@@ -383,7 +405,7 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   // is the local record that stops that mattering: opened instantly, survives a
   // restart, and readable while Beeper is unreachable.
 
-  const historyStore = openMessageStore(userData, {
+  historyStore = openMessageStore(userData, {
     onRecover: ({ reason }) => {
       // Say so plainly. A store that silently starts empty is indistinguishable
       // from having lost the history, and this one really was lost.
