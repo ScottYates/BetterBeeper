@@ -47,7 +47,8 @@
     "check:history": "node tools/history-check.js",
     "check:historyrender": "electron tools/history-render-check.js",
     "media:rename": "node tools/rename-media-ext.js",
-    "check:mediafolder": "node tools/media-folder-check.js"
+    "check:mediafolder": "node tools/media-folder-check.js",
+    "media:prune": "node tools/prune-media.js"
   },
   "devDependencies": {
     "electron": "^38.0.0",
