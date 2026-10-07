@@ -138,6 +138,8 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
       const page = await fetchPage(chatID, { cursor, direction, limit: PAGE_LIMIT });
       const items = page?.items || [];
       pages++;
+      // What this page actually added, as opposed to repeated back at us.
+      let fresh = 0;
 
       if (items.length) {
         // Adopt the attachments before storing, so the path to our own copy
@@ -147,7 +149,12 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
         if (typeof adoptMedia === 'function') {
           await adoptMedia(items);
         }
-        for (const item of items) if (item?.id) seen.add(String(item.id));
+        for (const item of items) {
+          if (item?.id === undefined || item?.id === null) continue;
+          const key = String(item.id);
+          if (!seen.has(key)) fresh++;
+          seen.add(key);
+        }
         const ts = oldestOf(items);
         store.upsertMessages(chatID, items, { oldestTs: ts });
         fetched += items.length;
@@ -156,7 +163,39 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
 
       hasMore = Boolean(page?.hasMore);
       const next = page?.oldestCursor;
-      if (hasMore && (!next || next === cursor)) {
+      if (!items.length) {
+        // An empty page is the end, whatever `hasMore` says.
+        //
+        // Beeper reports hasMore for a chat whose older messages already
+        // reached us by another route - the live stream, or a walk that has
+        // already been there - so its backward cursor has nothing left to hand
+        // over and the page comes back empty. That was read as a stall, which
+        // leaves complete false, and an incomplete chat is walked in full every
+        // single time it is opened. Measured on the real store: 60 chats holding
+        // between 3 and 200 messages, none of them ever finishing, each one
+        // re-walked on every visit.
+        //
+        // Nothing is lost by calling this the end: `seen` was seeded with every
+        // message already held, so reconcile cannot tombstone anything.
+        hasMore = false;
+      } else if (!fresh) {
+        // A page of messages we already hold is not progress, and Beeper will
+        // go on serving it forever.
+        //
+        // This is the expensive one, and it is not hypothetical. Measured on the
+        // real store: a chat holding a single message - one missed call - was
+        // fetched 2,376 times, one message per page, behind a cursor that
+        // changed every time so the repeat check below never fired. Every visit
+        // burned the full 500-page cap.
+        //
+        // Stopping is certain to be right; calling it *complete* would not be.
+        // "Beeper has nothing older" and "Beeper is looping" look identical
+        // from here, and only the first one earns a permanent claim. So this
+        // leaves the chat incomplete and it is re-checked in one cheap page next
+        // time, rather than written off on evidence this weak.
+        hasMore = false;
+        stalled = true;
+      } else if (hasMore && (!next || next === cursor)) {
         // Beeper repeating itself is not progress. Treat it as the end rather
         // than looping on the same page forever.
         hasMore = false;

@@ -85,7 +85,18 @@ function onHistoryProgress(payload) {
   // Only the open chat needs drawing; the rest will be right when they open.
   if (payload.state !== 'done' || payload.chatID !== state.activeChatID) return;
 
-  call(() => api.history.open(payload.chatID), { context: 'history', fallback: null }).then((page) => {
+  // history.page, deliberately, and never history.open.
+  //
+  // history.open asks the main process to queue a sync of this chat, and using
+  // it here closes a loop that never terminates: a finished sync reports "done",
+  // this redraws from the store, that redraw asks for another sync, and so on.
+  //
+  // It did not look like a slow sync, which is why it survived so long.
+  // Measured live on a one-message chat: 9,628 pages fetched in three minutes,
+  // about 25 syncs a second, never stopping, with the thread and the jobs panel
+  // repainting throughout. Reading the store is all this needs - the sync has
+  // already finished by the time the event arrives.
+  call(() => api.history.page(payload.chatID, {}), { context: 'history', fallback: null }).then((page) => {
     if (!page || state.activeChatID !== payload.chatID) return;
     // Same rule as opening the chat: what is behind this page in the store,
     // not whether the backfill just finished.

@@ -1227,6 +1227,158 @@ async function refreshAndJobsCases() {
     clearTimeout(timer);
     return ticked === true || 'a timer never fired during a 60-page walk';
   });
+
+  await addAsync('an empty page is the end, even when Beeper claims more', async () => {
+    // Found on the real store: 60 chats held 3 to 200 messages and none of them
+    // ever finished. Beeper answers their backward page with nothing and still
+    // says hasMore, and that used to be read as a stall - so complete stayed
+    // false and every open re-walked the chat from the top.
+    const sync = createHistorySync({
+      store,
+      media,
+      fetchPage: async () => ({ items: [], hasMore: true, oldestCursor: undefined }),
+      onProgress: () => {},
+    });
+    sync.request('eq');
+    await sync.drain();
+
+    const job = sync.status().jobs.find((j) => j.chatID === 'eq');
+    if (!job) return 'no job for eq';
+    return (job.state === 'done' && job.complete === true)
+      || (`state=${job.state} complete=${job.complete}`);
+  });
+
+  await addAsync('an empty page stops the walk rather than looping on it', async () => {
+    // This has to hand back a fresh, advancing cursor every time. A fake that
+    // returns none exits through the `!next` stall branch instead, so it would
+    // pass even with the empty-page rule removed - the walk would look finished
+    // for the wrong reason. Only a cursor that keeps moving is the case that
+    // actually runs away, and it runs away to maxPages.
+    let calls = 0;
+    const sync = createHistorySync({
+      store,
+      media,
+      fetchPage: async () => {
+        calls++;
+        return { items: [], hasMore: true, oldestCursor: `walk-${calls}` };
+      },
+      onProgress: () => {},
+    });
+    sync.request('eq2');
+    await sync.drain();
+    return calls === 1 || `an empty page with a moving cursor fetched ${calls} pages`;
+  });
+
+  await addAsync('calling an empty page the end cannot tombstone what we hold', async () => {
+    // The rule above is only safe because `seen` is seeded with everything
+    // already stored. If a future change seeded it with only what this run
+    // fetched, marking such a walk complete would delete the messages that
+    // arrived by another route - the exact failure reconcile exists to prevent.
+    for (let i = 0; i < 3; i++) {
+      store.upsertMessages('et', [msg(`held-${i}`, 1000 + i, 'arrived by the live stream')]);
+    }
+    const before = store.chatStatus('et').count;
+    if (before < 3) return 'the fixture did not store its messages';
+
+    const sync = createHistorySync({
+      store,
+      media,
+      // Empty, hasMore true: the shape that used to strand the chat.
+      fetchPage: async () => ({ items: [], hasMore: true }),
+      onProgress: () => {},
+    });
+    sync.request('et');
+    await sync.drain();
+
+    const after = store.chatStatus('et').count;
+    return after === before || `an empty walk took messages with it (${before} -> ${after})`;
+  });
+
+  await addAsync('a finished chat costs one page to reopen, however long it was', async () => {
+    // The whole point of marking it finished: reopening is a single page.
+    const beeper = fakeBeeper(3);
+    const first = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    first.request('eu');
+    await first.drain();
+    if (!store.isComplete('eu')) return 'the chat did not finish after a full walk';
+
+    let calls = 0;
+    const second = createHistorySync({
+      store,
+      media,
+      fetchPage: async () => { calls++; return { items: [], hasMore: false }; },
+      onProgress: () => {},
+    });
+    second.request('eu');
+    await second.drain();
+    return calls === 1 || `reopening a finished chat took ${calls} requests`;
+  });
+
+  // The same chat, same page, a cursor that keeps changing: what Beeper actually
+  // did to a one-message chat on the real store, 2,376 times.
+  const loopingBeeper = () => {
+    let calls = 0;
+    return {
+      get calls() { return calls; },
+      fetchPage: async () => {
+        calls++;
+        return {
+          items: [msg('loop-1', 1000, 'the only message this chat has')],
+          hasMore: true,
+          oldestCursor: `cursor-${calls}`,
+        };
+      },
+    };
+  };
+
+  await addAsync('a page of messages we already hold is not progress', async () => {
+    const beeper = loopingBeeper();
+    store.upsertMessages('el', [msg('loop-1', 1000, 'the only message this chat has')]);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('el');
+    await sync.drain();
+    return beeper.calls === 1 || `a looping page was fetched ${beeper.calls} times`;
+  });
+
+  await addAsync('a chat Beeper loops on is not written off as complete', async () => {
+    // Stopping is safe; claiming completion is not. "Nothing older exists" and
+    // "Beeper is repeating itself" are indistinguishable from the walk, and only
+    // the first one deserves a permanent claim.
+    const beeper = loopingBeeper();
+    store.upsertMessages('em', [msg('loop-1', 1000, 'the only message this chat has')]);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('em');
+    await sync.drain();
+
+    return store.isComplete('em') === false
+      || 'a looping chat was marked complete';
+  });
+
+  await addAsync('stopping a loop does not tombstone what we hold', async () => {
+    const beeper = loopingBeeper();
+    store.upsertMessages('en', [msg('loop-1', 1000, 'the only message this chat has')]);
+    store.upsertMessages('en', [msg('kept-1', 900, 'arrived by the live stream')]);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('en');
+    await sync.drain();
+
+    const after = store.chatStatus('en').count;
+    return after === 2 || `stopping a loop cost messages (2 -> ${after})`;
+  });
+
+  await addAsync('a walk that really is making progress still finishes', async () => {
+    // The control for the rule above. Stopping the moment a page repeats
+    // anything would break ordinary syncing, where every page is new and the
+    // chat has to reach its beginning and be marked complete.
+    const beeper = fakeBeeper(4);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('eo');
+    await sync.drain();
+
+    if (!store.isComplete('eo')) return 'a real walk stopped early and never completed';
+    const count = store.chatStatus('eo').count;
+    return count === 80 || `a real 4-page walk stored ${count} messages, expected 80`;
+  });
 }
 
 async function addAsync(name, fn) {

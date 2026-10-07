@@ -178,7 +178,8 @@ async function main() {
       window.beeper.on = {
         historyProgress: (fn) => { progress = fn; },
       };
-      window.beeper.history.open = async () => envelope(pageTwo);
+      window.beeper.history.open = async () => { asked.historyOpen++; return envelope(pageTwo); };
+      window.beeper.history.page = async () => { asked.historyPage++; return envelope(pageTwo); };
 
       // Restart initThread so the real subscription is in place.
       T.initThread();
@@ -201,6 +202,9 @@ async function main() {
         ],
         complete: true,
       };
+      // Baseline for the check below, taken across the finished-job event only.
+      const opensBeforeDone = asked.historyOpen;
+      const pagesBeforeDone = asked.historyPage;
       progress({ chatID: 'h-empty', state: 'done' });
       await new Promise((r) => setTimeout(r, 200));
 
@@ -210,6 +214,23 @@ async function main() {
       add('messages the backfill fetched appear without reopening', () =>
         (listEl.textContent || '').includes('arrived from the backfill')
         || ('thread still shows ' + JSON.stringify((listEl.textContent || '').slice(0, 60))));
+
+      // --- reacting to a finished job must not start another one -----------
+      //
+      // Measured live: a chat that finished its sync reported "done", the thread
+      // redrew it by calling history.open, and history.open queues a sync of
+      // that chat. So every finished sync started another one. It read as "the
+      // syncs are slow" rather than as a loop: 9,628 pages fetched in three
+      // minutes, about 25 a second, on a chat holding one message, with the
+      // thread and the jobs panel repainting throughout.
+      //
+      // Redrawing must read the store, which is already written by the time the
+      // event arrives, and must not go through the entry point that schedules
+      // work.
+      add('a finished job is redrawn without asking for another sync', () =>
+        (asked.historyOpen === opensBeforeDone && asked.historyPage > pagesBeforeDone)
+        || ('history.open went ' + opensBeforeDone + ' -> ' + asked.historyOpen
+          + ', history.page ' + pagesBeforeDone + ' -> ' + asked.historyPage));
 
       // hasMore decides this, not complete. "The backfill is finished" and
       // "there is nothing older on disk" are different sentences, and only the
