@@ -307,6 +307,26 @@ async function main() {
         document.getElementById('jobs-toggle').click();
         return panel.classList.contains('is-collapsed') || 'the toggle did not collapse it';
       });
+
+      // Both of the checks below wait for a real render. The panel repaints on
+      // the next frame, so asserting straight after sending an event reads the
+      // previous frame and passes whichever way the code goes.
+      progress({ chatID: 'a1', state: 'backfilling', pages: 6, fetched: 120 });
+      await new Promise((r) => setTimeout(r, 150));
+
+      add('a collapse survives the progress events that follow it', () =>
+        panel.classList.contains('is-collapsed')
+        || 'a running sync reopened a panel the user had closed');
+
+      // And it holds when the last job finishes, which is when the old code
+      // decided to open it again.
+      progress({ chatID: 'a1', state: 'done', pages: 6, fetched: 120 });
+      await new Promise((r) => setTimeout(r, 150));
+
+      add('a collapse still holds once the work is over', () =>
+        panel.classList.contains('is-collapsed')
+        || 'the panel opened itself again when the last job finished');
+
       document.getElementById('jobs-toggle').click();
 
       progress({ chatID: 'a1', state: 'done', pages: 12, fetched: 240 });

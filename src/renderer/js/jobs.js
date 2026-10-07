@@ -51,6 +51,15 @@ const seenAt = new Map();
 let stats = null;
 let expanded = true;
 let collapsedAt = 0;
+/**
+ * What the user asked for, or null while they have not asked for anything.
+ *
+ * Once they have, the panel stops deciding for itself - in either direction.
+ * Previously any progress event from running work forced it open again, so
+ * collapsing it was impossible for as long as a sync was in flight, and a click
+ * on the caret while idle appeared to do nothing at all.
+ */
+let userExpanded = null;
 
 /**
  * Does this job deserve a row?
@@ -216,7 +225,7 @@ export function renderJobs() {
     summary.textContent = 'Chats synced';
   }
 
-  panel.classList.toggle('is-collapsed', !expanded && Boolean(active.length));
+  panel.classList.toggle('is-collapsed', !expanded);
 
   const list = $('#jobs-list');
   const shown = visible.slice(0, MAX_ROWS);
@@ -332,10 +341,14 @@ export function scheduleRender() {
 }
 
 /**
- * Collapse by itself a few seconds after the work stops, so the panel does not
- * sit there claiming to be busy. Expanded again on any new job.
+ * Open the panel for new work, and close it again a few seconds after the work
+ * stops, so it does not sit there claiming to be busy.
+ *
+ * All of that is the panel's own idea of what it should look like, and it stops
+ * as soon as the user has expressed an opinion of their own.
  */
 function maybeAutoCollapse() {
+  if (userExpanded !== null) return;
   if (visibleActiveJobs().length) {
     collapsedAt = 0;
     expanded = true;
@@ -381,7 +394,9 @@ export function initJobs() {
   const toggle = $('#jobs-toggle');
   if (toggle) {
     toggle.addEventListener('click', () => {
-      expanded = !expanded;
+      // Recorded, so the panel stops opening and closing itself from here on.
+      userExpanded = !expanded;
+      expanded = userExpanded;
       collapsedAt = expanded ? 0 : Date.now();
       renderJobs();
     });
