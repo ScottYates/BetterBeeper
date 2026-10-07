@@ -203,7 +203,11 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
       }
       cursor = next ?? cursor;
       direction = 'before';
-      note(chatID, { state: 'backfilling', pages, fetched });
+      // walked: this is a walk through history, not the one page that looking at
+      // a chat costs. The progress panel uses it to decide whether there is
+      // anything worth telling the user - a chat merely opened does a single
+      // tail page, and giving that a row made the sidebar change on every click.
+      note(chatID, { state: 'backfilling', pages, fetched, walked: true });
 
       // Every so often, stop being a loop. A 500-page walk is minutes of
       // continuous work in the process that also owns the windows.
@@ -215,7 +219,7 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
     const complete = !hasMore && !stalled && pages < maxPages;
     const result = store.reconcile(chatID, [...seen], { complete, oldestTs });
     store.setLastSynced(chatID, Date.now());
-    return { ...result, pages, fetched, complete, stalled };
+    return { ...result, pages, fetched, complete, stalled, walked: true };
   }
 
   /**

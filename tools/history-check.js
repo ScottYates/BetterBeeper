@@ -1314,6 +1314,62 @@ async function refreshAndJobsCases() {
     return calls === 1 || `reopening a finished chat took ${calls} requests`;
   });
 
+  await addAsync('a walk says it walked, and a single tail page does not', async () => {
+    // The progress panel tells a walk through history from the one page that
+    // opening a chat costs using exactly this flag. Without it, every chat the
+    // user clicked got a row in the sidebar and the list changed on every click.
+    const walkedEvents = [];
+    const beeper = fakeBeeper(2);
+    // Slow on purpose. Progress events are throttled to a few a second, so a
+    // fake that answers instantly has every running event swallowed and the
+    // running assertion below could never fail - it would pass with the flag
+    // removed from the code that sets it.
+    const slowFetch = async (chatID, params) => {
+      await new Promise((r) => setTimeout(r, 300));
+      return beeper.fetchPage(chatID, params);
+    };
+    const walking = createHistorySync({
+      store,
+      media,
+      fetchPage: slowFetch,
+      onProgress: (p) => walkedEvents.push(p),
+    });
+    walking.request('ew');
+    await walking.drain();
+
+    // While it runs, so the row appears as the walk starts rather than once it
+    // is already over.
+    const running = walkedEvents.filter((e) => e.state === 'backfilling');
+    if (!running.length) return 'the walk never reported progress';
+    if (!running.some((e) => e.walked === true)) {
+      return 'a running walk did not report that it walked';
+    }
+
+    // And once it is done, which is what decides whether a finished job is
+    // worth leaving on screen.
+    const walkDone = walkedEvents.filter((e) => e.state === 'done');
+    if (!walkDone.length) return 'the walk never finished';
+    if (!walkDone.some((e) => e.walked === true)) {
+      return 'a finished walk did not report that it walked';
+    }
+
+    // A chat already up to date is refreshed, not walked.
+    store.upsertMessages('ew2', [msg('ew2-1', 1000, 'already held')]);
+    store.setComplete('ew2', 1000);
+    const tailEvents = [];
+    const tail = createHistorySync({
+      store,
+      media,
+      fetchPage: async () => ({ items: [], hasMore: false }),
+      onProgress: (p) => tailEvents.push(p),
+    });
+    tail.request('ew2');
+    await tail.drain();
+
+    return !tailEvents.some((e) => e.walked === true)
+      || 'a single tail page reported that it walked history';
+  });
+
   // The same chat, same page, a cursor that keeps changing: what Beeper actually
   // did to a one-message chat on the real store, 2,376 times.
   const loopingBeeper = () => {

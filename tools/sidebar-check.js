@@ -118,8 +118,19 @@ async function main() {
       window.beeper.on = {
         historyProgress: (fn) => { progressListeners.push(fn); },
       };
+      // Jobs are given an updatedAt well in the past by default, because the
+      // panel will not list a job younger than MIN_VISIBLE_MS, and every check
+      // here is about work that has been going a while. The checks about that
+      // delay pass fresh: true to say otherwise.
       const progress = (payload) => {
-        for (const fn of progressListeners) fn(payload);
+        for (const fn of progressListeners) {
+          if (payload.fresh) {
+            const { fresh, ...rest } = payload;
+            fn(rest);
+          } else {
+            fn({ updatedAt: Date.now() - 5000, ...payload });
+          }
+        }
       };
 
       B.initSidebar({ onSelectChat: () => {}, onSelectView: () => {} });
@@ -431,6 +442,90 @@ async function main() {
         return before === after || 'the header avatar was rebuilt by a job event';
       });
       progress({ chatID: 'a1', state: 'done', pages: 2, fetched: 40 });
+
+      // --- work too quick to report ------------------------------------------
+      //
+      // Opening a chat queues a sync of it, and for a chat that is already up
+      // to date that is one page, over in about fifty milliseconds. Listed
+      // anyway, it put an animated bar in the sidebar for a frame and took a row
+      // away again, so moving between chats made the panel twitch - measured as
+      // six rows in and six rows out over six switches, eleven bars rebuilt.
+      const rowsOf = () => document.querySelectorAll('#jobs-list .job-row').length;
+      const rowsBefore = rowsOf();
+
+      progress({ chatID: 'quick1', state: 'queued', pages: 0, fetched: 0, fresh: true });
+      progress({ chatID: 'quick1', state: 'started', pages: 0, fetched: 0, fresh: true });
+      progress({ chatID: 'quick1', state: 'done', pages: 1, fetched: 20, fresh: true });
+      await new Promise((r) => setTimeout(r, 150));
+
+      // Asked about this job specifically, not by counting rows. The panel lists
+      // at most two finished jobs, so one appearing can evict another and leave
+      // the count identical - which would let this pass with the row right there.
+      add('a sync that finishes at once never reaches the panel', () =>
+        document.querySelector('.job-row[data-chat-id="quick1"]') === null
+        || 'a one-page sync was given a row in the sidebar');
+
+      // A one-page job that is still running has to wait out the delay.
+      progress({ chatID: 'slow1', state: 'backfilling', pages: 1, fetched: 20, fresh: true });
+      await new Promise((r) => setTimeout(r, 150));
+      const tooEarly = document.querySelector('.job-row[data-chat-id="slow1"]') !== null;
+
+      add('a one-page sync younger than the delay is not listed yet', () =>
+        !tooEarly || 'a single-page sync was given a row before the delay passed');
+
+      // A real walk declares itself, and is listed the moment it does.
+      progress({ chatID: 'walk1', state: 'backfilling', pages: 4, fetched: 80, walked: true, fresh: true });
+      await new Promise((r) => setTimeout(r, 150));
+
+      add('a walk through history is listed at once', () =>
+        document.querySelector('.job-row[data-chat-id="walk1"]') !== null
+        || 'a walk waited for the delay before showing a row');
+
+      // A failure is the one thing worth interrupting for, however new.
+      progress({ chatID: 'bad1', state: 'failed', error: 'Beeper said no', fresh: true });
+      await new Promise((r) => setTimeout(r, 150));
+
+      add('a failure is listed even when it has only just happened', () =>
+        document.querySelector('.job-row[data-chat-id="bad1"]') !== null
+        || 'a failure was hidden by the delay');
+
+      await new Promise((r) => setTimeout(r, 750));
+
+      // Asked for by chat id rather than by counting rows, because a running job
+      // replaces a finished one in the list: the count can stay the same while
+      // the row is a different one entirely. Nothing has reported for slow1
+      // since it was created above, so finding it now also shows the delayed
+      // appearance was the reveal timer and not another progress event.
+      add('a one-page sync still running is listed once the delay passes, unprompted', () =>
+        document.querySelector('.job-row[data-chat-id="slow1"]') !== null
+        || 'the delayed row never appeared');
+
+      progress({ chatID: 'slow1', state: 'done', pages: 1, fetched: 20, fresh: true });
+      progress({ chatID: 'walk1', state: 'done', pages: 4, fetched: 80, fresh: true });
+      await new Promise((r) => setTimeout(r, 150));
+
+      // --- an avatar rebuilt after the first paint ---------------------------
+      //
+      // The thread header is rebuilt on every open, and the chat list is rebuilt
+      // on local state changes. Each rebuild used to start from initials and swap
+      // in the picture a frame later, replaying that first frame in front of the
+      // user every time. A cached resolution is constructed with the image
+      // already in it.
+      const avatarSrc = 'https://beeper.example/avatar/cached-test.png';
+      const chatWithAvatar = { id: 'av1', title: 'Avatar Chat', imgURL: avatarSrc };
+
+      const firstAvatar = B.avatarNode(chatWithAvatar, 'Avatar Chat');
+      await new Promise((r) => setTimeout(r, 120));
+      add('an avatar resolves to a picture when first shown', () =>
+        firstAvatar.querySelector('img') !== null || 'the first avatar never became an image');
+
+      const rebuilt = B.avatarNode(chatWithAvatar, 'Avatar Chat');
+      add('a rebuilt avatar already holds its picture', () =>
+        rebuilt.querySelector('img') !== null
+        || 'the rebuilt avatar starts from initials, so the repaint is a flash');
+
+      add('a rebuilt avatar is not left holding the initials too', () =>
+        rebuilt.textContent.trim() === '' || 'initials are still in the rebuilt avatar');
       }
     })()
   `;

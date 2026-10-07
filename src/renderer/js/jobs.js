@@ -28,35 +28,94 @@ import { state, bus } from './state.js';
 /** Jobs worth a row of their own. The rest are counted, not listed. */
 const MAX_ROWS = 6;
 
+/**
+ * How long a single-page job has to last before it gets a row at all.
+ *
+ * Opening a chat queues a sync of it, and for a chat that is already up to date
+ * that is one page over a bridge round trip. Listed anyway, it put an animated
+ * bar in the sidebar for a moment and took a row away again, so moving between
+ * chats made the panel twitch. Measured: six chat switches, six rows inserted
+ * and six removed, bars rebuilt each time.
+ *
+ * This is the floor, not the whole rule - see worthShowing. A job can deserve a
+ * row before this has passed, if it is doing enough work to see.
+ */
+const MIN_VISIBLE_MS = 700;
+
 /** Jobs that have finished and are no longer worth showing. */
 const DONE_STATES = new Set(['done', 'failed']);
 
 const jobs = new Map();
+/** chatID -> when we first heard of it, which is when its row clock starts. */
+const seenAt = new Map();
 let stats = null;
 let expanded = true;
 let collapsedAt = 0;
+
+/**
+ * Does this job deserve a row?
+ *
+ * Two ways to qualify, because "has it lasted long enough" is the wrong question
+ * on its own. A bridge round trip is slower than any threshold worth picking -
+ * measured here at well over 700ms for a single page - so age alone would still
+ * flash the panel on every chat the user merely glanced at.
+ *
+ * The two kinds of work are told apart by `walked`, which the main process sets
+ * only when it is paging backwards through history. Opening a chat fetches the
+ * newest page and does not walk; a walk is the thing this panel exists to
+ * report. Deciding by age alone was not enough, because a bridge round trip for
+ * a single page measured well over any threshold worth picking - so every chat
+ * the user glanced at still got a row, and the list under the totals changed on
+ * every click.
+ *
+ * A failure always shows, however new: the one case where the user needs to be
+ * told something happened is the case where something went wrong.
+ *
+ * Age is otherwise measured from the job's own last report where there is one,
+ * because that is a floor on how long it has existed: a job cannot have reported
+ * a minute ago if it was created this second. That matters on a reload, where
+ * the panel is handed work that started long before this window existed and would
+ * otherwise wait out the delay as if it had just begun.
+ */
+function worthShowing(job) {
+  const since = seenAt.get(job.chatID);
+  if (since === undefined) return false;
+  if (job.walked || job.state === 'failed') return true;
+  return Date.now() - since >= MIN_VISIBLE_MS;
+}
 
 /** Anything queued, running or backfilling. */
 function activeJobs() {
   return [...jobs.values()].filter((job) => !DONE_STATES.has(job.state));
 }
 
+/** Of those, the ones worth drawing. */
+function visibleActiveJobs() {
+  return activeJobs().filter(worthShowing);
+}
+
 /**
  * The jobs worth listing.
  *
- * While something is running that is simply the active ones. When nothing is,
- * the most recent finishes stay - including the failures, which matter most
- * then. A job that failed was dropped from the panel entirely for a while, so
- * the one case where the user is told nothing happened is the case where
- * something did.
+ * While something is running that is the active ones. When nothing is, the most
+ * recent finishes stay.
+ *
+ * Failures are the exception in both halves. A sync that could not be done is
+ * the one result the user has to be told about, and burying it until the queue
+ * drains loses it exactly when there is most going on - a run of jobs where one
+ * silently failed would look like a run where they all succeeded. So failures
+ * are listed alongside whatever else is happening, and are the first thing kept
+ * when the list has to be shortened.
  */
 function listedJobs() {
-  const active = activeJobs();
-  if (active.length) return active;
-  return [...jobs.values()]
-    .filter((j) => DONE_STATES.has(j.state))
-    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-    .slice(0, 2);
+  const active = visibleActiveJobs();
+  const finished = [...jobs.values()]
+    .filter((j) => DONE_STATES.has(j.state) && worthShowing(j))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const failed = finished.filter((j) => j.state === 'failed');
+
+  if (active.length) return [...active, ...failed];
+  return [...failed, ...finished.filter((j) => j.state !== 'failed')].slice(0, 2);
 }
 
 const STATE_WORDS = {
@@ -140,7 +199,7 @@ export function renderJobs() {
   const panel = $('#jobs-panel');
   if (!panel) return;
 
-  const active = activeJobs();
+  const active = visibleActiveJobs();
   const visible = listedJobs();
   panel.hidden = false;
   panel.dataset.state = active.length ? 'busy' : 'idle';
@@ -196,6 +255,62 @@ export function renderJobs() {
   for (const id of [...rowNodes.keys()]) {
     if (!live.has(id)) rowNodes.delete(id);
   }
+
+  scheduleReveal();
+  prune();
+}
+
+/**
+ * Forget the distant past.
+ *
+ * Both maps are keyed by chat, so they would otherwise hold every chat this
+ * window has ever synced until it closes. Only recent work can ever be listed,
+ * and a job that has fallen out of that can never come back - the main process
+ * will not report it again.
+ */
+const RECENT_JOBS = 50;
+function prune() {
+  if (jobs.size > RECENT_JOBS) {
+    const finished = [...jobs.values()]
+      .filter((j) => DONE_STATES.has(j.state))
+      .sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0));
+    for (const job of finished) {
+      if (jobs.size <= RECENT_JOBS) break;
+      jobs.delete(job.chatID);
+      seenAt.delete(job.chatID);
+    }
+  }
+  for (const id of [...seenAt.keys()]) {
+    if (!jobs.has(id)) seenAt.delete(id);
+  }
+}
+
+/**
+ * Come back to redraw when the oldest running job is finally old enough to show.
+ *
+ * Without this the delay above would be permanent for anything that started
+ * just before the last render: a slow backfill would never get a row, because
+ * the only thing that would have drawn it is the event that never comes - the
+ * job is not done yet, and nothing else asks for a repaint.
+ */
+let revealTimer = null;
+function scheduleReveal() {
+  if (revealTimer !== null) return;
+  let soonest = Infinity;
+  for (const job of jobs.values()) {
+    if (DONE_STATES.has(job.state)) continue;
+    // Already worth a row on its own account; nothing to wait for.
+    if (job.walked || job.state === 'failed') continue;
+    const since = seenAt.get(job.chatID);
+    if (since === undefined) continue;
+    const remaining = MIN_VISIBLE_MS - (Date.now() - since);
+    if (remaining > 0) soonest = Math.min(soonest, remaining);
+  }
+  if (!Number.isFinite(soonest)) return;
+  revealTimer = setTimeout(() => {
+    revealTimer = null;
+    scheduleRender();
+  }, Math.ceil(soonest) + 5);
 }
 
 /**
@@ -221,7 +336,7 @@ export function scheduleRender() {
  * sit there claiming to be busy. Expanded again on any new job.
  */
 function maybeAutoCollapse() {
-  if (activeJobs().length) {
+  if (visibleActiveJobs().length) {
     collapsedAt = 0;
     expanded = true;
     return;
@@ -229,7 +344,7 @@ function maybeAutoCollapse() {
   if (collapsedAt) return;
   collapsedAt = Date.now();
   setTimeout(() => {
-    if (activeJobs().length || !collapsedAt) return;
+    if (visibleActiveJobs().length || !collapsedAt) return;
     expanded = false;
     renderJobs();
   }, 4000);
@@ -245,6 +360,11 @@ function ingest(payload) {
     updatedAt: Date.now(),
     ...payload,
   };
+  // The job's own last report is a floor on how long it has existed, which is
+  // what the row delay is measured from. See longEnough().
+  if (!seenAt.has(chatID)) {
+    seenAt.set(chatID, typeof payload.updatedAt === 'number' ? payload.updatedAt : Date.now());
+  }
   jobs.set(chatID, job);
 
   if (DONE_STATES.has(job.state)) state.syncingChats.delete(chatID);

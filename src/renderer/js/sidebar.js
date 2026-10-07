@@ -422,6 +422,38 @@ function chatItem(chat) {
 }
 
 /**
+ * Avatar URLs we have already resolved, by the source URL Beeper gave us.
+ *
+ * `assets.resolve` is asynchronous, so without this every avatar is built as a
+ * coloured circle with initials and swapped for the real picture a frame later.
+ * The first time an avatar appears that is invisible - it was never there before
+ * to compare against. But the app rebuilds avatars: the chat list on every local
+ * state change, and the thread header twice on every open, because a rebuilt
+ * one has no memory of the image it had. So that first frame was being replayed
+ * in front of the user over and over, which is a flash.
+ *
+ * Caching the answer lets a rebuilt avatar be constructed with the image already
+ * in it, so the repaint is one frame showing the same picture it showed before.
+ */
+const resolvedAvatars = new Map();
+
+/** The <img> for an avatar. Split out so both paths build it identically. */
+function avatarImg(url, lightbox) {
+  return el('img', {
+    src: url,
+    alt: '',
+    ...(lightbox
+      ? {
+          onClick: (e) => {
+            e.stopPropagation();
+            openLightbox(url);
+          },
+        }
+      : {}),
+  });
+}
+
+/**
  * An avatar for a chat, contact or message.
  *
  * `lightbox: false` leaves the click to the row. A note-to-self row needs that:
@@ -438,6 +470,16 @@ export function avatarNode(source, name, size = '', { lightbox = true } = {}) {
     text: initials(label),
   });
 
+  const known = imgURL ? resolvedAvatars.get(imgURL) : null;
+  if (known) {
+    // Already known, so the picture goes in now rather than after a round trip.
+    // This is the path every rebuilt avatar takes, which is what stops the
+    // repaint from being a flash.
+    clear(node);
+    node.append(avatarImg(known, lightbox));
+    return node;
+  }
+
   if (imgURL) {
     call(() => api.assets.resolve({ srcURL: imgURL, id: imgURL }), {
       context: 'avatar',
@@ -446,20 +488,9 @@ export function avatarNode(source, name, size = '', { lightbox = true } = {}) {
       .then((data) => data?.url || null)
       .then((url) => {
         if (!url) return;
-        const img = el('img', {
-          src: url,
-          alt: '',
-          ...(lightbox
-            ? {
-                onClick: (e) => {
-                  e.stopPropagation();
-                  openLightbox(url);
-                },
-              }
-            : {}),
-        });
+        resolvedAvatars.set(imgURL, url);
         clear(node);
-        node.append(img);
+        node.append(avatarImg(url, lightbox));
       });
   }
   return node;
