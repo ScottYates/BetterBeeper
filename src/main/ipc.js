@@ -504,7 +504,7 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
       messages,
       hasMore,
       complete: status.complete,
-      syncing: sync.running === chatID,
+      syncing: sync.runningChats.includes(chatID),
       queued: sync.queued.includes(chatID),
     });
   }));

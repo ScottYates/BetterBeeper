@@ -48,13 +48,31 @@ const PROGRESS_MIN_INTERVAL_MS = 250;
 /** Pages between yields back to the event loop. */
 const YIELD_EVERY_PAGES = 25;
 
-function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, maxPages = MAX_PAGES_PER_RUN } = {}) {
+/**
+ * How many chats are walked at the same time.
+ *
+ * A walk is almost entirely waiting: each page is one HTTP GET to the Beeper
+ * bridge, and everything else - hashing attachments, writing rows - is quick and
+ * synchronous. Running one chat at a time therefore spent nearly all of its life
+ * blocked on a socket, with the database and the rest of the app idle beside it.
+ *
+ * More than one at a time fills those waits with other chats' work. Three is
+ * chosen deliberately rather than "as many as possible": the bridge is a local
+ * endpoint on the same machine, so the win comes from latency and not from
+ * bandwidth, and past a handful there is nothing left to overlap. A single
+ * stuck request also holds one slot instead of blocking everything.
+ */
+const MAX_CONCURRENT = 3;
+
+function createHistorySync({
+  store, media, fetchPage, adoptMedia, onProgress,
+  maxPages = MAX_PAGES_PER_RUN,
+  concurrency = MAX_CONCURRENT,
+} = {}) {
   const queue = [];
   const queued = new Set();
-  let running = null;
-  // Which chat the current run belongs to. `running` alone cannot answer that,
-  // because it is cleared before the next run starts.
-  let current = null;
+  /** chatIDs currently being walked. Several at once, up to `concurrency`. */
+  const inFlight = new Set();
   let stopped = false;
 
   /**
@@ -266,37 +284,38 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
     note(chatID, { state: 'queued', kind, pages: 0, fetched: 0 }, { force: true });
   }
 
-  async function pump() {
-    if (running || stopped) return running;
-    const next = queue.shift();
-    if (!next) return null;
-
-    const { chatID, kind } = next;
+  /**
+ * Start as much queued work as there are slots for.
+ *
+ * Not async and not awaited by anyone: it starts walks and returns. Each walk
+ * puts itself back on the front of the queue when it finishes, which calls this
+ * again, so the pool keeps itself full without anything polling for it.
+ */
+function pump() {
+  if (stopped) return;
+  while (inFlight.size < concurrency && queue.length) {
+    const { chatID, kind } = queue.shift();
     queued.delete(chatID);
-    current = chatID;
+    inFlight.add(chatID);
     note(chatID, { state: 'started', kind, pages: 0, fetched: 0 }, { force: true });
-    running = runOne(chatID, kind)
+    runOne(chatID, kind)
       .catch(() => null)
-      .then((result) => {
-        running = null;
-        current = null;
+      .then(() => {
+        inFlight.delete(chatID);
         // A refresh asked for while this chat's own run was still going has not
         // been served yet. Serve it now rather than dropping it.
-        if (again.delete(chatID)) {
-          enqueue(chatID, 'refresh', true);
-        }
+        if (again.delete(chatID)) enqueue(chatID, 'refresh', true);
         // Yield between chats so the queue never monopolises the process.
         setTimeout(pump, 0);
-        return result;
       });
-    return running;
   }
+}
 
-  return {
+return {
     /** Ask for a chat to be brought fully up to date. Idempotent. */
     request(chatID) {
       if (!chatID || stopped) return false;
-      if (queued.has(chatID) || current === chatID) return false;
+      if (queued.has(chatID) || inFlight.has(chatID)) return false;
       enqueue(chatID, 'sync', false);
       pump();
       return true;
@@ -312,7 +331,7 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
      */
     refresh(chatID) {
       if (!chatID || stopped) return false;
-      if (current === chatID) {
+      if (inFlight.has(chatID)) {
         again.add(chatID);
         return true;
       }
@@ -322,18 +341,24 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
       return true;
     },
 
-    /** For tests and for shutdown: wait until the queue is empty. */
+    /** For tests and for shutdown: wait until nothing is left to do. */
     async drain() {
-      while (running || queue.length) {
-        if (running) await running;
-        else await pump();
+      while (queue.length || inFlight.size) {
+        pump();
+        // Nothing to await directly any more - the walks are in flight rather
+        // than one promise held here - so this waits on the timer instead.
+        await breathe();
       }
       return true;
     },
 
     status() {
       return {
-        running: current,
+        // How many at once. The panel asks "is anything happening", which is a
+        // question about the count and not about which chat.
+        running: inFlight.size,
+        // Which ones, for the question "is this particular chat being synced".
+        runningChats: [...inFlight],
         queued: [...queue].map((entry) => entry.chatID),
         // Newest first, so the chat being worked on is the first row shown.
         jobs: [...jobs.entries()]

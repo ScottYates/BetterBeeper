@@ -479,6 +479,18 @@ const viewerAllow = /!\/\^\(([^)]*)\):\/i\.test\(srcURL\)/.exec(ipcSource);
 add('the viewer allowlist in ipc.js can be found to read', () =>
   Boolean(viewerAllow && viewerAllow[1]) || 'the images:openViewer allowlist moved');
 
+add('history:open asks the running set, not the old single chat', () => {
+  // A source check, and deliberately narrow: the behaviour of the running set
+  // is tested in history-sync, and this guards only the line that joins them.
+  // It used to compare a chat id against one "current" value, which is now a
+  // count - a comparison that is never true, so the answer would silently have
+  // become "this chat is never syncing" for every chat.
+  const line = /syncing:\s*([^\n,]+)/.exec(ipcSource);
+  if (!line) return 'the syncing flag moved out of history:open';
+  return /runningChats\.includes\(chatID\)/.test(line[1])
+    || ('history:open computes syncing as ' + line[1].trim());
+});
+
 add('a stored image is given a URL the viewer will accept', () => {
   if (!viewerAllow) return 'cannot check: the allowlist was not found';
   const allow = new RegExp('^(' + viewerAllow[1] + '):', 'i');
@@ -1114,13 +1126,109 @@ async function refreshAndJobsCases() {
       },
     };
     const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    // More chats than there are slots, so there is a real backlog to jump.
+    // With a free slot a refresh does not have to jump anything - it starts
+    // alongside everything else, which is the better outcome and is the next
+    // check. This one is about not being left at the back of a queue.
     sync.request('rq1');
     sync.request('rq2');
-    sync.refresh('rq3');
+    sync.request('rq3');
+    sync.request('rq4');
+    sync.request('rq5');
+    sync.refresh('rq6');
     await sync.drain();
-    const first = order.indexOf('rq3');
-    return (first > -1 && first < order.indexOf('rq2'))
-      || `refresh ran at position ${first} of ${JSON.stringify(order)}`;
+
+    const mine = order.indexOf('rq6');
+    if (mine < 0) return 'the refresh never ran';
+    const behind = ['rq4', 'rq5'].filter((c) => order.indexOf(c) > -1 && order.indexOf(c) < mine);
+    return behind.length === 0
+      || `refresh ran at position ${mine} of ${JSON.stringify(order)}, behind ${behind.join(', ')}`;
+  });
+
+  await addAsync('a refresh starts at once when there is a slot free', async () => {
+    const order = [];
+    const beeper = {
+      fetchPage: async (chatID) => {
+        order.push(chatID);
+        await new Promise((r) => setTimeout(r, 10));
+        return { items: [], hasMore: false };
+      },
+    };
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('sr1');
+    sync.refresh('sr2');
+    await sync.drain();
+    return order.slice(0, 2).includes('sr2')
+      || `the refresh waited: order was ${JSON.stringify(order)}`;
+  });
+
+  await addAsync('several chats are walked at once', async () => {
+    // The point of the pool. A walk is mostly waiting on the bridge, so one at
+    // a time leaves the rest of the app idle for no reason.
+    let active = 0;
+    let peak = 0;
+    const beeper = {
+      fetchPage: async () => {
+        active++;
+        if (active > peak) peak = active;
+        await new Promise((r) => setTimeout(r, 20));
+        active--;
+        return { items: [], hasMore: false };
+      },
+    };
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('pp1');
+    sync.request('pp2');
+    sync.request('pp3');
+    sync.request('pp4');
+    await sync.drain();
+    return peak > 1 || `four chats still ran one at a time (peak ${peak})`;
+  });
+
+  await addAsync('no more chats run at once than there are slots', async () => {
+    let active = 0;
+    let peak = 0;
+    const beeper = {
+      fetchPage: async () => {
+        active++;
+        if (active > peak) peak = active;
+        await new Promise((r) => setTimeout(r, 5));
+        active--;
+        return { items: [], hasMore: false };
+      },
+    };
+    const sync = createHistorySync({
+      store, media, fetchPage: beeper.fetchPage, onProgress: () => {}, concurrency: 3,
+    });
+    for (const id of ['cc1', 'cc2', 'cc3', 'cc4', 'cc5', 'cc6', 'cc7', 'cc8']) sync.request(id);
+    await sync.drain();
+    return peak <= 3 || `eight chats reached a peak of ${peak} at once`;
+  });
+
+  await addAsync('status says how many are running, and which', async () => {
+    const seen = [];
+    let release = null;
+    const gate = new Promise((r) => { release = r; });
+    const beeper = {
+      fetchPage: async (chatID) => {
+        seen.push(sync.status().runningChats);
+        if (seen.length === 1) await gate;
+        return { items: [], hasMore: false };
+      },
+    };
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('st1');
+    sync.request('st2');
+    sync.request('st3');
+    // Let the first two start and park on the gate.
+    await new Promise((r) => setTimeout(r, 30));
+    const mid = sync.status();
+    release();
+    await sync.drain();
+
+    const bothListed = seen.some((list) => list.length >= 2);
+    return (mid.running >= 1 && Array.isArray(mid.runningChats) && bothListed)
+      || `status reported running=${mid.running} chats=${JSON.stringify(mid.runningChats)}, overlaps ${JSON.stringify(seen)}`;
   });
 
   await addAsync('status() reports every job, not just the one running', async () => {
