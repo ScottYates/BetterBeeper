@@ -548,6 +548,31 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     });
   }));
 
+  // What every background job is doing, for the progress panel.
+  //
+  // Asked for once at startup and then driven by the history:progress events,
+  // so a reload lands on the real state rather than an empty panel.
+  ipcMain.handle('history:jobs', handle(async () => {
+    const sync = historySync.status();
+    return ok({
+      jobs: sync.jobs,
+      running: sync.running,
+      queued: sync.queued.length,
+      ...historyStore.stats(),
+    });
+  }));
+
+  // The refresh button on one chat.
+  //
+  // Returns as soon as the chat is queued, never when it is finished. The walk
+  // is the long part and belongs in the background; the panel is how the user
+  // watches it. A caller that waited for the result would block the renderer on
+  // a job that is deliberately built to outlive the click.
+  ipcMain.handle('history:refresh', handle(async (chatID) => {
+    if (!chatID) return ok({ queued: false });
+    return ok({ queued: historySync.refresh(chatID) });
+  }));
+
   ipcMain.handle('shell:openExternal', handle(async (url) => {
     if (!/^https?:\/\//i.test(String(url))) throw new Error('Refusing to open non-http URL.');
     await shell.openExternal(String(url));

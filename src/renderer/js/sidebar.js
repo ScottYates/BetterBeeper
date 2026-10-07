@@ -13,6 +13,7 @@ import {
   networkMeta,
   isPinned,
   isArchived,
+  localStateVersion,
 } from './state.js';
 import { toast, openLightbox } from './ui.js';
 import { setArchived } from './chat-actions.js';
@@ -130,11 +131,53 @@ export function setView(id) {
 // Chat list
 // ---------------------------------------------------------------------------
 
+/**
+ * chatID -> { node, signature } for the row currently on screen.
+ *
+ * The list used to be cleared and rebuilt on every render, and that is visible:
+ * `clear(list)` destroys every avatar <img>, and avatarNode then repaints each
+ * one from initials only once an assets:resolve round trip comes back. Every
+ * avatar in the inbox therefore blinked out and back whenever anything
+ * re-rendered the list - a chat event, or the inbox timer - which reads as the
+ * icons flashing rather than as a repaint.
+ *
+ * It also cost one IPC call per chat with a picture, per render, on the
+ * renderer's main thread.
+ *
+ * So rows are kept and only rebuilt when what they draw changes. The signature
+ * covers every input to the row, including the local-only state (pins,
+ * archives, hidden and deleted messages) that lives outside the chat object and
+ * would otherwise leave a deleted message sitting in a preview line.
+ */
+const rows = new Map();
+
+function rowSignature(chat, kind) {
+  return [
+    kind,
+    localStateVersion(),
+    chat.id === state.activeChatID ? 1 : 0,
+    isUnread(chat) ? 1 : 0,
+    chat.unreadCount || 0,
+    chat.title || '',
+    chat.imgURL || '',
+    chat.network || '',
+    chat.lastActivity || '',
+    chat.draft?.text || '',
+    rowFlags(chat).join(''),
+    chatPreviewText(chat),
+  ].join('|');
+}
+
+/** Move `node` into position `index`, doing nothing if it is already there. */
+function place(list, node, index) {
+  if (list.children[index] === node) return false;
+  list.insertBefore(node, list.children[index] || null);
+  return true;
+}
+
 export function renderChats() {
   const list = $('#chat-list');
   if (state.searchQuery) return; // search view owns the pane
-
-  clear(list);
 
   const all = chatList().filter((chat) => {
     if (chat.mergedIntoChatID) return false; // hidden inside a merged chat
@@ -151,6 +194,8 @@ export function renderChats() {
   });
 
   if (!all.length) {
+    clear(list);
+    rows.clear();
     list.append(
       el('div', {
         class: 'empty-note',
@@ -171,7 +216,29 @@ export function renderChats() {
     return new Date(b.lastActivity || 0).getTime() - new Date(a.lastActivity || 0).getTime();
   });
 
-  for (const chat of ordered) list.append(isNoteToSelf(chat) ? noteItem(chat) : chatItem(chat));
+  const next = [];
+  for (const chat of ordered) {
+    const kind = isNoteToSelf(chat) ? 'note' : 'chat';
+    const signature = rowSignature(chat, kind);
+    const entry = rows.get(chat.id);
+    if (entry && entry.signature === signature) {
+      next.push(entry.node);
+      continue;
+    }
+    const node = kind === 'note' ? noteItem(chat) : chatItem(chat);
+    rows.set(chat.id, { node, signature });
+    next.push(node);
+  }
+
+  next.forEach((node, i) => place(list, node, i));
+
+  // Anything left over is a chat that left this view, or the empty-note.
+  while (list.children.length > next.length) list.removeChild(list.lastChild);
+
+  const live = new Set(next);
+  for (const [id, entry] of [...rows]) {
+    if (!live.has(entry.node)) rows.delete(id);
+  }
 }
 
 /** The pin, mute and draft glyphs in a row's corner. */

@@ -47,6 +47,14 @@ export const state = {
   editing: null,
   /** accountID -> 'me', for reaction "is mine" styling */
   selfUserIDs: new Set(),
+  /**
+   * chatIDs with a background job in flight right now.
+   *
+   * Drives the refresh button's busy state. A Set rather than a flag per chat
+   * because the queue runs several at once and the header only cares about the
+   * one being looked at.
+   */
+  syncingChats: new Set(),
 };
 
 export function accountFor(chatOrMessage) {
@@ -159,6 +167,11 @@ export function upsertMessage(chatID, message) {
     return String(a.sortKey || '').localeCompare(String(b.sortKey || ''));
   });
   state.messages.set(chatID, list);
+  // The inbox preview falls back to this list only when Beeper's newest message
+  // is one the user deleted here, so that is the only case where an arriving
+  // message changes what a sidebar row says. Bumping on every message would
+  // throw away the row reuse this exists for.
+  if (isMessageDeleted(state.chats.get(chatID)?.preview?.id)) bumpLocal();
   bus.emit('messages:changed', { chatID, message });
 }
 
@@ -244,6 +257,31 @@ export function upsertChat(chat) {
 // honouring isPinned for real.
 // ---------------------------------------------------------------------------
 
+/**
+ * A counter for everything the sidebar draws that is NOT part of a chat object.
+ *
+ * Pins, archives, hidden and deleted messages all live outside `state.chats`,
+ * but they change what a row shows. The sidebar reuses row elements between
+ * renders (see renderChats) and decides whether a row needs rebuilding from a
+ * signature of what it draws, so anything that changes a row without changing
+ * the chat has to be in that signature - or a hidden message would leave its
+ * text sitting in the preview line.
+ *
+ * Bumped on those changes only. Not on every message: a row whose preview is
+ * not locally deleted does not read the message list at all, and bumping per
+ * message would throw away the reuse this exists for.
+ */
+let localVersion = 0;
+
+/** The current value. Any change to local-only state moves it on. */
+export function localStateVersion() {
+  return localVersion;
+}
+
+function bumpLocal() {
+  localVersion++;
+}
+
 /** chatID -> the user's explicit choice, true or false. */
 const pinOverrides = new Map();
 
@@ -254,6 +292,7 @@ export function loadPins(map) {
       if (typeof value === 'boolean') pinOverrides.set(id, value);
     }
   }
+  bumpLocal();
 }
 
 export function pinMap() {
@@ -274,6 +313,7 @@ export function isPinned(chat) {
 export function setPinned(chatID, pinned) {
   if (!chatID) return false;
   pinOverrides.set(chatID, Boolean(pinned));
+  bumpLocal();
   return pinOverrides.get(chatID);
 }
 
@@ -304,6 +344,7 @@ export function loadArchived(ids) {
   if (Array.isArray(ids)) {
     for (const id of ids) if (typeof id === 'string' && id) archivedOverrides.add(id);
   }
+  bumpLocal();
 }
 
 export function archivedList() {
@@ -320,6 +361,7 @@ export function setArchivedOverride(chatID, archived) {
   if (!chatID) return false;
   if (archived) archivedOverrides.add(chatID);
   else archivedOverrides.delete(chatID);
+  bumpLocal();
   return archivedOverrides.has(chatID);
 }
 
@@ -349,6 +391,7 @@ export function loadHiddenMessages(ids) {
   if (Array.isArray(ids)) {
     for (const id of ids) if (typeof id === 'string' && id) hiddenMessages.add(id);
   }
+  bumpLocal();
 }
 
 export function loadDeletedMessages(ids) {
@@ -356,6 +399,7 @@ export function loadDeletedMessages(ids) {
   if (Array.isArray(ids)) {
     for (const id of ids) if (typeof id === 'string' && id) deletedMessages.add(id);
   }
+  bumpLocal();
 }
 
 export function hiddenList() {
@@ -376,6 +420,7 @@ export function deletedList() {
 export function clearDeletedMessages() {
   const count = deletedMessages.size;
   deletedMessages.clear();
+  bumpLocal();
   return count;
 }
 
@@ -391,6 +436,7 @@ export function setMessageHidden(messageID, hidden) {
   if (!messageID) return false;
   if (hidden) hiddenMessages.add(messageID);
   else hiddenMessages.delete(messageID);
+  bumpLocal();
   return hiddenMessages.has(messageID);
 }
 
@@ -403,6 +449,7 @@ export function setMessageDeleted(messageID, deleted) {
   } else {
     deletedMessages.delete(messageID);
   }
+  bumpLocal();
   return deletedMessages.has(messageID);
 }
 

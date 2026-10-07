@@ -82,6 +82,9 @@ contextBridge.exposeInMainWorld('beeper', {
     upsert: (chatID, message) => invoke('history:upsert', chatID, message),
     search: (query, opts) => invoke('history:search', query, opts),
     status: () => invoke('history:status'),
+    // Queues the work and returns. It never waits for the walk to finish.
+    refresh: (chatID) => invoke('history:refresh', chatID),
+    jobs: () => invoke('history:jobs'),
   },
   events: {
     subscribe: (chatIDs) => invoke('events:subscribe', chatIDs),

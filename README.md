@@ -178,6 +178,30 @@ The chat UI talks to Beeper's REST API and its live WebSocket event stream. Beep
 - Messages, reactions and chat state update in place. The open chat is always subscribed, even
   when it is not one of the most recent
 
+**Background work**
+
+- Every chat has a refresh button, next to mute/pin/archive in the thread header. It re-syncs that
+  one chat from Beeper, re-checking a chat the app previously believed complete - which is the way
+  back from a chat that is quietly missing its older messages
+- Refresh never blocks the window. The click queues the work and returns; the walk runs in the main
+  process and the panel is how you watch it. It also jumps the queue, because you are looking at
+  that chat
+- A panel above the sidebar footer shows every job at once: what is running, what is waiting, and
+  how many pages and messages each has done. It collapses by itself a few seconds after the work
+  stops, and still shows the totals when idle
+- Progress is announced a few times a second rather than once per page, and the walk hands the event
+  loop back every 25 pages, so a chat with thousands of messages is background work rather than a
+  stall
+- The panel is rebuilt from a single status call at startup as well as from the live events, so a
+  reload does not show an empty panel beside work that carries on regardless
+
+**Sidebar**
+
+- Rows are reused between renders. The list used to be cleared and rebuilt on every chat event and
+  on the inbox timer, which destroyed each avatar image and repainted it from initials once its
+  round trip landed - so every picture in the inbox blinked. A row is rebuilt only when something it
+  draws changes, which also removes the per-chat `assets:resolve` call that came with every repaint
+
 **MCP**
 
 - Connects to Beeper's built-in MCP server at `http://localhost:23373/v0/mcp` on startup, and reports
@@ -239,6 +263,7 @@ npm run check:paste     # a pasted image becomes an attachment; a text paste is 
 npm run check:imagecopy # which image URLs may be copied, and how they map back to bytes
 npm run check:api       # the preload surface, the IPC handlers and the renderer agree
 npm run check:settings  # a save keeps unknown settings and drops the retired ones
+npm run check:sidebar   # rows are reused rather than repainted, and jobs are visible
 npm run check:visibility # hiding and locally deleting a message, and surviving a restart
 npm run check:gif       # an animated GIF really advances frames on screen
 npm run check:gifrebuild # the thread is only rebuilt when what it draws changed

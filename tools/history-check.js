@@ -1049,6 +1049,186 @@ await addAsync('a full walk stores every page exactly once', async () => {
   });
 }
 
+/**
+ * The refresh button and the progress panel.
+ *
+ * Two claims, and the second is the one that is easy to get wrong: a refresh the
+ * user asked for has to actually re-check the chat, and the reporting has to
+ * stay small enough that a 500-page walk does not turn into 500 IPC messages.
+ */
+async function refreshAndJobsCases() {
+  /** A chat already walked to the beginning, so isComplete() is true. */
+  async function completedChat(chatID, beeper) {
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request(chatID);
+    await sync.drain();
+    sync.stop();
+    return sync;
+  }
+
+  await addAsync('a refresh re-checks a chat already believed complete', async () => {
+    const before = fakeBeeper(2);
+    await completedChat('rf', before);
+
+    const calls = [];
+    const again = {
+      fetchPage: async (chatID, params) => {
+        calls.push(params);
+        return { items: [], hasMore: false };
+      },
+    };
+    const sync = createHistorySync({ store, media, fetchPage: again.fetchPage, onProgress: () => {} });
+    sync.refresh('rf');
+    await sync.drain();
+
+    // Two fetches at least: the tail, then the walk that verifies the beginning.
+    // A refresh that short-circuits to the "complete" path would make one, and
+    // would leave a wrongly-completed chat wrong for ever.
+    return calls.length >= 2 || `refresh only made ${calls.length} request(s)`;
+  });
+
+  await addAsync('a refresh asked for twice is served twice', async () => {
+    let calls = 0;
+    const beeper = {
+      fetchPage: async () => {
+        calls++;
+        await new Promise((r) => setTimeout(r, 1));
+        return { items: [], hasMore: false };
+      },
+    };
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.refresh('rf2');
+    // While its own first pass is still in flight.
+    sync.refresh('rf2');
+    await sync.drain();
+    return calls >= 2 || `the second refresh was dropped (${calls} fetch(es))`;
+  });
+
+  await addAsync('a refresh jumps ahead of work already waiting', async () => {
+    const order = [];
+    const beeper = {
+      fetchPage: async (chatID) => {
+        order.push(chatID);
+        await new Promise((r) => setTimeout(r, 2));
+        return { items: [], hasMore: false };
+      },
+    };
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('rq1');
+    sync.request('rq2');
+    sync.refresh('rq3');
+    await sync.drain();
+    const first = order.indexOf('rq3');
+    return (first > -1 && first < order.indexOf('rq2'))
+      || `refresh ran at position ${first} of ${JSON.stringify(order)}`;
+  });
+
+  await addAsync('status() reports every job, not just the one running', async () => {
+    const beeper = {
+      fetchPage: async () => {
+        await new Promise((r) => setTimeout(r, 2));
+        return { items: [], hasMore: false };
+      },
+    };
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('j1');
+    sync.request('j2');
+    await sync.drain();
+    const jobs = sync.status().jobs;
+    const ids = jobs.map((j) => j.chatID);
+    return (ids.includes('j1') && ids.includes('j2'))
+      || `jobs listed ${JSON.stringify(ids)}`;
+  });
+
+  await addAsync('a job carries its page and message counts', async () => {
+    const beeper = fakeBeeper(3);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('jc');
+    await sync.drain();
+    const job = sync.status().jobs.find((j) => j.chatID === 'jc');
+    if (!job) return 'no job for jc';
+    return (job.pages > 0 && job.fetched > 0)
+      || `pages=${job.pages} fetched=${job.fetched}`;
+  });
+
+  await addAsync('a finished job stays visible instead of vanishing', async () => {
+    const beeper = fakeBeeper(1);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('jd');
+    await sync.drain();
+    const job = sync.status().jobs.find((j) => j.chatID === 'jd');
+    return job && job.state === 'done' || `job state is ${job && job.state}`;
+  });
+
+  await addAsync('a failed job says why', async () => {
+    const sync = createHistorySync({
+      store,
+      media,
+      fetchPage: async () => { throw new Error('Beeper said no'); },
+      onProgress: () => {},
+    });
+    sync.request('jf');
+    await sync.drain();
+    const job = sync.status().jobs.find((j) => j.chatID === 'jf');
+    return job && job.state === 'failed' && /Beeper said no/.test(job.error || '')
+      || `job is ${JSON.stringify(job)}`;
+  });
+
+  await addAsync('a long walk announces far less often than it pages', async () => {
+    // 200 pages would be 200 progress events if every page reported itself. The
+    // panel only needs a few updates a second, and every one of those events is
+    // an IPC broadcast to the renderer.
+    const PAGES = 200;
+    const beeper = fakeBeeper(PAGES);
+    const events = [];
+    const sync = createHistorySync({
+      store,
+      media,
+      fetchPage: beeper.fetchPage,
+      onProgress: (p) => events.push(p),
+    });
+    sync.request('jp');
+    await sync.drain();
+
+    const paging = events.filter((e) => e.state === 'backfilling');
+    // Coalescing cannot promise an exact count, only that it is nowhere near
+    // one event per page.
+    return (paging.length > 0 && paging.length < PAGES / 4)
+      || `${paging.length} progress events for ${PAGES} pages`;
+  });
+
+  await addAsync('the counts still cover every page even when the events do not', async () => {
+    const beeper = fakeBeeper(200);
+    let last = null;
+    const sync = createHistorySync({
+      store,
+      media,
+      fetchPage: beeper.fetchPage,
+      onProgress: (p) => { last = p; },
+    });
+    sync.request('jq');
+    await sync.drain();
+    const job = sync.status().jobs.find((j) => j.chatID === 'jq');
+    // Coalescing must not cost accuracy: the final numbers are the real ones.
+    return job && job.pages === 200
+      || `recorded ${job && job.pages} pages, not 200`;
+  });
+
+  await addAsync('the walk hands the event loop back as it goes', async () => {
+    // A timer set during the walk only fires if the loop was actually yielded.
+    // This is the difference between a long backfill being background work and
+    // being the main process's whole life for a minute.
+    const beeper = fakeBeeper(60);
+    let ticked = false;
+    const timer = setTimeout(() => { ticked = true; }, 0);
+    const sync = createHistorySync({ store, media, fetchPage: beeper.fetchPage, onProgress: () => {} });
+    sync.request('jy');
+    await sync.drain();
+    clearTimeout(timer);
+    return ticked === true || 'a timer never fired during a 60-page walk';
+  });
+}
+
 async function addAsync(name, fn) {
   let ok = false;
   let detail = '';
@@ -1065,6 +1245,7 @@ async function addAsync(name, fn) {
 
 async function main() {
   await queueCases();
+  await refreshAndJobsCases();
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 

@@ -343,6 +343,82 @@ select { cursor: pointer; }
 
 .chat-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
 
+/* ---- Background jobs ----
+   The sync runs in the main process and so has no window of its own. This is
+   all the user gets to see of it, which is why it reports counts rather than a
+   percentage: Beeper never says how far back a chat goes, so any bar that
+   filled up would be inventing a denominator. A moving bar says "working", the
+   numbers say how much, and a finished job is simply still there. */
+.jobs-panel {
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-elev-1);
+  flex: 0 0 auto;
+  max-height: 46%;
+  display: flex; flex-direction: column;
+}
+.jobs-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 14px; background: none; border: 0; cursor: pointer;
+  color: var(--text-faint); font-size: 11.5px; text-align: left;
+}
+.jobs-head:hover { color: var(--text-dim); }
+.jobs-summary { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jobs-panel .caret { font-size: 10px; transition: transform .15s ease; }
+.jobs-panel.is-collapsed .caret { transform: rotate(-90deg); }
+
+/* Still for the spinning dot when nothing is happening. The state is on the
+   panel rather than on an element that may not exist yet, so this survives a
+   panel with no rows in it. */
+.jobs-spinner {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--text-faint); opacity: .45;
+}
+.jobs-panel[data-state="busy"] .jobs-spinner {
+  background: var(--warn); opacity: 1; animation: pulse 1.1s ease-in-out infinite;
+}
+.jobs-panel[data-state="busy"] .jobs-summary { color: var(--text-dim); }
+
+.jobs-list { overflow-y: auto; padding: 0 14px 8px; }
+.jobs-panel.is-collapsed .jobs-list { display: none; }
+
+.job-row {
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
+  padding: 5px 0 7px; align-items: baseline;
+}
+.job-name {
+  font-size: 12px; color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.job-detail { font-size: 11px; color: var(--text-faint); white-space: nowrap; }
+.job-row[data-state="failed"] .job-detail { color: var(--danger); }
+.job-row[data-state="done"] .job-name { color: var(--text-faint); }
+
+/* The bar spans both columns, so it sits under the name and its numbers. */
+.job-bar {
+  grid-column: 1 / -1; height: 2px; border-radius: 2px;
+  background: var(--border-soft); overflow: hidden; margin-top: 3px;
+}
+.job-bar > i { display: block; height: 100%; width: 34%; border-radius: 2px; background: var(--warn); }
+.job-bar.is-done > i { width: 100%; background: var(--success); opacity: .5; }
+.job-row:not([data-state="done"]):not([data-state="failed"]):not([data-state="queued"]) .job-bar > i {
+  animation: job-slide 1.25s ease-in-out infinite;
+}
+/* Queued is not working. A queue of a hundred chats should not look like a
+   hundred simultaneous downloads. */
+.job-row[data-state="queued"] .job-bar > i { width: 100%; background: var(--border); animation: none; }
+.job-row[data-state="queued"] .job-name { color: var(--text-faint); }
+.job-row[data-state="failed"] .job-bar > i { width: 100%; background: var(--danger); opacity: .5; }
+@keyframes job-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(295%); }
+}
+.job-more { padding: 3px 0; font-size: 11px; color: var(--text-faint); }
+
+/* The refresh button spins while its own chat is being worked on, and only
+   then - a permanently turning arrow would just be decoration. */
+#btn-refresh.is-busy { animation: job-spin 1s linear infinite; }
+@keyframes job-spin { to { transform: rotate(360deg); } }
+
 /* ---- Pinned "Note" row ----
    Notes are ordinary rows now. Beeper pins them to the top of the list; it
    does not give them their own, larger card, so neither do we. */

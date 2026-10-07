@@ -34,6 +34,20 @@ const PAGE_LIMIT = 20;
  */
 const MAX_PAGES_PER_RUN = 500;
 
+/**
+ * How often a progress event may be emitted for one chat.
+ *
+ * A long chat is 500 pages, and the loop used to report every one. Each report
+ * is an IPC broadcast to the renderer, so a single backfill could put 500
+ * messages on the wire and have the UI wake for each - which is the opposite of
+ * what "this runs in the background" is supposed to mean. The numbers still
+ * count every page; only the announcements are coalesced.
+ */
+const PROGRESS_MIN_INTERVAL_MS = 250;
+
+/** Pages between yields back to the event loop. */
+const YIELD_EVERY_PAGES = 25;
+
 function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, maxPages = MAX_PAGES_PER_RUN } = {}) {
   const queue = [];
   const queued = new Set();
@@ -42,6 +56,18 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
   // because it is cleared before the next run starts.
   let current = null;
   let stopped = false;
+
+  /**
+   * chatID -> what that chat's job is doing, for the progress panel.
+   *
+   * Kept here rather than in the renderer because the renderer is not the only
+   * thing asking: the panel has to survive a reload, and a reload knows
+   * nothing about what happened before it.
+   */
+  const jobs = new Map();
+  const lastEmit = new Map();
+  /** Chats asked for again while their own run was still going. */
+  const again = new Set();
 
   const emit = (chatID, state, detail) => {
     if (typeof onProgress === 'function') {
@@ -52,6 +78,25 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
       }
     }
   };
+
+  /**
+   * Record what a chat's job is doing, and announce it at most every
+   * PROGRESS_MIN_INTERVAL_MS. Forced for the states that are not a running
+   * total - started and done must never be swallowed.
+   */
+  function note(chatID, patch, { force = false } = {}) {
+    const existing = jobs.get(chatID) || { startedAt: Date.now(), pages: 0, fetched: 0 };
+    jobs.set(chatID, { ...existing, ...patch, updatedAt: Date.now() });
+
+    const now = Date.now();
+    const last = lastEmit.get(chatID) || 0;
+    if (!force && now - last < PROGRESS_MIN_INTERVAL_MS) return;
+    lastEmit.set(chatID, now);
+    emit(chatID, jobs.get(chatID).state, { ...jobs.get(chatID) });
+  }
+
+  /** Hand the event loop back, so a long walk never looks like a hang. */
+  const breathe = () => new Promise((resolve) => setTimeout(resolve, 0));
 
   /** The newest page only. Used for a chat already known to be complete. */
   async function refreshTail(chatID) {
@@ -119,7 +164,11 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
       }
       cursor = next ?? cursor;
       direction = 'before';
-      emit(chatID, 'backfilling', { pages, fetched });
+      note(chatID, { state: 'backfilling', pages, fetched });
+
+      // Every so often, stop being a loop. A 500-page walk is minutes of
+      // continuous work in the process that also owns the windows.
+      if (pages % YIELD_EVERY_PAGES === 0) await breathe();
     }
 
     // Only a walk that genuinely reached the beginning may tombstone, and a
@@ -130,37 +179,69 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
     return { ...result, pages, fetched, complete, stalled };
   }
 
-  async function runOne(chatID) {
+  /**
+   * What the user asked for when they pressed refresh on one chat.
+   *
+   * Both halves, deliberately. The tail is where anything new is, so a chat
+   * that is already "complete" still gets the newest page - that is what
+   * "refresh" means to someone looking at a chat. The walk then re-verifies
+   * from the oldest message we hold, which costs one request when the chat is
+   * genuinely finished and is the only thing that recovers a chat we wrongly
+   * believed was complete.
+   */
+  async function resync(chatID) {
+    const tail = await refreshTail(chatID);
+    const walk = await backfill(chatID);
+    return { ...tail, ...walk };
+  }
+
+  async function runOne(chatID, kind) {
     try {
       // The rule that stops this feature being pointless: a complete chat gets
-      // the newest page and nothing else, forever.
-      const outcome = store.isComplete(chatID)
-        ? await refreshTail(chatID)
-        : await backfill(chatID);
-      emit(chatID, 'done', outcome);
+      // the newest page and nothing else, forever - unless the user explicitly
+      // asked for it to be checked.
+      const outcome = kind === 'refresh'
+        ? await resync(chatID)
+        : store.isComplete(chatID)
+          ? await refreshTail(chatID)
+          : await backfill(chatID);
+      note(chatID, { state: 'done', ...outcome, error: null }, { force: true });
       return outcome;
     } catch (err) {
       // A failed run leaves the chat incomplete, which is exactly the state
       // that stops reconcile from tombstoning. Record it and move on rather
       // than retrying forever in a loop.
-      emit(chatID, 'failed', { error: err.message });
+      note(chatID, { state: 'failed', error: err.message }, { force: true });
       return { error: err.message };
     }
   }
 
+  function enqueue(chatID, kind, front) {
+    queued.add(chatID);
+    if (front) queue.unshift({ chatID, kind });
+    else queue.push({ chatID, kind });
+    note(chatID, { state: 'queued', kind, pages: 0, fetched: 0 }, { force: true });
+  }
+
   async function pump() {
     if (running || stopped) return running;
-    const chatID = queue.shift();
-    if (!chatID) return null;
+    const next = queue.shift();
+    if (!next) return null;
 
+    const { chatID, kind } = next;
     queued.delete(chatID);
-    emit(chatID, 'started', {});
     current = chatID;
-    running = runOne(chatID)
+    note(chatID, { state: 'started', kind, pages: 0, fetched: 0 }, { force: true });
+    running = runOne(chatID, kind)
       .catch(() => null)
       .then((result) => {
         running = null;
         current = null;
+        // A refresh asked for while this chat's own run was still going has not
+        // been served yet. Serve it now rather than dropping it.
+        if (again.delete(chatID)) {
+          enqueue(chatID, 'refresh', true);
+        }
         // Yield between chats so the queue never monopolises the process.
         setTimeout(pump, 0);
         return result;
@@ -173,8 +254,27 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
     request(chatID) {
       if (!chatID || stopped) return false;
       if (queued.has(chatID) || current === chatID) return false;
-      queued.add(chatID);
-      queue.push(chatID);
+      enqueue(chatID, 'sync', false);
+      pump();
+      return true;
+    },
+
+    /**
+     * The user pressed refresh on one chat.
+     *
+     * Jumps the queue, because they are looking at it, and re-checks a chat
+     * already believed complete. Returns false only when it is genuinely
+     * already queued and not running - the button is then already doing what
+     * they asked.
+     */
+    refresh(chatID) {
+      if (!chatID || stopped) return false;
+      if (current === chatID) {
+        again.add(chatID);
+        return true;
+      }
+      if (queued.has(chatID)) return false;
+      enqueue(chatID, 'refresh', true);
       pump();
       return true;
     },
@@ -191,7 +291,11 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
     status() {
       return {
         running: current,
-        queued: [...queue],
+        queued: [...queue].map((entry) => entry.chatID),
+        // Newest first, so the chat being worked on is the first row shown.
+        jobs: [...jobs.entries()]
+          .map(([chatID, job]) => ({ chatID, ...job }))
+          .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
         ...store.stats(),
       };
     },
@@ -201,6 +305,7 @@ function createHistorySync({ store, media, fetchPage, adoptMedia, onProgress, ma
       stopped = true;
       queue.length = 0;
       queued.clear();
+      again.clear();
     },
   };
 }

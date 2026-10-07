@@ -113,6 +113,15 @@
 
         <div id="chat-list" class="chat-list" role="list"></div>
 
+        <section id="jobs-panel" class="jobs-panel" data-state="idle" aria-live="polite">
+          <button id="jobs-toggle" class="jobs-head" aria-expanded="true" aria-controls="jobs-list">
+            <span class="jobs-spinner" aria-hidden="true"></span>
+            <span id="jobs-summary" class="jobs-summary">Chats synced</span>
+            <span class="caret" aria-hidden="true">▾</span>
+          </button>
+          <div id="jobs-list" class="jobs-list"></div>
+        </section>
+
         <footer class="sidebar-footer">
           <span id="live-status" class="live" data-state="idle">offline</span>
           <span id="version-label" class="muted tiny"></span>
@@ -147,6 +156,7 @@
               </div>
             </div>
             <div class="thread-actions">
+              <button id="btn-refresh" class="icon-btn" data-tip="Re-sync this chat from Beeper" aria-label="Refresh chat">↻</button>
               <button id="btn-mute" class="icon-btn" data-tip="Mute notifications" aria-label="Mute">🔔</button>
               <button id="btn-pin" class="icon-btn" data-tip="Pin to top" aria-label="Pin">📌</button>
               <button id="btn-archive" class="icon-btn" data-tip="Archive chat" aria-label="Archive">🗄</button>

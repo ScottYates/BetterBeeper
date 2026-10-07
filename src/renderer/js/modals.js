@@ -5,6 +5,7 @@ import { api, call } from './api.js';
 import { state, bus, upsertChat, deletedList, clearDeletedMessages } from './state.js';
 import { openModal, closeModal, toast } from './ui.js';
 import { avatarNode } from './sidebar.js';
+import { setJobStats } from './jobs.js';
 import { checkNow } from './updates.js';
 
 /**
@@ -68,6 +69,9 @@ function historyStatRow() {
       row.replaceChildren(el('span', { class: 'muted tiny', text: 'History is not available yet.' }));
       return;
     }
+    // Keep the sidebar's idle line honest without making it its own source of
+    // truth: Settings already measures the totals, so hand them over.
+    setJobStats(s);
     const syncing = s.running ? 'Fetching older messages…' : s.queued ? `${s.queued} chat${s.queued === 1 ? '' : 's'} queued` : 'Up to date';
     row.replaceChildren(
       el('div', { class: 'form-row' }, el('label', { text: 'Stored' }), el('span', { text: `${s.messages || 0} message${s.messages === 1 ? '' : 's'} in ${s.chats || 0} chat${s.chats === 1 ? '' : 's'}` })),

@@ -27,5 +27,6 @@ Thumbs.db
 /docs/*
 !/docs/network-glyphs.png
 
-# Generated from index.html by check:historyrender on every run
+# Generated from index.html by check:historyrender and check:sidebar on every run
 /tools/.history-render-harness.html
+/tools/.sidebar-check-harness.html

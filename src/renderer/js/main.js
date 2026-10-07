@@ -9,6 +9,7 @@ import {
   setView, currentView, renderViewChrome, VIEWS,
 } from './sidebar.js';
 import { initThread, openChat, applyMessageEvent, closeThread } from './thread.js';
+import { initJobs } from './jobs.js';
 import { openNewChat, openSettings, showToolsCatalog, applyTheme } from './modals.js';
 import { initLayout } from './layout.js';
 import { checkForUpdatesOnLaunch } from './updates.js';
@@ -322,6 +323,9 @@ async function boot() {
     onSelectView: () => closeThread(),
   });
   initThread();
+  // Before the first paint of the chat list, so the panel is never briefly
+  // blank while the queue is already working.
+  initJobs();
   wireEvents();
   wireKeyboard();
 

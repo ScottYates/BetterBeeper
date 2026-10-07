@@ -46,6 +46,7 @@ import {
 } from './ui.js';
 import { setArchived } from './chat-actions.js';
 import { avatarNode, renderChats, networkBadge } from './sidebar.js';
+import { renderJobs } from './jobs.js';
 
 let currentChat = null;
 let hasMore = false;
@@ -100,6 +101,17 @@ export function initThread() {
   const composer = $('#composer');
 
   window.beeper?.on?.historyProgress?.(onHistoryProgress);
+
+  // The refresh button. The work it starts is not awaited: it runs in the main
+  // process and the jobs panel is how it is watched.
+  $('#btn-refresh')?.addEventListener('click', () => refreshThisChat());
+
+  // A job's progress is the only thing that starts and stops the refresh
+  // button, and it arrives as a job event rather than as anything this chat did.
+  bus.on('jobs:changed', ({ chatID }) => {
+    if (chatID !== state.activeChatID) return;
+    renderRefreshButton();
+  });
 
   composer.addEventListener('input', () => {
     updateReplyPreview();
@@ -335,8 +347,56 @@ function renderHeader() {
   archive.dataset.tip = isArchived(chat) ? 'Move back to inbox' : 'Archive chat';
   archive.classList.toggle('is-on', isArchived(chat));
 
+  const refresh = $('#btn-refresh');
+  renderRefreshButton(chat, refresh);
+
   const composer = $('#composer');
   if (composer) composer.placeholder = composerPlaceholder(chat);
+}
+
+/**
+ * The refresh button's busy state, and nothing else.
+ *
+ * Split out because a job event arrives several times a second, and the obvious
+ * way to react is to call renderHeader - which replaces the thread avatar, and
+ * would then repaint that image from initials on every progress event. Updating
+ * one button's class costs nothing and touches nothing else.
+ *
+ * It also has to run on *every* change, not only when a job ends. Opening a
+ * chat starts a sync of its own, so a refresh pressed while that is still
+ * running is served afterwards: the first job finishing cleared the busy state,
+ * and without this the button would sit idle while the refresh it asked for was
+ * still running.
+ */
+function renderRefreshButton(chat = currentChat, button) {
+  const btn = button || $('#btn-refresh');
+  if (!btn || !chat) return;
+  const busy = state.syncingChats.has(chat.id);
+  btn.classList.toggle('is-busy', busy);
+  btn.dataset.tip = busy ? 'Re-syncing in the background' : 'Re-sync this chat from Beeper';
+}
+
+/**
+ * Ask the main process to bring this chat fully up to date.
+ *
+ * Deliberately not awaited into anything the user waits on. The walk is the
+ * slow part - a chat with thousands of messages is hundreds of pages - and it
+ * runs in the main process, out of the renderer's way. What comes back is only
+ * whether the chat was queued, and the progress panel is how it is watched.
+ */
+async function refreshThisChat() {
+  const chat = currentChat;
+  if (!chat) return;
+  state.syncingChats.add(chat.id);
+  renderHeader();
+
+  const res = await call(() => api.history.refresh(chat.id), { context: 'refresh', fallback: null });
+  if (!res?.queued) {
+    // Already running or already queued: the button is doing what was asked.
+    toast('Already syncing this chat', 'success', 1600);
+  }
+  renderRefreshButton();
+  renderJobs();
 }
 
 /**
