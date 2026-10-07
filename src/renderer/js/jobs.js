@@ -21,7 +21,7 @@
  * this renders on a timer of its own and never in the middle of a backfill.
  */
 
-import { $, el, clear } from './util.js';
+import { $, el } from './util.js';
 import { api, call } from './api.js';
 import { state, bus } from './state.js';
 
@@ -75,35 +75,65 @@ function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-function jobRow(job) {
-  const isDone = DONE_STATES.has(job.state);
-  const isQueued = job.state === 'queued';
-
-  let detail;
-  if (job.state === 'failed') {
-    detail = job.error || 'failed';
-  } else if (isQueued) {
+/** What a row says, given its job. Split out so a reused row can be updated. */
+function detailFor(job) {
+  if (job.state === 'failed') return job.error || 'failed';
+  if (job.state === 'queued') {
     // A queued job has not started. Saying "working..." with a moving bar for
     // every one of them made a queue of 170 chats look like 170 simultaneous
     // downloads, when exactly one of them is running.
-    detail = 'Queued';
-  } else {
-    detail = [
-      job.pages ? plural(job.pages, 'page', 'pages') : null,
-      job.fetched ? plural(job.fetched, 'message', 'messages') : null,
-    ].filter(Boolean).join(' · ') || STATE_WORDS[job.state] || 'working…';
+    return 'Queued';
   }
+  const counts = [
+    job.pages ? plural(job.pages, 'page', 'pages') : null,
+    job.fetched ? plural(job.fetched, 'message', 'messages') : null,
+  ].filter(Boolean);
+  return counts.join(' · ') || STATE_WORDS[job.state] || 'working…';
+}
 
+function buildRow(job) {
   return el(
     'div',
     { class: 'job-row', dataset: { state: job.state, chatId: job.chatID } },
     el('span', { class: 'job-name', text: chatName(job.chatID) }),
-    el('span', { class: 'job-detail', text: detail }),
+    el('span', { class: 'job-detail', text: detailFor(job) }),
     // No total is known up front - Beeper does not say how far back a chat goes
     // - so a running bar is motion rather than a lie about completion.
-    el('div', { class: `job-bar${isDone ? ' is-done' : ''}` }, el('i')),
+    el('div', {
+      class: `job-bar${DONE_STATES.has(job.state) ? ' is-done' : ''}`,
+    }, el('i')),
   );
 }
+
+/**
+ * Update a row that is already on screen, in place.
+ *
+ * The bar's <i> is deliberately not replaced. It carries a CSS animation, and
+ * a new element restarts that animation from zero - so rebuilding the row, even
+ * with identical content, made every bar lurch once per progress event.
+ */
+function updateRow(row, job) {
+  if (row.dataset.state !== job.state) {
+    row.dataset.state = job.state;
+    row.classList.toggle('is-done', DONE_STATES.has(job.state));
+  }
+  const name = row.querySelector('.job-name');
+  const detail = row.querySelector('.job-detail');
+  const nextName = chatName(job.chatID);
+  const nextDetail = detailFor(job);
+  if (name.textContent !== nextName) name.textContent = nextName;
+  if (detail.textContent !== nextDetail) detail.textContent = nextDetail;
+}
+
+/**
+ * chatID -> the row element currently on screen, and the job it was last drawn
+ * for. The same reasoning as the chat list, learned the hard way twice in one
+ * session: this panel was written with clear() and a rebuild on every event,
+ * and at four events a second with six rows it flickered badly enough to be the
+ * most noticeable thing in the sidebar.
+ */
+const rowNodes = new Map();
+let moreNode = null;
 
 /** Redraw. Cheap enough to call on every progress event. */
 export function renderJobs() {
@@ -130,10 +160,60 @@ export function renderJobs() {
   panel.classList.toggle('is-collapsed', !expanded && Boolean(active.length));
 
   const list = $('#jobs-list');
-  clear(list);
-  for (const job of visible.slice(0, MAX_ROWS)) list.append(jobRow(job));
+  const shown = visible.slice(0, MAX_ROWS);
+
+  shown.forEach((job, index) => {
+    let entry = rowNodes.get(job.chatID);
+    if (!entry) {
+      entry = { node: buildRow(job) };
+      rowNodes.set(job.chatID, entry);
+    } else {
+      updateRow(entry.node, job);
+    }
+    // Move only when it is not already in this position.
+    if (list.children[index] !== entry.node) {
+      list.insertBefore(entry.node, list.children[index] || null);
+    }
+  });
+
+  // Anything after the shown rows is the overflow note, or a leftover row.
+  const overflowIndex = shown.length;
   const hiddenCount = visible.length - MAX_ROWS;
-  if (hiddenCount > 0) list.append(el('div', { class: 'job-more', text: `and ${hiddenCount} more` }));
+  if (hiddenCount > 0) {
+    if (!moreNode) moreNode = el('div', { class: 'job-more' });
+    moreNode.textContent = `and ${hiddenCount} more`;
+    if (list.children[overflowIndex] !== moreNode) {
+      list.insertBefore(moreNode, list.children[overflowIndex] || null);
+    }
+    while (list.children.length > overflowIndex + 1) list.removeChild(list.lastChild);
+  } else {
+    if (moreNode && moreNode.parentNode === list) list.removeChild(moreNode);
+    while (list.children.length > overflowIndex) list.removeChild(list.lastChild);
+  }
+
+  // Drop rows for jobs no longer on screen, or the cache grows for ever.
+  const live = new Set(shown.map((j) => j.chatID));
+  for (const id of [...rowNodes.keys()]) {
+    if (!live.has(id)) rowNodes.delete(id);
+  }
+}
+
+/**
+ * Coalesce renders into one per frame.
+ *
+ * Several jobs can report in the same frame, and a render that arrives four
+ * times a second is a render the eye can see. Scheduling means however many
+ * events land before the next paint, the panel is updated once - which is also
+ * all the update is worth, since a progress event never changes more than a few
+ * characters of text.
+ */
+let frame = null;
+export function scheduleRender() {
+  if (frame !== null) return;
+  frame = requestAnimationFrame(() => {
+    frame = null;
+    renderJobs();
+  });
 }
 
 /**
@@ -173,7 +253,8 @@ function ingest(payload) {
   // The refresh button in the thread header shows this.
   bus.emit('jobs:changed', { chatID, state: job.state });
   maybeAutoCollapse();
-  renderJobs();
+  // Scheduled, not immediate: this runs on every progress event.
+  scheduleRender();
 }
 
 export function initJobs() {
@@ -203,5 +284,5 @@ export function initJobs() {
 /** Called when the store's totals change, so the idle line stays honest. */
 export function setJobStats(next) {
   stats = next;
-  renderJobs();
+  scheduleRender();
 }

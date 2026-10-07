@@ -262,8 +262,12 @@ async function main() {
         && /240 messages/.test(document.getElementById('jobs-list').textContent || '')
         || ('rows read ' + JSON.stringify(document.getElementById('jobs-list').textContent)));
 
+      // Rendered on the next frame, so the row is not there yet: that delay is the
+      // coalescing, and the checks below have to wait for it.
+      progress({ chatID: 'a2', state: 'queued', pages: 0, fetched: 0 });
+      await new Promise((r) => setTimeout(r, 150));
+
       add('a queued job says queued rather than claiming to be working', () => {
-        progress({ chatID: 'a2', state: 'queued', pages: 0, fetched: 0 });
         const row = document.querySelector('.job-row[data-chat-id="a2"]');
         if (!row) return 'no row for the queued job';
         return row.dataset.state === 'queued' && /queued/i.test(row.querySelector('.job-detail').textContent)
@@ -310,6 +314,54 @@ async function main() {
       add('a failed job says why', () =>
         (document.getElementById('jobs-list').textContent || '').includes('Beeper said no')
         || ('rows read ' + JSON.stringify(document.getElementById('jobs-list').textContent)));
+
+      // --- the panel must not rebuild itself either -------------------------
+      // The panel flickered badly at four events a second, for the same reason
+      // the inbox did: every event cleared the list and made the rows again.
+      // New elements also restart the bar's CSS animation from zero, so a
+      // rebuild made every bar lurch even when nothing had changed.
+      progress({ chatID: 'a1', state: 'backfilling', pages: 30, fetched: 600 });
+      await new Promise((r) => setTimeout(r, 150));
+      const liveRow = document.querySelector('.job-row[data-chat-id="a1"]');
+      const liveBar = liveRow.querySelector('.job-bar > i');
+      const liveName = liveRow.querySelector('.job-name');
+
+      progress({ chatID: 'a1', state: 'backfilling', pages: 31, fetched: 620 });
+      await new Promise((r) => setTimeout(r, 150));
+      const afterRow = document.querySelector('.job-row[data-chat-id="a1"]');
+
+      add('a progress update keeps the same job row', () =>
+        afterRow === liveRow || 'the job row was replaced on every progress event');
+
+      add('a progress update keeps the same progress bar element', () =>
+        (afterRow && afterRow.querySelector('.job-bar > i')) === liveBar
+        || 'the bar element was replaced, restarting its animation');
+
+      add('a progress update keeps the same name element', () =>
+        (afterRow && afterRow.querySelector('.job-name')) === liveName
+        || 'the name element was replaced');
+
+      add('the progress numbers still update in place', () =>
+        /31 pages/.test(afterRow.textContent || '') && /620 messages/.test(afterRow.textContent || '')
+        || ('row reads ' + JSON.stringify((afterRow.textContent || '').slice(0, 60))));
+
+      // Counted, not grepped. A source-level check for the call was useless here: the
+      // regex matched the definition of scheduleRender further down the file, so
+      // removing the call from ingest did not fail it.
+      var realRaf = window.requestAnimationFrame.bind(window);
+      var rafCalls = 0;
+      window.requestAnimationFrame = function (cb) { rafCalls++; return realRaf(cb); };
+      for (var tick = 1; tick <= 5; tick++) {
+        progress({ chatID: 'a3', state: 'backfilling', pages: tick, fetched: tick * 20 });
+      }
+      var scheduled = rafCalls;
+      window.requestAnimationFrame = realRaf;
+      await new Promise(function (r) { setTimeout(r, 150); });
+
+      add('many events in one frame are painted once', () =>
+        scheduled === 1 || ('five events scheduled ' + scheduled + ' paints'));
+
+      progress({ chatID: 'a3', state: 'done', pages: 5, fetched: 100 });
 
       // --- the refresh button ------------------------------------------------
       add('every chat has a refresh button', () =>
