@@ -7,7 +7,7 @@
  * list or thread behind it.
  *
  *   wheel / trackpad  -> zoom toward the pointer
- *   drag              -> pan, once zoomed in
+ *   drag              -> pan, as far as you like
  *   double-click      -> toggle fit and 2x
  *   + / - / 0         -> step in, step out, reset to fit
  *   Esc, click, X     -> close
@@ -56,15 +56,23 @@ function measureFit() {
   return Math.min(rect.width / w, rect.height / h, 1);
 }
 
-function clampPan() {
-  // Keep at least a little of the image on screen, as the in-window viewer did.
-  const rect = stage.getBoundingClientRect();
-  const factor = view.scale * fit;
-  const maxX = Math.max(0, (rect.width * factor - rect.width) / 2 + rect.width * 0.4);
-  const maxY = Math.max(0, (rect.height * factor - rect.height) / 2 + rect.height * 0.4);
-  view.x = Math.min(maxX, Math.max(-maxX, view.x));
-  view.y = Math.min(maxY, Math.max(-maxY, view.y));
-}
+/**
+ * Deliberately no clamp on the pan.
+ *
+ * There used to be one, and it was wrong in a way that made the image
+ * impossible to use. It computed how far the image could move from the size of
+ * the *window* rather than the size of the *image*, which are different numbers
+ * once the image has been scaled to fit.
+ *
+ * Measured on a 1200x4000 portrait image in a 2226x939 window, zoomed in four
+ * times: the image was really 3756 pixels tall, the clamp believed it was 939,
+ * and it allowed 347 pixels of upward drag where 1408 were needed to bring the
+ * bottom of the picture into view. The reported symptom - cannot drag it up far
+ * enough to see all of it - is that, exactly.
+ *
+ * Free movement is what a viewer should do anyway. Fit, the 0 key and a
+ * double-click all put the image back, so there is no way to be stranded.
+ */
 
 function setScale(next, anchorX, anchorY) {
   const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
@@ -79,7 +87,6 @@ function setScale(next, anchorX, anchorY) {
   view.y = cy - (cy - view.y) * ratio;
   view.scale = clamped;
 
-  clampPan();
   apply();
 }
 
@@ -125,7 +132,6 @@ stage.addEventListener('pointermove', (event) => {
   moved = Math.max(moved, Math.abs(nextX - view.x) + Math.abs(nextY - view.y));
   view.x = nextX;
   view.y = nextY;
-  clampPan();
   apply();
 });
 
@@ -156,9 +162,7 @@ window.addEventListener('keydown', (event) => {
 
 // Refit when the window itself is resized, so the image never ends up cropped.
 window.addEventListener('resize', () => {
-  const before = fit;
   fit = measureFit();
-  if (before && before !== fit) clampPan();
   apply();
 });
 

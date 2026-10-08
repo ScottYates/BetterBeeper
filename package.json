@@ -47,6 +47,7 @@
     "check:media": "electron tools/media-check.js",
     "check:history": "node tools/history-check.js",
     "check:historyrender": "electron tools/history-render-check.js",
+    "check:viewer": "electron tools/viewer-check.js",
     "check:sidebar": "electron tools/sidebar-check.js",
     "media:rename": "node tools/rename-media-ext.js",
     "check:mediafolder": "node tools/media-folder-check.js",

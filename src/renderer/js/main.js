@@ -123,10 +123,17 @@ async function enterApp() {
 
   await loadChats();
 
-  // Open the first unread chat, or the most recent one.
-  const firstUnread = chatList().find((c) => (c.unreadCount || 0) > 0);
-  const target = firstUnread || chatList()[0];
-  if (target) openChat(target.id);
+  // Deliberately no chat is opened here.
+  //
+  // This used to open the first unread chat, or the most recent one if there
+  // was nothing unread. That put a conversation on screen every time the app
+  // started - including a scrollback the user had not chosen and did not need
+  // to see, and a walk of its history started on their behalf before they had
+  // touched anything.
+  //
+  // Starting on "Select a chat" is the honest resting state: nothing is open
+  // because the user has not opened anything. An incoming message still marks
+  // its chat unread in the list, so nothing is missed by not being pre-selected.
 }
 
 async function loadChats() {
