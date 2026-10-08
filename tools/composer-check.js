@@ -90,6 +90,31 @@ async function main() {
           || ('untitled: ' + JSON.stringify(a) + ' null: ' + JSON.stringify(b));
       });
 
+      // Recovery after a failed send. Putting the text back is a convenience
+      // when the request was refused outright, and the cause of a duplicate
+      // send when the answer was merely lost: the message may already be on the
+      // other end, and handing the text straight back invites sending it again.
+      const restore = T.shouldRestoreComposer;
+      add('a refused request gives its text back', () => {
+        return typeof restore === 'function' && restore('http_400') === true
+          || ('got ' + JSON.stringify(typeof restore === 'function' ? restore('http_400') : restore));
+      });
+
+      add('a server error gives its text back', () => {
+        return typeof restore === 'function' && restore('http_500') === true
+          || ('got ' + JSON.stringify(typeof restore === 'function' ? restore('http_500') : restore));
+      });
+
+      add('a timeout does not, because it may already have sent', () => {
+        return typeof restore === 'function' && restore('timeout') === false
+          || ('got ' + JSON.stringify(typeof restore === 'function' ? restore('timeout') : restore));
+      });
+
+      add('an unreachable Beeper does not either', () => {
+        return typeof restore === 'function' && restore('unreachable') === false
+          || ('got ' + JSON.stringify(typeof restore === 'function' ? restore('unreachable') : restore));
+      });
+
       add('a title of only spaces is treated as untitled', () => {
         const out = placeholder(person('   '));
         return out === 'Write a message…' || ('got ' + JSON.stringify(out));

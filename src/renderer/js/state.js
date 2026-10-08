@@ -154,7 +154,14 @@ export function upsertMessage(chatID, message) {
 
   const idx = list.findIndex((m) => m.id === message.id);
   if (idx >= 0) {
-    list[idx] = { ...list[idx], ...message };
+    const merged = { ...list[idx], ...message };
+    // A message that carries no status of its own came from Beeper rather than
+    // from an optimistic insert here, so its arrival *is* the confirmation the
+    // send was waiting for. Merging cannot drop a key the incoming message does
+    // not have, so without this the flag survives - and nothing else in the app
+    // ever clears it, leaving the bubble on "sending" for good.
+    if (message.sendStatus === undefined) delete merged.sendStatus;
+    list[idx] = merged;
   } else {
     absorbPendingPlaceholder(list, message);
     list.push(message);
@@ -181,11 +188,33 @@ const PLACEHOLDER_TTL_MS = 3 * 60 * 1000;
 // swallow the placeholder.
 const PLACEHOLDER_TTL_MS_NO_TEXT = 60 * 1000;
 
+/**
+ * Settle the optimistic bubble this message confirms.
+ *
+ * Beeper's send endpoint answers with a `pendingMessageID` and the confirmed
+ * message later arrives over the WebSocket under an unrelated id, so the two can
+ * only be tied together by what was sent - there is no transaction id in the
+ * echo to match on. A bubble that nothing reconciles stays on "sending"
+ * permanently, so a confirmation that claims no text match still settles the
+ * oldest send it can rather than leaving it spinning.
+ *
+ * Returns true when a placeholder was absorbed.
+ */
 function absorbPendingPlaceholder(list, incoming) {
-  if (!incoming.isSender) return;
+  if (!incoming.isSender) return false;
+  // A pending message is one of our own optimistic inserts, not something
+  // Beeper confirmed. Without this, typing a second message with the same text
+  // as the first swallowed the first bubble the moment it was inserted, and the
+  // two sends shared one placeholder.
+  if (incoming.sendStatus === 'pending') return false;
   const incomingAt = new Date(incoming.timestamp || Date.now()).getTime();
 
-  for (let i = list.length - 1; i >= 0; i -= 1) {
+  // Oldest first. With several sends in flight the confirmations arrive in the
+  // order the messages were sent, so the first one to land belongs to the
+  // oldest bubble still waiting. Scanning from the other end let the first
+  // confirmation swallow the newest placeholder and strand its own.
+  let oldestInWindow = -1;
+  for (let i = 0; i < list.length; i += 1) {
     const existing = list[i];
     if (existing.sendStatus !== 'pending') continue;
 
@@ -194,15 +223,24 @@ function absorbPendingPlaceholder(list, incoming) {
     // values used to stop the whole match dead and leave the bubble stuck.
     const existingText = existing.text || '';
     const incomingText = incoming.text || '';
-    if (existingText !== incomingText) continue;
-
     const at = new Date(existing.timestamp || 0).getTime();
     const window = existingText ? PLACEHOLDER_TTL_MS : PLACEHOLDER_TTL_MS_NO_TEXT;
     if (Math.abs(incomingAt - at) > window) continue;
 
-    list.splice(i, 1);
-    return;
+    if (existingText === incomingText) {
+      list.splice(i, 1);
+      return true;
+    }
+    // Remembered, not taken. An exact match is proof; this is only for a
+    // message Beeper stored differently from the bytes that were sent.
+    if (oldestInWindow < 0) oldestInWindow = i;
   }
+
+  if (oldestInWindow >= 0) {
+    list.splice(oldestInWindow, 1);
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -222,6 +260,26 @@ export function rekeyMessage(chatID, fromID, toID) {
   const idx = list.findIndex((m) => m.id === fromID);
   if (idx < 0) return false;
   list[idx] = { ...list[idx], id: toID };
+  state.messages.set(chatID, list);
+  bus.emit('messages:changed', { chatID, message: list[idx] });
+  return true;
+}
+
+/**
+ * Mark one of our own sends as failed.
+ *
+ * Deliberately not `upsertMessage`: that inserts when the id is unknown, and a
+ * confirmation that arrived before the failure left is exactly the case where
+ * the id is unknown - the bubble is gone because the message went out, and
+ * re-inserting it puts the same text in the thread a second time.
+ *
+ * Returns whether the bubble was still there to fail.
+ */
+export function markSendFailed(chatID, messageID) {
+  const list = state.messages.get(chatID);
+  const idx = (list || []).findIndex((m) => m.id === messageID);
+  if (idx < 0) return false;
+  list[idx] = { ...list[idx], sendStatus: 'failed' };
   state.messages.set(chatID, list);
   bus.emit('messages:changed', { chatID, message: list[idx] });
   return true;

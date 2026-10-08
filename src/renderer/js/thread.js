@@ -21,6 +21,7 @@ import {
   selfUserIDFor,
   upsertMessage,
   rekeyMessage,
+  markSendFailed,
   removeMessage,
   isNoteToSelf,
   networkNameFor,
@@ -1604,6 +1605,21 @@ function renderAttachments() {
   });
 }
 
+/**
+ * Whether a failed send should put its text back in the composer.
+ *
+ * A request Beeper refused did not send, so handing the text back is pure
+ * convenience. A timeout or an unreachable server is a different animal: the
+ * request may well have been accepted and only the answer lost, and silently
+ * offering the text again invites sending a second copy of a message that is
+ * already on its way. Those keep their text in the failed bubble instead.
+ */
+const AMBIGUOUS_SEND_ERRORS = new Set(['timeout', 'unreachable']);
+
+export function shouldRestoreComposer(code) {
+  return !AMBIGUOUS_SEND_ERRORS.has(String(code || ''));
+}
+
 async function sendCurrent() {
   const composer = $('#composer');
   const chat = currentChat;
@@ -1664,10 +1680,29 @@ async function sendCurrent() {
     }).catch((err) => ({ __error: err }));
 
     if (res?.__error) {
-      // Mark the bubble rather than leaving it spinning, and put the text back.
-      upsertMessage(chat.id, { id: txnID, sendStatus: 'failed' });
-      toast(`Could not send: ${res.__error.message}`, 'error', 5000);
-      if (payload.text) {
+      // Only the bubble we inserted can be failed. If it is already gone then a
+      // confirmation landed first and the message did go out, so marking
+      // anything here would put the same text in the thread a second time.
+      const stillOurs = markSendFailed(chat.id, txnID);
+
+      if (!stillOurs) {
+        toast('Beeper did not confirm the send, but the message arrived.', 'success');
+        break;
+      }
+
+      // "Could not send" is a claim the app cannot honestly make about a
+      // timeout: the message may well be on its way. Say what is known.
+      const ambiguous = !shouldRestoreComposer(res.__error.code);
+      toast(
+        ambiguous
+          ? 'Beeper did not answer, so this may not have sent. The text is still in the message.'
+          : `Could not send: ${res.__error.message}`,
+        'error',
+        5000,
+      );
+      // The text stays in the failed bubble either way; this only decides
+      // whether it is handed back ready to send again.
+      if (payload.text && !ambiguous) {
         composer.value = payload.text;
       }
       break;

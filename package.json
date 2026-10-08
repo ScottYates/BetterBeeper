@@ -51,7 +51,9 @@
     "check:sidebar": "electron tools/sidebar-check.js",
     "media:rename": "node tools/rename-media-ext.js",
     "check:mediafolder": "node tools/media-folder-check.js",
-    "media:prune": "node tools/prune-media.js"
+    "media:prune": "node tools/prune-media.js",
+    "check:all": "node tools/run-all-checks.js",
+    "check:sendrace": "node tools/send-race-probe.js"
   },
   "devDependencies": {
     "electron": "^38.0.0",
