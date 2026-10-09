@@ -47,6 +47,8 @@ import {
   saveAttachment,
 } from './ui.js';
 import { setArchived } from './chat-actions.js';
+import { openSharePicker } from './modals.js';
+import { canShare } from './share.js';
 import { avatarNode, renderChats, networkBadge } from './sidebar.js';
 import { renderJobs } from './jobs.js';
 
@@ -1301,6 +1303,9 @@ export function messageMenuItems(anchor, message) {
     { label: 'Reply', onSelect: () => setReplyTo(message) },
     { label: 'React', onSelect: () => openEmojiPicker(anchor, (e) => toggleReaction(message, e)) },
     { label: 'Copy text', onSelect: () => copyText(message.text || '') },
+    canShare(message)
+      ? { label: 'Share with...', onSelect: () => openSharePicker(message, currentChat) }
+      : null,
     canEdit ? { label: 'Edit', onSelect: () => { state.editing = message.id; onMessageUpserted(); } } : null,
     canEdit
       ? { label: 'Delete for everyone', danger: true, onSelect: () => deleteMessage(message) }

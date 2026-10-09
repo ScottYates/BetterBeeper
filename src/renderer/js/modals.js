@@ -1,10 +1,18 @@
-/** Modals: start a new chat (contact search) and app settings. */
+/** Modals: start a new chat, share a message with someone, and app settings. */
 
 import { $, el, clear, debounce, escapeHtml, initials, hueFor, fullTime, renderRichText } from './util.js';
 import { api, call } from './api.js';
-import { state, bus, upsertChat, deletedList, clearDeletedMessages } from './state.js';
+import { state, bus, chatList, upsertChat, deletedList, clearDeletedMessages } from './state.js';
 import { openModal, closeModal, toast } from './ui.js';
 import { avatarNode } from './sidebar.js';
+import {
+  shareQueue,
+  shareableChats,
+  partitionShareable,
+  chatDisplayName,
+  shareNotice,
+  deliverQueue,
+} from './share.js';
 import { setJobStats } from './jobs.js';
 import { checkNow } from './updates.js';
 
@@ -243,6 +251,239 @@ export function openNewChat() {
       bus.emit('chat:open', chatID);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Share a message with someone else
+// ---------------------------------------------------------------------------
+
+/**
+ * Who a message can be shared with.
+ *
+ * One list holding two kinds of target: the chats that already exist, and the
+ * contacts that do not have one yet. Both are needed - sharing into a chat you
+ * have to go and create first is not sharing, and it is the common case when
+ * you are forwarding something to someone you have never messaged.
+ *
+ * The decisions - what counts as shareable, what the forwarded text says, how
+ * many sends it turns into - live in share.js so they can be checked on their
+ * own. What is here is the picking and the sending.
+ */
+export function openSharePicker(message, sourceChat) {
+  const queue = shareQueue(message, chatDisplayName(sourceChat));
+
+  const results = el('div', { class: 'result-list' });
+  const contactResults = el('div', { class: 'result-list' });
+  const summary = el('div', { class: 'search-summary' });
+  const search = el('input', {
+    type: 'search',
+    placeholder: 'Search chats and contacts...',
+    autocomplete: 'off',
+    spellcheck: 'false',
+  });
+
+  let busy = false;
+
+  function setSummary(text) {
+    summary.textContent = text;
+  }
+
+  function row({ title, sub, avatar, onPick, list = results }) {
+    list.append(
+      el(
+        'div',
+        { class: 'result-item', onClick: () => onPick() },
+        avatar,
+        el(
+          'div',
+          { class: 'result-item-body' },
+          el('div', { class: 'result-item-title', text: title }),
+          sub ? el('div', { class: 'result-item-sub', text: sub }) : null,
+        ),
+      ),
+    );
+  }
+
+  // A share can be several messages, so say so before it happens rather than
+  // letting four messages turn up in someone else's chat unexplained.
+  const header = shareNotice(message, chatDisplayName(sourceChat));
+
+  openModal({
+    title: 'Share with...',
+    body: el(
+      'div',
+      {},
+      el('div', { class: 'form-row' }, search),
+      el('div', { class: 'search-summary', text: header }),
+      results,
+      contactResults,
+      summary,
+    ),
+    footer: [el('button', { class: 'btn', text: 'Cancel', onClick: closeModal })],
+  });
+
+  search.focus();
+
+  /** Everything is frozen once a send starts, so it cannot be done twice. */
+  function lock(message_) {
+    busy = true;
+    search.disabled = true;
+    setSummary(message_);
+  }
+
+  async function sendToChat(chat) {
+    if (busy) return;
+    lock(`Sending to ${chatDisplayName(chat)}...`);
+    const sent = await deliver(queue, chat.id);
+    closeModal();
+    report(sent, chatDisplayName(chat));
+  }
+
+  async function sendToContact(contact) {
+    if (busy) return;
+    const contactID = contact.id || contact.userID;
+    const who = contact.fullName || contact.username || 'this contact';
+    if (!contactID) return;
+
+    lock(`Starting a chat with ${who}...`);
+
+    // The chat is created empty and the queue is sent into it afterwards, the
+    // same way it is sent into a chat that already existed. Beeper does take an
+    // opening message with a new chat, and using it here would mean the text
+    // went out twice over the moment the first message had an attachment.
+    const created = await call(
+      () =>
+        api.chats.create({
+          accountID: sourceChat?.accountID || connectedAccountID(),
+          type: 'single',
+          participantIDs: [contactID],
+        }),
+      { context: 'start a chat to share into', throwOnError: true },
+    ).catch((err) => ({ __error: err }));
+
+    if (created?.__error) {
+      closeModal();
+      toast(created.__error.message, 'error', 5000);
+      return;
+    }
+
+    const chatID = created?.id || created?.chatID;
+    if (chatID) {
+      upsertChat(created);
+      bus.emit('chats:changed');
+    }
+
+    const sent = chatID
+      ? await deliver(queue, chatID)
+      : { ok: false, count: 0, error: 'Beeper did not return a chat to send into.' };
+
+    closeModal();
+    report(sent, who);
+  }
+
+  /**
+   * All chats and contacts matching what has been typed so far.
+   *
+   * Two lists rather than one: the contacts search takes a round trip, and
+   * appending into a single list after that await meant either losing the chats
+   * or redrawing them while the user was already clicking on them.
+   */
+  async function refresh() {
+    const query = search.value.trim();
+    const found = shareableChats(chatList(), { sourceChatID: sourceChat?.id || '', query });
+    const { writable, readOnly } = partitionShareable(found);
+
+    clear(results);
+    clear(contactResults);
+
+    for (const chat of writable) {
+      row({
+        title: chatDisplayName(chat),
+        sub: chat.network ? `Chat on ${chat.network}` : 'Chat',
+        avatar: avatarNode(chat, initials(chatDisplayName(chat)) || '?', 'sm'),
+        onPick: () => sendToChat(chat),
+      });
+    }
+
+    // Contacts only once there is something to search for: everyone Beeper has
+    // synced is a long list nobody asked to scroll.
+    if (query) {
+      const accountID = connectedAccountID();
+      if (accountID) {
+        contactResults.append(el('div', { class: 'search-summary', text: 'Searching contacts...' }));
+        const res = await call(
+          () => api.contacts(accountID, { query, limit: 20 }),
+          { context: 'contacts to share with', fallback: null },
+        );
+        clear(contactResults);
+        for (const contact of res?.items || []) {
+          if (!contact.id && !contact.userID) continue;
+          row({
+            list: contactResults,
+            title: contact.fullName || contact.username || contact.phoneNumber || 'Contact',
+            sub: `Start a new chat - ${contact.username || contact.phoneNumber || contact.email || 'contact'}`,
+            avatar: avatarNode(contact, contact.fullName || contact.username || '?', 'sm'),
+            onPick: () => sendToContact(contact),
+          });
+        }
+      }
+    }
+
+    const hidden = readOnly.length
+      ? ` ${readOnly.length} read-only chat${readOnly.length === 1 ? '' : 's'} left out - they cannot receive messages.`
+      : '';
+    const offered = results.childElementCount + contactResults.childElementCount;
+    if (!offered) {
+      setSummary(query ? `Nothing matched "${query}".${hidden}` : `No chats to share into yet.${hidden}`);
+    } else {
+      setSummary(`${offered} option${offered === 1 ? '' : 's'}.${hidden}`);
+    }
+  }
+
+  search.addEventListener('input', debounce(refresh, 200));
+  refresh();
+}
+
+function connectedAccountID() {
+  const connected = state.accounts.filter((a) => a.status === 'connected');
+  return connected[0]?.accountID || state.accounts[0]?.accountID || '';
+}
+
+/**
+ * Send the queue into one chat.
+ *
+ * All this does is supply the network. The order, the stop-on-first-failure and
+ * the count of what got through are decided in share.js, which is where they can
+ * be checked without an account.
+ */
+function deliver(queue, chatID) {
+  return deliverQueue(queue, {
+    // A reupload that resolves to nothing is a failure, not an empty result:
+    // `call` returns its fallback for a falsy value, and passing that straight
+    // on would send the message with the file quietly dropped.
+    reupload: async (attachment) => {
+      const uploaded = await call(() => api.assets.reupload(attachment), {
+        context: 'copy the file for the other chat',
+        throwOnError: true,
+      });
+      if (!uploaded) throw new Error('The file could not be copied to the other chat.');
+      return uploaded;
+    },
+    send: (payload) =>
+      call(() => api.messages.send(chatID, payload), {
+        context: 'send the shared message',
+        throwOnError: true,
+      }),
+  });
+}
+
+function report(sent, where) {
+  if (!sent?.ok) {
+    const partial = sent?.count ? `${sent.count} of the messages went, then it failed. ` : '';
+    toast(`${partial}${sent?.error || 'Could not share this.'}`, 'error', 6000);
+    return;
+  }
+  toast(sent.count > 1 ? `Shared to ${where} as ${sent.count} messages` : `Shared to ${where}`, 'success', 2400);
 }
 
 // ---------------------------------------------------------------------------

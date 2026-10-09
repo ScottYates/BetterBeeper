@@ -312,6 +312,32 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
 
   ipcMain.handle('assets:download', handle(async (input) => client.downloadAsset(input || {})));
 
+  // Sharing a message with another chat re-uploads the files that came with it:
+  // the other chat cannot reach into this one's assets. Done here, in one
+  // piece, so the renderer never handles a local path or a buffer holding
+  // somebody else's attachment - and so the original file name survives, which
+  // uploading the cached copy by path would lose.
+  ipcMain.handle('assets:reupload', handle(async (attachment) => {
+    if (!attachment) throw new Error('There was no file to share.');
+    const source = await assetSource.locateAttachment(attachment, (input) => client.downloadAsset(input));
+
+    let bytes;
+    if (source.localPath) {
+      bytes = await fs.promises.readFile(source.localPath);
+    } else {
+      const response = await fetch(source.url);
+      if (!response.ok) throw new Error(`Beeper's bridge answered ${response.status}.`);
+      bytes = Buffer.from(await response.arrayBuffer());
+    }
+    if (!bytes.length) throw new Error('That file came back empty.');
+
+    return client.uploadAssetBytes(
+      bytes,
+      attachment.fileName || 'attachment',
+      attachment.mimeType,
+    );
+  }));
+
   // Saving is the only way out of the app for anything that is not an image or
   // a video, so it has to accept whatever Beeper sends and must never let the
   // message choose where the file lands - hence safeFileName on the suggestion.
