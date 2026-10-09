@@ -54,6 +54,28 @@ async function main() {
       } catch (e) {
         cases.push(['the harness ran to completion', false, e && (e.stack || e.message)]);
       }
+      // A read receipt changes no bubble - that is the whole reason the thread
+      // skips an identical rebuild - so the "Seen at" line has to be repainted
+      // outside that path or it sits on a stale time indefinitely.
+      const S = await import(${JSON.stringify(js('state.js'))});
+      S.state.activeChatID = 'h1';
+      S.state.messages.set('h1', []);
+      const seenLine = () => (document.getElementById('seen-line') || {}).textContent || '';
+      S.upsertMessage('h1', {
+        id: 'seen-1', chatID: 'h1', isSender: true, senderID: 'me', senderName: 'Me',
+        timestamp: '2026-01-01T10:00:00.000Z', text: 'mine', type: 'TEXT', attachments: [],
+      });
+      const beforeReceipt = seenLine();
+      S.upsertMessage('h1', {
+        id: 'seen-1', chatID: 'h1', isSender: true, seen: { '@them:x': '2026-01-01T11:22:33.000Z' },
+      });
+      const afterReceipt = seenLine();
+      cases.push([
+        'a read receipt moves the seen line without rebuilding the thread',
+        afterReceipt.startsWith('Seen at ') && afterReceipt !== beforeReceipt,
+        beforeReceipt + ' -> ' + afterReceipt,
+      ]);
+
       return JSON.stringify(cases);
 
       async function body() {

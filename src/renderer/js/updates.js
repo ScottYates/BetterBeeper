@@ -209,6 +209,23 @@ function wasDismissed(version) {
 }
 
 /**
+ * Say so when the last install did not take.
+ *
+ * The app that could not install itself is gone by the time anyone could be
+ * told, so this is read on the next launch. Without it a failed install is
+ * indistinguishable from an update that was never offered.
+ */
+function reportFailedInstall(info) {
+  const last = info?.lastInstall;
+  if (!last || last.ok !== false) return;
+  toast(
+    `The last update did not install (installer exit ${last.code ?? 'unknown'}). Still on ${info.current}.`,
+    'error',
+    8000,
+  );
+}
+
+/**
  * The launch check.
  *
  * Deferred a little after startup so it never competes with the first paint or
@@ -226,6 +243,7 @@ export async function checkForUpdatesOnLaunch({ force = false } = {}) {
 
   const info = await call(() => api.updateCheck(), { context: 'update check', fallback: null });
   if (!info) return null;
+  reportFailedInstall(info);
 
   // A staged-but-unapplied install means we already asked and already
   // downloaded. Saying so is more useful than asking again.
@@ -254,6 +272,7 @@ export async function checkNow() {
     toast('Could not reach GitHub to check for updates.', 'error');
     return null;
   }
+  reportFailedInstall(info);
   if (info.staged) {
     toast('An update is ready. Restart the app to install it.', 'info', 6000);
     return info;

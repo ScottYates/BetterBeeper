@@ -115,6 +115,56 @@ async function main() {
           || ('got ' + JSON.stringify(typeof restore === 'function' ? restore('unreachable') : restore));
       });
 
+      // The "Seen at" line. Assertions compare one rendering against another
+      // rather than against a clock: the line is formatted in local time, so a
+      // hardcoded "12:30" is only right in some of the world's timezones.
+      const seen = T.seenLineText;
+      const msg = (o) => Object.assign(
+        { id: 'm', isSender: true, text: 'hi', timestamp: '2026-10-08T12:00:00.000Z' },
+        o,
+      );
+      const READ_OLD = { '@them:x': '2026-10-08T12:30:00.000Z' };
+      const READ_NEW = { '@them:x': '2026-10-08T13:45:00.000Z' };
+      const read = (...list) => (typeof seen === 'function' ? seen(list) : seen);
+      const onlyOld = read(msg({ id: 'a', seen: READ_OLD }));
+
+      add('a read message shows when it was read', () => {
+        const out = onlyOld;
+        return typeof out === 'string' && out.startsWith('Seen at ') || ('got ' + JSON.stringify(out));
+      });
+
+      add('it reports the newest message that was read', () => {
+        const out = read(msg({ id: 'a', seen: READ_OLD }), msg({ id: 'b', seen: READ_NEW }));
+        return typeof out === 'string' && out.startsWith('Seen at ') && out !== onlyOld
+          || ('got ' + JSON.stringify(out));
+      });
+
+      add('an unread message does not hide an older read one', () => {
+        const out = read(msg({ id: 'a', seen: READ_OLD }), msg({ id: 'b' }));
+        return out === onlyOld || ('got ' + JSON.stringify(out) + ' vs ' + JSON.stringify(onlyOld));
+      });
+
+      add('someone else reading says nothing about your messages', () => {
+        const out = read(msg({ isSender: false, seen: READ_OLD }));
+        return out === '' || ('got ' + JSON.stringify(out));
+      });
+
+      add('nothing read yet reads as empty', () => {
+        const out = read(msg({}));
+        return out === '' || ('got ' + JSON.stringify(out));
+      });
+
+      add('a reaction is not a message, and never supplies the time', () => {
+        const out = read(
+          msg({ id: 'a', seen: READ_OLD }),
+          msg({
+            id: 'r', type: 'REACTION', isHidden: true, linkedMessageID: 'a',
+            seen: { '@them:x': '2026-10-08T23:59:00.000Z' },
+          }),
+        );
+        return out === onlyOld || ('got ' + JSON.stringify(out) + ' vs ' + JSON.stringify(onlyOld));
+      });
+
       add('a title of only spaces is treated as untitled', () => {
         const out = placeholder(person('   '));
         return out === 'Write a message…' || ('got ' + JSON.stringify(out));

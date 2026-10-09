@@ -43,7 +43,7 @@ Module._load = function patched(request, parent, isMain) {
 };
 
 const updater = require(updaterPath);
-const { compareVersions, pickInstallerAsset, isNewerRelease } = updater;
+const { compareVersions, pickInstallerAsset, isNewerRelease, installScript } = updater;
 Module._load = realLoad;
 
 const cases = [];
@@ -192,18 +192,226 @@ add('the picked asset carries a download url', () => {
 
 add('the module exports the functions the check drives', () => {
   for (const name of ['compareVersions', 'pickInstallerAsset', 'isNewerRelease',
-    'checkForUpdate', 'downloadAsset', 'stageUpdate', 'applyPendingUpdate', 'pendingStatus']) {
+    'checkForUpdate', 'downloadAsset', 'stageUpdate', 'applyPendingUpdate', 'pendingStatus',
+    'installScript']) {
     if (typeof updater[name] !== 'function') return 'missing ' + name;
   }
   return true;
 });
 
+// ---- the install command ---------------------------------------------------
+
+/**
+ * These run the script the app really hands to cmd.exe, against a stub
+ * installer that stands in for the 90 MB one.
+ *
+ * The ordering is the whole point of the fix, and it cannot be checked by
+ * reading the text: the previous bug was a perfectly well-formed command that
+ * simply restarted the app while the installer was still running. So the stub
+ * writes a timestamp when it starts and when it finishes, the relaunch target
+ * writes a third, and the assertion is that the three happened in that order.
+ *
+ * It is also run the way the app runs it - as a script file, not as a `/c`
+ * argument. Passing this as a single argv element does not work: Node escapes
+ * the inner quotes for the Windows command line and cmd then reads the
+ * backslashes as part of the path.
+ */
+const fs = require('node:fs');
+const os = require('node:os');
+const { spawnSync } = require('node:child_process');
+
+const stampDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-update-cmd-'));
+const orderLog = path.join(stampDir, 'order.log');
+
+/** The order the steps actually happened in. Appends, so it survives races. */
+function readOrder() {
+  try {
+    return fs.readFileSync(orderLog, 'utf8').split(/\r?\n/).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+const stubLauncher = path.join(stampDir, 'stub app.cmd');
+fs.writeFileSync(
+  stubLauncher,
+  ['@echo off', 'echo relaunched>>"' + orderLog + '"', ''].join('\r\n'),
+  'utf8',
+);
+
+/** An installer that takes about a second, so a relaunch on a timer lands inside it. */
+function writeStub(name, { sleepSeconds = 2, code = 0 } = {}) {
+  const file = path.join(stampDir, name);
+  fs.writeFileSync(
+    file,
+    [
+      '@echo off',
+      `echo installer-start>>"${orderLog}"`,
+      `ping -n ${sleepSeconds} 127.0.0.1 >NUL`,
+      `echo installer-end>>"${orderLog}"`,
+      `exit /b ${code}`,
+      '',
+    ].join('\r\n'),
+    'utf8',
+  );
+  return file;
+}
+
+const slowInstaller = writeStub('slow installer.cmd');
+const okInstaller = writeStub('ok installer.cmd', { sleepSeconds: 1 });
+const badInstaller = writeStub('bad installer.cmd', { sleepSeconds: 1, code: 3 });
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Write the script and run it exactly as applyPendingUpdate does, then report
+ * the order the three steps ran in.
+ *
+ * `start` is asynchronous by design - the script must not block on the app it
+ * is launching - so the relaunch line can land a moment after cmd.exe returns.
+ * Hence the poll rather than a straight read.
+ */
+async function runInstall(installer, { statusFile } = {}) {
+  for (const f of fs.readdirSync(stampDir)) {
+    if (f === 'order.log' || f === 'status.txt' || f === 'apply.cmd') {
+      fs.rmSync(path.join(stampDir, f), { force: true });
+    }
+  }
+  const scriptPath = path.join(stampDir, 'apply.cmd');
+  const script = installScript(installer, stubLauncher, { settleSeconds: 1, statusFile });
+
+  // Refuse to run a script whose relaunch would open a console window. These
+  // checks run against whatever the code currently says, so a regression here
+  // must fail on the string check alone - never by popping a window at the user
+  // to prove it.
+  if (!/start "" \/B "/.test(script)) {
+    throw new Error('refusing to run: the relaunch would open a console window');
+  }
+
+  fs.writeFileSync(scriptPath, script, 'utf8');
+  // windowsHide matters here: this runs several cmd.exe sessions, and without
+  // it each one flashes a console window at the user for the sake of a test.
+  const run = spawnSync('cmd.exe', ['/v:on', '/c', scriptPath], {
+    timeout: 60000,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+
+  let order = readOrder();
+  for (let i = 0; i < 40 && !order.includes('relaunched'); i += 1) {
+    await sleep(100);
+    order = readOrder();
+  }
+
+  let status = null;
+  try {
+    status = fs.readFileSync(stamp('status'), 'utf8').trim();
+  } catch {
+    /* never written */
+  }
+  return { order, status, stderr: (run.stderr || '').trim() };
+}
+
+const stamp = (name) => path.join(stampDir, `${name}.txt`);
+
+// The execution checks are async, so they are collected and run below.
+
+const execChecks = [];
+const addExec = (name, fn) => execChecks.push([name, fn]);
+
+addExec('the installer actually runs', async () => {
+  const r = await runInstall(slowInstaller);
+  return r.order.includes('installer-start')
+    || `the installer never ran: ${r.stderr || JSON.stringify(r.order)}`;
+});
+
+addExec('the app is restarted only after the installer has finished', async () => {
+  const r = await runInstall(slowInstaller);
+  const start = r.order.indexOf('installer-start');
+  const end = r.order.indexOf('installer-end');
+  const relaunch = r.order.indexOf('relaunched');
+  if (start < 0 || end < 0) return `the installer did not finish: ${JSON.stringify(r.order)}`;
+  if (relaunch < 0) return 'the app was never restarted';
+  return relaunch > end
+    || `relaunched before the installer finished: ${JSON.stringify(r.order)}`;
+});
+
+addExec('a successful install is recorded as zero', async () => {
+  const r = await runInstall(okInstaller, { statusFile: stamp('status') });
+  return r.status === '0' || (`recorded ${JSON.stringify(r.status)} ${r.stderr}`);
+});
+
+addExec('a failed install is recorded, not swallowed', async () => {
+  const r = await runInstall(badInstaller, { statusFile: stamp('status') });
+  return r.status === '3' || (`recorded ${JSON.stringify(r.status)} ${r.stderr}`);
+});
+
+addExec('the app still comes back when the installer fails', async () => {
+  const r = await runInstall(badInstaller);
+  return r.order.includes('relaunched')
+    || `the app was left not running: ${JSON.stringify(r.order)}`;
+});
+
+add('a path with spaces survives intact', () => {
+  const script = installScript('C:\\Some Path\\setup.exe', 'C:\\App Dir\\Better Beeper.exe');
+  return script.includes('call "C:\\Some Path\\setup.exe" /S')
+    && script.includes('start "" /B "C:\\App Dir\\Better Beeper.exe"')
+    || ('got ' + JSON.stringify(script));
+});
+
+add('the relaunch does not open a console window', () => {
+  // `start` without /B flashes an empty cmd window at the user on every run.
+  const script = installScript('C:\\setup.exe', 'C:\\app.exe');
+  return /start "" \/B "/.test(script)
+    || ('the relaunch opens a window: ' + JSON.stringify(script));
+});
+
+add('the script waits before installing, for this process to go', () => {
+  const script = installScript('x.exe', 'y.exe', { settleSeconds: 4 });
+  const settleAt = script.indexOf('ping -n 4');
+  const installAt = script.indexOf('/S');
+  return settleAt >= 0 && installAt > settleAt || ('got ' + JSON.stringify(script));
+});
+
+add('the installer is called, not just invoked', () => {
+  // Without `call`, a nested batch file takes over and the relaunch never runs.
+  const script = installScript('C:\\setup.exe', 'C:\\app.exe');
+  return script.includes('call "C:\\setup.exe" /S')
+    || ('the installer is invoked without call: ' + JSON.stringify(script));
+});
+
+add('the script is passed as a file, never as a quoted /c argument', () => {
+  // This is the trap that made the first attempt of this fix fail outright:
+  // argv escaping mangles the quotes and cmd then cannot find the path.
+  const src = fs.readFileSync(updaterPath, 'utf8');
+  return !/spawn\(\s*'cmd\.exe'\s*,\s*\[[^\]]*installScript\(/.test(src)
+    || 'applyPendingUpdate passes the command through argv';
+});
+
 // ---- report ----------------------------------------------------------------
 
-let failed = 0;
-for (const [name, ok, detail] of cases) {
-  if (!ok) failed++;
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : `  [${detail}]`}`);
+async function report() {
+  for (const [name, fn] of execChecks) {
+    let ok = false;
+    let detail = '';
+    try {
+      const r = await fn();
+      ok = r === true;
+      if (r !== true) detail = String(r);
+    } catch (e) {
+      ok = false;
+      detail = e.message;
+    }
+    cases.push([name, ok, detail]);
+  }
+
+  let failed = 0;
+  for (const [name, ok, detail] of cases) {
+    if (!ok) failed++;
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : `  [${detail}]`}`);
+  }
+  console.log(`\n${cases.length - failed}/${cases.length} checks passed`);
+  process.exit(failed ? 1 : 0);
 }
-console.log(`\n${cases.length - failed}/${cases.length} checks passed`);
-process.exit(failed ? 1 : 0);
+
+report();

@@ -504,15 +504,26 @@ export function attachmentIcon(attachment) {
   return '\u{1F4CE}';
 }
 
-/** Beeper's "Seen at 11:11 AM" line above the composer. */
+/**
+ * Beeper's "Seen at 11:11 AM" line above the composer.
+ *
+ * Takes the messages worth drawing, not the raw state: Beeper returns reactions
+ * as their own records with `isHidden` set and a `seen` of their own, so
+ * scanning the raw list let a reaction - newer than the message it belongs to -
+ * supply the time, and the line showed when a heart was tapped rather than
+ * when the message was read.
+ */
+export function seenLineText(messages) {
+  const drawable = renderableFrom(messages);
+  const lastSeen = [...drawable].reverse().find((m) => m.isSender && seenAt(m.seen));
+  const when = lastSeen ? seenAt(lastSeen.seen) : null;
+  return when ? `Seen at ${messageTime(when)}` : '';
+}
+
 function renderSeenLine() {
   const line = $('#seen-line');
   if (!line) return;
-
-  const messages = state.messages.get(state.activeChatID) || [];
-  const lastSeen = [...messages].reverse().find((m) => m.isSender && seenAt(m.seen));
-  const when = lastSeen ? seenAt(lastSeen.seen) : null;
-  line.textContent = when ? `Seen at ${messageTime(when)}` : '';
+  line.textContent = seenLineText(state.messages.get(state.activeChatID));
 }
 
 /**
@@ -750,7 +761,15 @@ function onMessageUpserted() {
   // the list and the signature changes with it. That is the rebuild this relies
   // on: there is no tombstone left behind to re-render.
   const signature = threadSignature(messages);
-  if (signature === lastThreadSignature) return;
+  if (signature === lastThreadSignature) {
+    // A read receipt changes no bubble - which is the whole reason this early
+    // return exists - but it does change the "Seen at" line, and that line
+    // lives outside the list this signature guards. Repainting just that node
+    // keeps a receipt from rebuilding the thread, which would restart every
+    // animated GIF in it to move one timestamp forward.
+    renderSeenLine();
+    return;
+  }
   lastThreadSignature = signature;
 
   const listEl = $('#message-list');
@@ -1410,9 +1429,12 @@ async function toggleReaction(message, key) {
  * drawn, not a deletion of the message we were sent.
  */
 export function renderableMessages(chatID) {
-  return (state.messages.get(chatID) || []).filter(
-    (m) => !m.isHidden && !isMessageDeleted(m.id),
-  );
+  return renderableFrom(state.messages.get(chatID));
+}
+
+/** The same filter, from a list rather than from state, so callers can hand it a list. */
+export function renderableFrom(list) {
+  return (list || []).filter((m) => !m.isHidden && !isMessageDeleted(m.id));
 }
 
 async function loadOlder() {

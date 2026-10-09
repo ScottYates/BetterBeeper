@@ -45,6 +45,12 @@ const USER_AGENT = 'BetterBeeper-updater';
 /** The marker file dropped in userData; consumed by applyPendingUpdate(). */
 const PENDING_FILE = 'update-pending.json';
 
+/** How the last install went, written by the detached cmd after it exits. */
+const INSTALL_RESULT_FILE = 'update-result.txt';
+
+/** The batch file the detached cmd actually runs. Kept on disk, not in argv. */
+const APPLY_SCRIPT_FILE = 'update-apply.cmd';
+
 const DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
@@ -317,14 +323,89 @@ function stageUpdate(installerPath) {
 }
 
 /**
+ * The batch file that finishes an install once this process is gone.
+ *
+ * A silent NSIS install cannot replace the executable while the app is running,
+ * and unpacking 90 MB takes several seconds. So the relaunch has to come *after*
+ * the installer exits - not on a timer. Starting the app one second after
+ * spawning the installer put the old binary straight back onto the files the
+ * installer was replacing, which locks them, makes the install fail or land
+ * half-applied, and hands the user the same version back with nothing to show
+ * for it.
+ *
+ * This is a *file* rather than a one-liner for a reason that is not obvious:
+ * passing a command containing quotes as a single `cmd /c` argument does not
+ * survive the trip. Node escapes the inner quotes for the Windows command line,
+ * and cmd.exe's own parsing then treats the backslashes as part of the path, so
+ * the installer never runs and a `start` reports a path it cannot find. A file
+ * has no quoting layer between here and the shell at all.
+ *
+ * The steps are deliberately not chained with `&&`: if the installer fails the
+ * app should still come back, rather than leaving the user with nothing running
+ * and no way back in.
+ */
+function installScript(installer, exe, { settleSeconds = 3, statusFile = null } = {}) {
+  // `ping` is a sleep that works in a windowed session with no console.
+  const settle = settleSeconds > 0 ? `ping -n ${settleSeconds} 127.0.0.1 >NUL\r\n` : '';
+  // Delayed expansion, so the code read is the installer's and not whatever the
+  // shell happened to hold when the line was parsed. Needs /v:on to be on.
+  const record = statusFile ? `echo !errorlevel!>"${statusFile}"\r\n` : '';
+  return [
+    '@echo off',
+    settle,
+    // `call`, not a bare invocation: running one batch file from another without
+    // it transfers control and the caller never resumes, so the relaunch below
+    // would be silently skipped. It is also correct for an .exe installer,
+    // which is what this actually runs against in production.
+    `call "${installer}" /S`,
+    record,
+    // /B: relaunch without opening a console window. The app is a GUI binary
+    // so it never needed one, but a plain `start` opens one for anything it
+    // launches, and the first version of this flashed an empty cmd window at the
+    // user every time it ran.
+    `start "" /B "${exe}"`,
+    '',
+  ].join('\r\n');
+}
+
+/** Read and clear how the last install went.
+ *
+ * The process that could not install itself is gone, so a silent failure has no
+ * other chance of being reported - the next launch is the first moment anyone
+ * can be told.
+ */
+function readInstallResult() {
+  const file = path.join(app.getPath('userData'), INSTALL_RESULT_FILE);
+  try {
+    const raw = fs.readFileSync(file, 'utf8').trim();
+    const code = Number(raw);
+    return { ok: Number.isFinite(code) && code === 0, code: Number.isFinite(code) ? code : null };
+  } catch {
+    return null; // no marker, or one we cannot read: nothing to report
+  } finally {
+    try {
+      fs.rmSync(file, { force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+}
+
+/** How the install that ran before this launch went, once read. */
+let previousInstall = null;
+
+/**
  * Run a pending install, then exit.
  *
- * Called from main.js before the window exists. The installer is spawned
- * detached with `/S`, and this process exits immediately: the installer needs
- * to replace a running executable, so waiting for it would deadlock against
- * ourselves.
+ * Called from main.js before the window exists. The install is handed to a
+ * detached cmd.exe running a script we wrote, and this process exits
+ * immediately: the installer needs to replace a running executable, so waiting
+ * for it here would deadlock against ourselves.
  */
 function applyPendingUpdate() {
+  // Before anything overwrites it: this is the outcome of the *previous* run.
+  previousInstall = readInstallResult();
+
   const pending = readPending();
   if (!pending) return false;
   clearPending();
@@ -332,8 +413,23 @@ function applyPendingUpdate() {
   const installer = pending.installer;
   if (!installer || !fs.existsSync(installer)) return false;
 
+  const statusFile = path.join(app.getPath('userData'), INSTALL_RESULT_FILE);
+  const relaunch = pending.relaunch || process.execPath;
+
+  let scriptPath;
   try {
-    const child = spawn(installer, ['/S'], {
+    scriptPath = path.join(app.getPath('userData'), APPLY_SCRIPT_FILE);
+    fs.writeFileSync(
+      scriptPath,
+      installScript(installer, relaunch, { statusFile }),
+      'utf8',
+    );
+  } catch {
+    return false;
+  }
+
+  try {
+    const child = spawn('cmd.exe', ['/v:on', '/c', scriptPath], {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
@@ -346,18 +442,7 @@ function applyPendingUpdate() {
     return false;
   }
 
-  const relaunch = pending.relaunch;
-  if (relaunch) {
-    setTimeout(() => {
-      try {
-        spawn(relaunch, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-      } catch {
-        /* the install still happened; the user can start it themselves */
-      }
-    }, 1000);
-  }
-
-  setTimeout(() => app.exit(0), 400);
+  setTimeout(() => app.exit(0), 300);
   return true;
 }
 
@@ -369,7 +454,11 @@ function applyPendingUpdate() {
  */
 function pendingStatus() {
   const pending = readPending();
-  return pending ? { staged: true, stagedAt: pending.stagedAt || null } : { staged: false };
+  return {
+    staged: Boolean(pending),
+    stagedAt: (pending && pending.stagedAt) || null,
+    lastInstall: previousInstall,
+  };
 }
 
 module.exports = {
@@ -378,6 +467,7 @@ module.exports = {
   compareVersions,
   pickInstallerAsset,
   isNewerRelease,
+  installScript,
   checkForUpdate,
   downloadAsset,
   stageUpdate,
