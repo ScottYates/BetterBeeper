@@ -113,11 +113,36 @@ function lastActivityOf(chat) {
 }
 
 /**
+ * What makes two chats look like the same destination, or '' if unknowable.
+ *
+ * Beeper's Google Voice bridge hands out a fresh chat id for the same person
+ * minutes apart, so the picker showed "Benji" twice, both on Google Voice,
+ * both leading to the same place. The name and the network together are what
+ * a person reads as "that chat", so that is what is compared.
+ *
+ * An untitled chat gets no key at all, so it is never collapsed: two untitled
+ * chats may well be two different groups, and there is nothing to tell them
+ * apart by.
+ */
+export function shareIdentity(chat) {
+  const title = String(chat?.title || '').trim().toLowerCase();
+  if (!title) return '';
+  // NUL rather than a visible separator, so a title containing it cannot make
+  // two different chats collide.
+  return `${title}\u0000${String(chat?.network || '').trim().toLowerCase()}`;
+}
+
+/**
  * The chats worth offering, newest first.
  *
  * The chat the message came from is left out: forwarding it back where it
  * already is is a no-op that still posts a message. Merged rows go too, since
  * the conversation they belong to is in the list under its own name.
+ *
+ * Then same-named chats on the same network are collapsed to the most recent
+ * one, which is the conversation actually in use. Only the picker does this:
+ * the sidebar still lists both, because there you are browsing conversations
+ * and the older one may hold messages the newer one does not.
  *
  * Beeper did not return mergedIntoChatID on any of the 50 chats measured on
  * this account, so that half currently never fires. It stays because the
@@ -128,15 +153,27 @@ function lastActivityOf(chat) {
 export function shareableChats(chats, { sourceChatID = '', query = '', limit = CHAT_LIMIT } = {}) {
   const needle = String(query || '').trim().toLowerCase();
 
-  return [...(chats || [])]
+  const sorted = [...(chats || [])]
     .filter((chat) => {
       if (!chat || chat.id === sourceChatID) return false;
       if (chat.mergedIntoChatID) return false;
       if (!needle) return true;
       return matches(chat.title, needle);
     })
-    .sort((a, b) => lastActivityOf(b) - lastActivityOf(a))
-    .slice(0, limit);
+    .sort((a, b) => lastActivityOf(b) - lastActivityOf(a));
+
+  const seen = new Set();
+  const unique = [];
+  for (const chat of sorted) {
+    const key = shareIdentity(chat);
+    if (key) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    unique.push(chat);
+    if (unique.length >= limit) break;
+  }
+  return unique;
 }
 
 /**

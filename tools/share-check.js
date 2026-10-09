@@ -228,6 +228,85 @@ async function main() {
       });
 
       // ---------------------------------------------------------------------
+      // Beeper hands out a second chat id for the same person, so the picker
+      // was offering "Benji" twice on Google Voice, both leading to the same
+      // place.
+      // ---------------------------------------------------------------------
+
+      const DUPES = [
+        chat('!benji-new', 'Benji', '2026-03-04T00:00:00Z', { network: 'Google Voice' }),
+        chat('!benji-old', 'Benji', '2026-03-01T00:00:00Z', { network: 'Google Voice' }),
+        chat('!benji-sig', 'Benji', '2026-03-02T00:00:00Z', { network: 'Signal' }),
+      ];
+
+      check('the same name on the same network is offered once', () => {
+        const got = S.shareableChats(DUPES, {}).map((c) => c.id);
+        return got.join(',') === '!benji-new,!benji-sig' || got.join(',');
+      });
+
+      check('the newer of two same-named chats is the one offered', () => {
+        const got = S.shareableChats([DUPES[1], DUPES[0]], {}).map((c) => c.id);
+        return got.join(',') === '!benji-new' || got.join(',');
+      });
+
+      check('the same name on a different network stays a separate chat', () => {
+        // "Benji on Signal" is not "Benji on Google Voice"; collapsing those
+        // would send a message to the wrong service.
+        const got = S.shareableChats(DUPES, {}).filter((c) => c.title === 'Benji').length;
+        return got === 2 || got + ' Benji chats offered';
+      });
+
+      check('a name differing only in case or spacing is the same chat', () => {
+        const pair = [
+          chat('!a', 'Benji', '2026-03-04T00:00:00Z', { network: 'Google Voice' }),
+          chat('!b', '  benji ', '2026-03-01T00:00:00Z', { network: 'Google Voice' }),
+        ];
+        const got = S.shareableChats(pair, {}).map((c) => c.id);
+        return got.join(',') === '!a' || got.join(',');
+      });
+
+      check('untitled chats are never collapsed', () => {
+        // Two chats with no name may be two different groups, and there is
+        // nothing to tell them apart by.
+        const blank = [
+          chat('!g1', '', '2026-03-04T00:00:00Z', { network: 'Signal' }),
+          chat('!g2', '   ', '2026-03-01T00:00:00Z', { network: 'Signal' }),
+        ];
+        const got = S.shareableChats(blank, {}).map((c) => c.id);
+        return got.join(',') === '!g1,!g2' || got.join(',');
+      });
+
+      check('collapsing happens before the cap, not after it', () => {
+        // If the list were capped first and de-duplicated afterwards, a list
+        // that is mostly duplicates would offer fewer chats than the cap
+        // allows. The two copies of each person are one minute apart so that
+        // they land next to each other once sorted, which is what makes the
+        // cap bite in the middle of a pair.
+        //
+        // Both halves matter: length alone passes whether or not duplicates
+        // are removed, because a list of 20 with duplicates in it is still 20.
+        const paired = [];
+        for (let i = 0; i < 30; i++) {
+          const older = String(i * 2).padStart(2, '0');
+          const newer = String(i * 2 + 1).padStart(2, '0');
+          paired.push(chat('!e' + i, 'Person ' + i, '2026-03-04T00:' + older + ':00Z', { network: 'Signal' }));
+          paired.push(chat('!d' + i, 'Person ' + i, '2026-03-04T00:' + newer + ':00Z', { network: 'Signal' }));
+        }
+        const got = S.shareableChats(paired, {});
+        const distinct = new Set(got.map((c) => c.title));
+        // Plain concatenation, not a template literal: this whole block lives
+        // inside one, and a backtick here would close it early.
+        return (got.length === S.CHAT_LIMIT && distinct.size === S.CHAT_LIMIT)
+          || ('offered ' + got.length + ', ' + distinct.size + ' distinct');
+      });
+
+      check('the picker offers no two rows a person could not tell apart', () => {
+        const got = S.shareableChats(DUPES, {});
+        const keys = got.map((c) => S.shareIdentity(c));
+        return new Set(keys).size === keys.length || keys.join(' / ');
+      });
+
+      // ---------------------------------------------------------------------
       // Sending it
       // ---------------------------------------------------------------------
 
