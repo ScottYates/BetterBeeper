@@ -54,26 +54,87 @@ async function main() {
       } catch (e) {
         cases.push(['the harness ran to completion', false, e && (e.stack || e.message)]);
       }
-      // A read receipt changes no bubble - that is the whole reason the thread
-      // skips an identical rebuild - so the "Seen at" line has to be repainted
-      // outside that path or it sits on a stale time indefinitely.
+      // A read receipt is drawn on the message itself, so it has to reach the screen
+      // even though a receipt changes nothing else about the thread.
       const S = await import(${JSON.stringify(js('state.js'))});
       S.state.activeChatID = 'h1';
       S.state.messages.set('h1', []);
-      const seenLine = () => (document.getElementById('seen-line') || {}).textContent || '';
+      const rowText = (id) => {
+        const row = document.querySelector('#message-list [data-message-id="' + id + '"]');
+        if (!row) return '(no row)';
+        const seen = row.querySelector('.msg-seen');
+        return seen ? seen.textContent.trim() : '';
+      };
       S.upsertMessage('h1', {
         id: 'seen-1', chatID: 'h1', isSender: true, senderID: 'me', senderName: 'Me',
         timestamp: '2026-01-01T10:00:00.000Z', text: 'mine', type: 'TEXT', attachments: [],
       });
-      const beforeReceipt = seenLine();
+      const beforeReceipt = rowText('seen-1');
       S.upsertMessage('h1', {
         id: 'seen-1', chatID: 'h1', isSender: true, seen: { '@them:x': '2026-01-01T11:22:33.000Z' },
       });
-      const afterReceipt = seenLine();
+      const afterReceipt = rowText('seen-1');
+      // This harness is String.raw, so a \\u escape here would compare against
+      // a backslash and a "u", not against the tick that is actually drawn.
+      const TICKS = String.fromCharCode(0x2713, 0x2713);
       cases.push([
-        'a read receipt moves the seen line without rebuilding the thread',
-        afterReceipt.startsWith('Seen at ') && afterReceipt !== beforeReceipt,
-        beforeReceipt + ' -> ' + afterReceipt,
+        'a read receipt appears on the message it belongs to',
+        beforeReceipt === '' && afterReceipt.startsWith(TICKS),
+        JSON.stringify(beforeReceipt) + ' -> ' + JSON.stringify(afterReceipt),
+      ]);
+
+      // Someone else's message never gets one, however it was read.
+      S.upsertMessage('h1', {
+        id: 'seen-2', chatID: 'h1', isSender: false, senderID: 'them', senderName: 'Them',
+        timestamp: '2026-01-01T10:30:00.000Z', text: 'theirs', type: 'TEXT', attachments: [],
+      });
+      S.upsertMessage('h1', {
+        id: 'seen-2', chatID: 'h1', isSender: false, seen: { '@me:x': '2026-01-01T11:30:00.000Z' },
+      });
+      cases.push([
+        'someone else reading puts no receipt on their message',
+        rowText('seen-2') === '',
+        JSON.stringify(rowText('seen-2')),
+      ]);
+
+      // The old single line above the composer is gone entirely.
+      cases.push([
+        'the thread-level seen line is gone',
+        !document.getElementById('seen-line'),
+        'still in the document',
+      ]);
+
+      // A read receipt already proves the message was sent, so the plain "sent"
+      // tick next to it reads as two ticks and a time, and is dropped.
+      S.upsertMessage('h1', {
+        id: 'seen-3', chatID: 'h1', isSender: true, senderID: 'me', senderName: 'Me',
+        timestamp: '2026-01-01T10:45:00.000Z', text: 'sent and read', type: 'TEXT', attachments: [],
+        sendStatus: 'sent', seen: { '@them:x': '2026-01-01T11:50:00.000Z' },
+      });
+      const bothRow = document.querySelector('#message-list [data-message-id="seen-3"]');
+      const bothBits = bothRow
+        ? [...bothRow.querySelectorAll('.msg-meta span')].map((n) => n.className + '|' + n.textContent.trim())
+        : ['(no row)'];
+      cases.push([
+        'a read message shows the receipt without a redundant sent tick',
+        bothBits.length === 1 && bothBits[0].startsWith('msg-seen|'),
+        JSON.stringify(bothBits),
+      ]);
+
+      // A failed send is not superseded by anything and keeps its own mark.
+      S.upsertMessage('h1', {
+        id: 'seen-4', chatID: 'h1', isSender: true, senderID: 'me', senderName: 'Me',
+        timestamp: '2026-01-01T10:50:00.000Z', text: 'did not send', type: 'TEXT', attachments: [],
+        sendStatus: 'failed', seen: { '@them:x': '2026-01-01T12:00:00.000Z' },
+      });
+      const failedRow = document.querySelector('#message-list [data-message-id="seen-4"]');
+      const failedBits = failedRow
+        ? [...failedRow.querySelectorAll('.msg-meta span')].map((n) => n.className)
+        : ['(no row)'];
+      cases.push([
+        'a failed send keeps its own mark alongside the receipt',
+        failedBits.includes('msg-status-failed') && failedBits.includes('msg-seen'),
+        JSON.stringify(failedBits),
       ]);
 
       return JSON.stringify(cases);

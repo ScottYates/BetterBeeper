@@ -798,13 +798,8 @@ select { cursor: pointer; }
 }
 #reply-preview-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* "Seen at 11:11 AM" sits just above the composer, as in Beeper. */
-.seen-line {
-  padding: 2px 20px 4px;
-  font-size: 11px; color: var(--text-faint);
-  background: var(--bg);
-  flex: none; min-height: 16px;
-}
+/* The read receipt, on the message it belongs to. */
+.msg-seen { color: var(--text-faint); white-space: nowrap; }
 
 .composer {
   display: flex; align-items: center; gap: 8px;

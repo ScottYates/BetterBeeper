@@ -505,25 +505,26 @@ export function attachmentIcon(attachment) {
 }
 
 /**
- * Beeper's "Seen at 11:11 AM" line above the composer.
+ * The read receipt under one of our messages, or '' when it has not been read
+ * back yet.
  *
- * Takes the messages worth drawing, not the raw state: Beeper returns reactions
- * as their own records with `isHidden` set and a `seen` of their own, so
- * scanning the raw list let a reaction - newer than the message it belongs to -
- * supply the time, and the line showed when a heart was tapped rather than
- * when the message was read.
+ * Per message rather than one line for the whole thread: "seen at" on its own
+ * could only ever say when the *newest* message was read, which leaves a
+ * message that was read hours earlier looking unread. Each bubble carries its
+ * own answer, so the receipts read as a fact about that message.
+ *
+ * A reaction record has a `seen` of its own and is newer than the message it
+ * belongs to, but it is not a message - `renderableFrom` keeps it out of here.
  */
-export function seenLineText(messages) {
-  const drawable = renderableFrom(messages);
-  const lastSeen = [...drawable].reverse().find((m) => m.isSender && seenAt(m.seen));
-  const when = lastSeen ? seenAt(lastSeen.seen) : null;
-  return when ? `Seen at ${messageTime(when)}` : '';
+export function seenIndicatorText(message) {
+  if (!message?.isSender) return '';
+  const when = seenAt(message.seen);
+  return when ? `\u2713\u2713 ${messageTime(when)}` : '';
 }
 
-function renderSeenLine() {
-  const line = $('#seen-line');
-  if (!line) return;
-  line.textContent = seenLineText(state.messages.get(state.activeChatID));
+/** True when this message needs a meta row of its own to carry the receipt. */
+function hasSeenIndicator(message) {
+  return Boolean(seenIndicatorText(message));
 }
 
 /**
@@ -692,7 +693,6 @@ function renderAll() {
     previous = message;
   }
 
-  renderSeenLine();
   if (stick) scrollToBottom();
 }
 
@@ -725,6 +725,10 @@ export function threadSignature(messages) {
       m.timestamp || '',
       m.editedTimestamp || '',
       m.linkedMessageID || '',
+      // The read receipt is drawn on the message itself now, so a receipt is a
+      // change the thread actually draws - and therefore has to be in here or
+      // the rebuild that would draw it gets skipped.
+      seenAt(m.seen) || '',
       (m.attachments || [])
         .map((a) => `${a.id || a.fileName || ''}:${a.fileSize || 0}:${a.mimeType || ''}`)
         .join(','),
@@ -761,15 +765,7 @@ function onMessageUpserted() {
   // the list and the signature changes with it. That is the rebuild this relies
   // on: there is no tombstone left behind to re-render.
   const signature = threadSignature(messages);
-  if (signature === lastThreadSignature) {
-    // A read receipt changes no bubble - which is the whole reason this early
-    // return exists - but it does change the "Seen at" line, and that line
-    // lives outside the list this signature guards. Repainting just that node
-    // keeps a receipt from rebuilding the thread, which would restart every
-    // animated GIF in it to move one timestamp forward.
-    renderSeenLine();
-    return;
-  }
+  if (signature === lastThreadSignature) return;
   lastThreadSignature = signature;
 
   const listEl = $('#message-list');
@@ -801,7 +797,6 @@ function onMessageUpserted() {
     listEl.append(el('div', { class: 'empty-note', text: 'No messages here yet.' }));
   }
 
-  renderSeenLine();
   if (stick) scrollToBottom();
   if (window.document.hasFocus() && window.document.visibilityState === 'visible') markRead();
 }
@@ -875,7 +870,8 @@ export function messageNode(message, previous) {
     bubbleWrap.append(bubble);
   }
 
-  if (message.editedTimestamp || (message.isSender && message.sendStatus) || message.links?.length) {
+  if (message.editedTimestamp || (message.isSender && message.sendStatus)
+    || message.links?.length || hasSeenIndicator(message)) {
     bubbleWrap.append(metaNode(message));
   }
 
@@ -1033,10 +1029,29 @@ function metaNode(message) {
   const bits = [];
   if (message.editedTimestamp) bits.push(el('span', { class: 'muted', text: 'edited' }));
 
+  // The read receipt, on the message it belongs to rather than as one line for
+  // the whole thread. `seen` is polymorphic, so the raw value would render as
+  // [object Object] next to a message that was plainly read.
+  const receipt = seenIndicatorText(message);
+
   if (message.isSender) {
-    const status = message.sendStatus || 'sent';
-    const label = { pending: '⏳ sending…', sent: '✓', failed: '✕ failed' }[status] || '✓';
-    bits.push(el('span', { class: `msg-status-${status}`, text: label }));
+    // Once it has been read, the plain "sent" tick says nothing the receipt has
+    // not already said - and sitting beside it reads as two ticks and a time.
+    if (!receipt || message.sendStatus !== 'sent') {
+      const status = message.sendStatus || 'sent';
+      const label = { pending: '⏳ sending…', sent: '✓', failed: '✕ failed' }[status] || '✓';
+      bits.push(el('span', { class: `msg-status-${status}`, text: label }));
+    }
+  }
+
+  if (receipt) {
+    bits.push(
+      el('span', {
+        class: 'msg-seen',
+        text: receipt,
+        title: `Seen at ${fullTime(seenAt(message.seen))}`,
+      }),
+    );
   }
 
   if (message.links?.length) {
