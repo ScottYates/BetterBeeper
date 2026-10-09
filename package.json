@@ -16,6 +16,7 @@
     "deploy": "node tools/install-update.js",
     "deploy:check": "node tools/install-update.js --check",
     "check:notify": "node tools/notify-check.js",
+    "check:badge": "electron tools/badge-check.js",
     "check:send": "electron tools/send-check.js",
     "check:rich": "electron tools/rich-text-check.js",
     "check:pin": "electron tools/pin-check.js",

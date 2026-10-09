@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('beeper', {
   app: {
     bootstrap: () => invoke('app:bootstrap'),
     refreshDiscovery: () => invoke('app:refreshDiscovery'),
+    badge: (count) => invoke('app:badge', count),
   },
   updater: {
     check: () => invoke('updater:check'),

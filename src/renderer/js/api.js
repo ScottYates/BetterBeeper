@@ -49,6 +49,7 @@ export async function callOk(fn, opts = {}) {
 export const api = {
   bootstrap: () => window.beeper.app.bootstrap(),
   refreshDiscovery: () => window.beeper.app.refreshDiscovery(),
+  setBadge: (count) => window.beeper.app.badge(count),
 
   updateCheck: () => window.beeper.updater.check(),
   updateDownload: () => window.beeper.updater.download(),

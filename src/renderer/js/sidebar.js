@@ -16,6 +16,7 @@ import {
   localStateVersion,
 } from './state.js';
 import { toast, openLightbox } from './ui.js';
+import { totalUnread } from './unread.js';
 import { setArchived } from './chat-actions.js';
 import { networkIconMarkup, badgeBackground } from './network-icons.js';
 
@@ -175,8 +176,25 @@ function place(list, node, index) {
   return true;
 }
 
+/**
+ * Put the unread total on the app icon.
+ *
+ * Only sent when it changes. The chat list is re-rendered on every chat event,
+ * and a busy account produces those constantly; telling the main process to
+ * repaint the taskbar each time would flash a number nobody asked for.
+ */
+let badgeCount = null;
+
+function syncBadge() {
+  const total = totalUnread(chatList(), isArchived);
+  if (total === badgeCount) return;
+  badgeCount = total;
+  call(() => api.setBadge(total), { context: 'app badge', fallback: null });
+}
+
 export function renderChats() {
   const list = $('#chat-list');
+  syncBadge();
   if (state.searchQuery) return; // search view owns the pane
 
   const all = chatList().filter((chat) => {

@@ -11,6 +11,7 @@ const { BeeperClient, BeeperError } = require('./beeper-client');
 const { BeeperEvents } = require('./beeper-ws');
 const { McpClient } = require('./mcp-client');
 const auth = require('./auth');
+const badge = require('./badge');
 const mediaPath = require('./media-path');
 const assetSource = require('./asset-source');
 const { openMessageStore, OPEN_PAGE } = require('./message-store');
@@ -138,6 +139,14 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   }
 
   // ---- IPC surface -----------------------------------------------------
+
+  // The unread count on the app icon. The renderer owns the chat list, so it
+  // decides the number and main only applies it - one source of truth, and no
+  // second copy of "what is unread" to keep in step.
+  ipcMain.handle('app:badge', handle(async (count) => {
+    const applied = await badge.applyBadge(count);
+    return ok({ applied, count: badge.currentBadge() });
+  }));
 
   ipcMain.handle('app:bootstrap', handle(async () => {
     const discovery = await discover();
