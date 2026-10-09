@@ -151,7 +151,40 @@ export function networkMeta(source) {
 export function upsertMessage(chatID, message) {
   if (!message?.id) return;
   const list = state.messages.get(chatID) || [];
+  applyMessage(list, message);
+  sortForDisplay(list);
+  publish(chatID, message);
+  state.messages.set(chatID, list);
+}
 
+/**
+ * Insert or replace a whole page at once.
+ *
+ * A page is the unit everything actually arrives in - opening a chat, scrolling
+ * back, a live frame - and feeding it in one message at a time is quadratic:
+ * every `upsertMessage` re-sorts the list, rescans it, and emits
+ * `messages:changed`, which re-signatures the whole thread and re-renders it.
+ * Opening a chat therefore did 200 rebuilds to show 200 rows, and measured
+ * 2.9 seconds for a store read that takes 45ms.
+ *
+ * One emit, one sort, one render - the same rows, none of the repeated work.
+ */
+export function upsertMessages(chatID, messages) {
+  const list = [...(state.messages.get(chatID) || [])];
+  let last = null;
+  for (const message of messages || []) {
+    if (!message?.id) continue;
+    applyMessage(list, message);
+    last = message;
+  }
+  if (!last) return;
+  sortForDisplay(list);
+  state.messages.set(chatID, list);
+  publish(chatID, last);
+}
+
+/** Insert or replace one message in an existing list, in place. */
+function applyMessage(list, message) {
   const idx = list.findIndex((m) => m.id === message.id);
   if (idx >= 0) {
     const merged = { ...list[idx], ...message };
@@ -162,22 +195,29 @@ export function upsertMessage(chatID, message) {
     // ever clears it, leaving the bubble on "sending" for good.
     if (message.sendStatus === undefined) delete merged.sendStatus;
     list[idx] = merged;
-  } else {
-    absorbPendingPlaceholder(list, message);
-    list.push(message);
+    return;
   }
+  absorbPendingPlaceholder(list, message);
+  list.push(message);
+}
 
+/** Oldest first, ties broken by sortKey so equal timestamps keep a stable order. */
+function sortForDisplay(list) {
   list.sort((a, b) => {
     const at = new Date(a.timestamp || 0).getTime();
     const bt = new Date(b.timestamp || 0).getTime();
     if (at !== bt) return at - bt;
     return String(a.sortKey || '').localeCompare(String(b.sortKey || ''));
   });
-  state.messages.set(chatID, list);
-  // The inbox preview falls back to this list only when Beeper's newest message
-  // is one the user deleted here, so that is the only case where an arriving
-  // message changes what a sidebar row says. Bumping on every message would
-  // throw away the row reuse this exists for.
+}
+
+/**
+ * Announce a change. The sidebar preview falls back to the message list only
+ * when Beeper's newest message is one the user deleted here, so that is the
+ * only case where an arriving message changes what a sidebar row says. Bumping
+ * on every message would throw away the row reuse this exists for.
+ */
+function publish(chatID, message) {
   if (isMessageDeleted(state.chats.get(chatID)?.preview?.id)) bumpLocal();
   bus.emit('messages:changed', { chatID, message });
 }

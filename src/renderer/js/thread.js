@@ -20,6 +20,7 @@ import {
   bus,
   selfUserIDFor,
   upsertMessage,
+  upsertMessages,
   rekeyMessage,
   markSendFailed,
   removeMessage,
@@ -102,9 +103,8 @@ function onHistoryProgress(payload) {
     // Same rule as opening the chat: what is behind this page in the store,
     // not whether the backfill just finished.
     hasMore = Boolean(page.hasMore);
-    for (const message of page.messages || []) upsertMessage(payload.chatID, message);
-    // Rebuilds only if something actually changed, so a tail refresh of an
-    // already-complete chat costs nothing.
+    upsertMessages(payload.chatID, page.messages);
+
     onMessageUpserted();
   });
 }
@@ -285,9 +285,10 @@ export async function openChat(chatID, { focusMessageID: focusId } = {}) {
   // "there is nothing older" made all of them unreachable.
   hasMore = Boolean(page?.hasMore);
   const items = page?.messages || [];
-  for (const message of items) {
-    upsertMessage(chatID, message);
-  }
+  // One call, one render. Feeding the page in one message at a time re-sorted
+  // and re-rendered the thread 200 times over, which measured 2.9s for a store
+  // read that takes 45ms.
+  upsertMessages(chatID, items);
   renderAll();
 
   // If the user came from search, scroll to the hit once rendered.
@@ -1473,7 +1474,7 @@ async function loadOlder() {
   if (!page || state.activeChatID !== chatID) return;
 
   hasMore = Boolean(page.hasMore);
-  for (const message of page.messages || []) upsertMessage(chatID, message);
+  upsertMessages(chatID, page.messages);
 
   onMessageUpserted();
   // Keep the viewport anchored to the message the user was looking at.
@@ -1759,16 +1760,21 @@ async function sendCurrent() {
 export function applyMessageEvent(frame) {
   const chatID = frame.chatID;
   if (chatID !== state.activeChatID) return;
+  // A frame is a batch, and each entry also goes to the store on its own, but
+  // the thread is told once - otherwise a catch-up frame re-renders the whole
+  // conversation once per message it carries.
+  const messages = [];
   for (const entry of frame.entries || []) {
     if (!entry?.id) continue;
     const message = { ...entry, chatID };
-    upsertMessage(chatID, message);
+    messages.push(message);
     // Write straight through to the local store. Without this the store only
     // learns about a message when some backfill happens to walk over it, and
     // the newest message in the app would be the one most likely to be missing
     // from its own history.
     api.history.upsert(chatID, message);
   }
+  upsertMessages(chatID, messages);
 }
 
 export function currentChatID() {

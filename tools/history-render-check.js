@@ -25,6 +25,7 @@ const ROOT = path.join(__dirname, '..');
 const js = (name) => pathToFileURL(path.join(ROOT, 'src', 'renderer', 'js', name)).href;
 const INDEX_HTML = path.join(ROOT, 'src', 'renderer', 'index.html');
 const HARNESS = path.join(__dirname, '.history-render-harness.html');
+const THREAD_JS = path.join(ROOT, 'src', 'renderer', 'js', 'thread.js');
 
 /** Real markup, real stylesheet, no app scripts. */
 function buildHarness() {
@@ -135,6 +136,37 @@ async function main() {
         'a failed send keeps its own mark alongside the receipt',
         failedBits.includes('msg-status-failed') && failedBits.includes('msg-seen'),
         JSON.stringify(failedBits),
+      ]);
+
+      // A page of messages is announced once. Feeding it in one at a time made
+      // every single message re-sort the list and re-signature the whole
+      // thread, so opening a chat did 200 rebuilds to show 200 rows - measured
+      // at 2.9s for a store read that takes 45ms.
+      const countEmits = (fn) => {
+        let n = 0;
+        const off = S.bus.on('messages:changed', () => { n += 1; });
+        try { fn(); } finally { off(); }
+        return n;
+      };
+      const page = Array.from({ length: 50 }, (_, i) => ({
+        id: 'bulk-' + i, chatID: 'h1', isSender: true, senderID: 'me', senderName: 'Me',
+        timestamp: new Date(Date.UTC(2026, 1, 1, 0, i)).toISOString(), text: 'bulk ' + i,
+        type: 'TEXT', attachments: [],
+      }));
+      S.state.messages.set('h1', []);
+      const bulkEmits = countEmits(() => S.upsertMessages('h1', page));
+      cases.push([
+        'a page of messages is announced once, not once per message',
+        bulkEmits === 1 && (S.state.messages.get('h1') || []).length === 50,
+        'emits=' + bulkEmits + ' rows=' + (S.state.messages.get('h1') || []).length,
+      ]);
+
+      // And the rows still arrive in order, oldest first.
+      const bulkOrder = (S.state.messages.get('h1') || []).map((m) => m.text);
+      cases.push([
+        'a bulk-inserted page is still sorted oldest first',
+        bulkOrder[0] === 'bulk 0' && bulkOrder[49] === 'bulk 49',
+        JSON.stringify(bulkOrder.slice(0, 2)) + ' .. ' + JSON.stringify(bulkOrder.slice(-2)),
       ]);
 
       return JSON.stringify(cases);
@@ -424,6 +456,27 @@ win.webContents.setZoomFactor(1.15);
   app.exit(0);
 
   const cases = JSON.parse(result);
+  // Wiring: the bulk path is only a fix if the callers use it. Asserting on the
+  // helper alone passes while openChat goes on looping over the page - which is
+  // exactly the regression that measured 2.9s again.
+  const threadSrc = fs.readFileSync(THREAD_JS, 'utf8');
+  // No braces required: the loop that caused this was written as a single
+  // statement, and a pattern that insists on `{` matches nothing and passes.
+  const perMessageLoops = [
+    ...threadSrc.matchAll(/for \(const message of [^)]*\)\s*\{?\s*upsertMessage\(/g),
+  ];
+  cases.push([
+    'no caller feeds a page in one message at a time',
+    perMessageLoops.length === 0,
+    perMessageLoops.length + ' loop(s) still call upsertMessage per message',
+  ]);
+  cases.push([
+    'opening a chat and paging back both use the bulk path',
+    /upsertMessages\(chatID, items\)/.test(threadSrc)
+      && /upsertMessages\(chatID, page\.messages\)/.test(threadSrc),
+    'openChat or loadOlder is not using upsertMessages',
+  ]);
+
   let failed = 0;
   for (const [name, ok, detail] of cases) {
     if (!ok) failed++;
