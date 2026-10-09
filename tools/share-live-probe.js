@@ -133,7 +133,10 @@ async function main() {
     const lists = [...root.querySelectorAll('.result-list')];
     return JSON.stringify({
       title: (root.querySelector('h3') || {}).textContent,
-      header: (root.querySelector('.search-summary') || {}).textContent,
+      source: (root.querySelector('.share-source') || {}).textContent,
+      draft: (root.querySelector('.share-edit') || {}).value,
+      files: (root.querySelector('.share-files') || {}).textContent,
+      header: (root.querySelector('.share-notice') || {}).textContent,
       summary: [...root.querySelectorAll('.search-summary')].pop().textContent,
       chatRows: [...(lists[0] ? lists[0].querySelectorAll('.result-item-title') : [])].map((n) => n.textContent).slice(0, 8),
     });

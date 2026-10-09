@@ -89,22 +89,56 @@ async function main() {
       // What the recipient sees
       // ---------------------------------------------------------------------
 
-      check('the share says where it came from', () => {
-        const got = S.shareAttribution(msg(), 'Team chat');
-        return got === 'Forwarded from Alex in Team chat' || got;
+      check('the outgoing text is the message and nothing else', () => {
+        // There used to be a "Forwarded from Alex in Team chat" line prefixed
+        // here. It is gone: a line the sender never typed reads to the
+        // recipient as though they wrote it.
+        const got = S.shareText(msg());
+        return got === 'hello' || JSON.stringify(got);
       });
 
-      check('the attribution degrades without a sender name', () => {
-        const got = S.shareAttribution(msg({ senderName: '' }), 'Team chat');
-        return got === 'Forwarded from Team chat' || got;
+      check('no attribution survives anywhere in the sent text', () => {
+        const q = S.shareQueue(msg({ attachments: [att(1), att(2)] }));
+        const sent = q.map((p) => p.text || '').join('|');
+        return !/forwarded from/i.test(sent) || sent;
       });
 
-      check('no attribution is invented when there is nothing to say', () =>
-        S.shareAttribution(msg({ senderName: '' }), '') === '' || 'an empty line was produced');
+      check('the message is not rewritten on its way through', () =>
+        S.shareText(msg()) === 'hello' || 'the text was altered');
 
-      check('the attribution sits above the message, not after it', () => {
-        const got = S.shareText(msg(), 'Team chat');
-        return got === 'Forwarded from Alex in Team chat\\n\\nhello' || JSON.stringify(got);
+      check('a rewritten text is sent as the user left it', () => {
+        const q = S.shareQueue(msg(), 'here is the thing you asked about');
+        return q[0].text === 'here is the thing you asked about' || JSON.stringify(q[0]);
+      });
+
+      check('a rewritten text is not trimmed against the original', () => {
+        // The user may want a leading newline, or the original may have been
+        // trimmed already.
+        const q = S.shareQueue(msg({ text: 'x' }), '  spaced  ');
+        return q[0].text === '  spaced  ' || JSON.stringify(q[0]);
+      });
+
+      check('clearing the text of a file message sends the files alone', () => {
+        const q = S.shareQueue(msg({ attachments: [att(1), att(2)] }), '');
+        return (q.length === 2 && !q[0].text && q[0].attachment && !q[1].text)
+          || JSON.stringify(q.map((p) => Object.keys(p)));
+      });
+
+      check('clearing the text of a text-only message leaves nothing to send', () => {
+        // Otherwise the picker would hand Beeper a blank message.
+        const payload = { text: '   ', attachments: [] };
+        return S.canShare(payload) === false || 'an empty share was allowed';
+      });
+
+      check('a message with files is still shareable once its text is cleared', () => {
+        const payload = { text: '', attachments: [att(1)] };
+        return S.canShare(payload) === true || 'files-only share was refused';
+      });
+
+      check('the send count does not change when the text is rewritten', () => {
+        const a = S.shareSendCount(msg({ attachments: [att(1), att(2)] }), 'one');
+        const b = S.shareSendCount(msg({ attachments: [att(1), att(2)] }), '');
+        return a === 2 && b === 2 || a + '/' + b;
       });
 
       // ---------------------------------------------------------------------
@@ -115,7 +149,7 @@ async function main() {
         S.shareSendCount(msg()) === 1 || 'count was ' + S.shareSendCount(msg()));
 
       check('a message with one file is still one send', () => {
-        const q = S.shareQueue(msg({ attachments: [att(1)] }), 'Team chat');
+        const q = S.shareQueue(msg({ attachments: [att(1)] }));
         // !! on purpose: the chain ends in a string, and a truthy string is not
         // the boolean the runner compares against.
         return !!(q.length === 1 && q[0].attachment && q[0].text)
@@ -125,18 +159,18 @@ async function main() {
       check('three files become three sends, because Beeper takes one file each', () => {
         // Not four: the text rides along with the first file rather than
         // needing a send of its own.
-        const q = S.shareQueue(msg({ attachments: [att(1), att(2), att(3)] }), 'Team chat');
+        const q = S.shareQueue(msg({ attachments: [att(1), att(2), att(3)] }));
         return q.length === 3 || 'queue was ' + q.length + ' long';
       });
 
       check('only the first send carries the text', () => {
-        const q = S.shareQueue(msg({ attachments: [att(1), att(2), att(3)] }), 'Team chat');
+        const q = S.shareQueue(msg({ attachments: [att(1), att(2), att(3)] }));
         const withText = q.filter((p) => p.text).length;
         return withText === 1 || withText + ' of ' + q.length + ' sends carried the text';
       });
 
       check('every file still gets sent, in order', () => {
-        const q = S.shareQueue(msg({ attachments: [att(1), att(2), att(3)] }), 'Team chat');
+        const q = S.shareQueue(msg({ attachments: [att(1), att(2), att(3)] }));
         const ids = q.map((p) => p.attachment && p.attachment.id).filter(Boolean);
         return ids.join(',') === 'att1,att2,att3' || ids.join(',');
       });
@@ -151,21 +185,21 @@ async function main() {
       // ---------------------------------------------------------------------
 
       check('a one-send share is not announced as several', () => {
-        const got = S.shareNotice(msg(), 'Team chat');
+        const got = S.shareNotice(msg());
         return got === 'Pick a chat or a contact to send this to.' || got;
       });
 
       check('the notice counts sends, not files plus one for the text', () => {
         // The text rides along with the first file, so three files is three
         // messages, not four.
-        const got = S.shareNotice(msg({ attachments: [att(1), att(2), att(3)] }), 'Team chat');
+        const got = S.shareNotice(msg({ attachments: [att(1), att(2), att(3)] }));
         return /sends 3 messages/.test(got) || got;
       });
 
       check('the notice does not say the first message carries no file', () => {
         // "the text, then 2 files" describes a split that never happens: the
         // first message carries the text AND the first file.
-        const got = S.shareNotice(msg({ attachments: [att(1), att(2)] }), 'Team chat');
+        const got = S.shareNotice(msg({ attachments: [att(1), att(2)] }));
         return /one per file/.test(got) || got;
       });
 
@@ -332,7 +366,7 @@ async function main() {
 
       await checkAsync('the queue goes out in order, one message at a time', async () => {
         const r = recorder();
-        const res = await S.deliverQueue(S.shareQueue(msg({ attachments: [att(1), att(2), att(3)] }), 'Team chat'), r.io);
+        const res = await S.deliverQueue(S.shareQueue(msg({ attachments: [att(1), att(2), att(3)] })), r.io);
         // The order is the point, not just the tally: if the sends were fired
         // off together the count would still be right while the files arrive
         // in whatever order the network felt like.
@@ -343,7 +377,7 @@ async function main() {
 
       await checkAsync('each file is copied across before it is sent', async () => {
         const r = recorder();
-        await S.deliverQueue(S.shareQueue(msg({ attachments: [att(1), att(2)] }), 'Team chat'), r.io);
+        await S.deliverQueue(S.shareQueue(msg({ attachments: [att(1), att(2)] })), r.io);
         return r.log.uploads.join(',') === 'att1,att2' || r.log.uploads.join(',');
       });
 
@@ -352,7 +386,7 @@ async function main() {
 
       await checkAsync('a text-only share copies no files at all', async () => {
         const r = recorder();
-        await S.deliverQueue(S.shareQueue(msg(), 'Team chat'), r.io);
+        await S.deliverQueue(S.shareQueue(msg()), r.io);
         return r.log.uploads.length === 0 || r.log.uploads.join(',');
       });
 
@@ -360,7 +394,7 @@ async function main() {
         // All of them, not just the first: the point is that no file in the
         // share can reach the other chat by pointing back at this one.
         const r = recorder();
-        await S.deliverQueue(S.shareQueue(msg({ attachments: [att(1), att(2), att(3)] }), 'Team chat'), r.io);
+        await S.deliverQueue(S.shareQueue(msg({ attachments: [att(1), att(2), att(3)] })), r.io);
         const ids = r.log.sent.map((p) => (p.attachment && p.attachment.id) || '(none)');
         return ids.join(',') === 'copy-att1,copy-att2,copy-att3' || ids.join(',');
       });
@@ -369,14 +403,14 @@ async function main() {
         // Two people read a chat with half of somebody else's conversation in
         // it differently from one with all of it.
         const r = recorder({ failAt: 2 });
-        const res = await S.deliverQueue(S.shareQueue(msg({ attachments: [att(1), att(2), att(3)] }), 'Team chat'), r.io);
+        const res = await S.deliverQueue(S.shareQueue(msg({ attachments: [att(1), att(2), att(3)] })), r.io);
         return (res.ok === false && res.count === 1 && r.log.sent.length === 1)
           || JSON.stringify({ res: res, sent: r.log.sent.length });
       });
 
       await checkAsync('a partial share reports how far it got', async () => {
         const r = recorder({ failAt: 2 });
-        const res = await S.deliverQueue(S.shareQueue(msg({ attachments: [att(1), att(2)] }), 'Team chat'), r.io);
+        const res = await S.deliverQueue(S.shareQueue(msg({ attachments: [att(1), att(2)] })), r.io);
         return res.error === 'send refused' || JSON.stringify(res);
       });
 
@@ -384,7 +418,7 @@ async function main() {
         // The failure mode this guards: the upload fails, the code carries on,
         // and the recipient gets the words with the file silently missing.
         const r = recorder({ reuploadFails: true });
-        const res = await S.deliverQueue(S.shareQueue(msg({ attachments: [att(1)] }), 'Team chat'), r.io);
+        const res = await S.deliverQueue(S.shareQueue(msg({ attachments: [att(1)] })), r.io);
         return (res.ok === false && r.log.sent.length === 0) || JSON.stringify(res);
       });
 
@@ -453,6 +487,18 @@ async function main() {
       const lists = () => [...document.querySelectorAll('#modal-root .result-list')];
       const titles = (list) => [...list.querySelectorAll('.result-item-title')].map((n) => n.textContent);
       const summaries = () => [...document.querySelectorAll('#modal-root .search-summary')].map((n) => n.textContent);
+      // By class, not by position: the picker has several summary-ish lines and
+      // reading the first one silently tests whichever happens to be first.
+      const notice = () => (document.querySelector('#modal-root .share-notice') || {}).textContent || '';
+      const draftText = () => (document.querySelector('#modal-root .share-edit') || {}).value;
+      const filesLine = () => (document.querySelector('#modal-root .share-files') || {}).textContent || '';
+      const setDraft = async (value) => {
+        const box = document.querySelector('#modal-root .share-edit');
+        box.value = value;
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+        await tick();
+        return box.value;
+      };
       const toastText = () => [...document.querySelectorAll('#toast-root .toast')].map((n) => n.textContent).join(' | ');
 
       const SOURCE = { id: '!src', title: 'Source chat', accountID: '!acct', lastActivity: '2026-03-05T00:00:00Z' };
@@ -491,7 +537,7 @@ async function main() {
       await checkAsync('the picker says how many messages a share will send', async () => {
         seed();
         await open(msg({ attachments: [att(1), att(2), att(3)] }));
-        const header = summaries()[0] || '';
+        const header = notice();
         // A literal, not shareNotice()'s own output: comparing the picker to the
         // function it calls would agree with any number the function produces.
         return header === 'Sending this sends 3 messages, one per file - Beeper takes a single file at a time.'
@@ -501,18 +547,118 @@ async function main() {
       await checkAsync('a single-send share is not announced as several', async () => {
         seed();
         await open();
-        const header = summaries()[0] || '';
+        const header = notice();
         return /Pick a chat or a contact/.test(header) || header;
       });
 
-      await checkAsync('picking a chat sends the forwarded text once', async () => {
+      await checkAsync('the box opens holding the message, unchanged', async () => {
+        seed();
+        await open();
+        return draftText() === 'hello' || JSON.stringify(draftText());
+      });
+
+      await checkAsync('the box is editable, not a label', async () => {
+        seed();
+        await open();
+        const box = document.querySelector('#modal-root .share-edit');
+        return (box && box.tagName === 'TEXTAREA' && !box.readOnly && !box.disabled)
+          || (box ? box.tagName + ' readonly=' + box.readOnly : 'MISSING');
+      });
+
+      await checkAsync('picking a chat sends the text as it was left in the box', async () => {
+        seed();
+        await open();
+        await setDraft('see you at 7 instead');
+        (lists()[0].querySelector('.result-item')).click();
+        await tick(60);
+        return (calls.send.length === 1
+          && calls.send[0].chatID === '!other'
+          && calls.send[0].payload.text === 'see you at 7 instead')
+          || JSON.stringify(calls.send);
+      });
+
+      await checkAsync('an edited message is sent with no attribution line', async () => {
+        seed();
+        await open();
+        await setDraft('take a look at this');
+        (lists()[0].querySelector('.result-item')).click();
+        await tick(60);
+        return !/forwarded from/i.test(calls.send[0].payload.text) || calls.send[0].payload.text;
+      });
+
+      await checkAsync('editing the box does not change the files that go', async () => {
+        seed();
+        await open(msg({ attachments: [att(1), att(2)] }));
+        await setDraft('shorter than the original');
+        (lists()[0].querySelector('.result-item')).click();
+        await tick(60);
+        return (calls.send.length === 2 && calls.uploads.join(',') === 'att1,att2')
+          || JSON.stringify({ sent: calls.send.length, uploads: calls.uploads });
+      });
+
+      await checkAsync('clearing the text still sends the files', async () => {
+        seed();
+        await open(msg({ attachments: [att(1)] }));
+        await setDraft('');
+        (lists()[0].querySelector('.result-item')).click();
+        await tick(60);
+        // !! again: the chain ends in the attachment, an object, and a truthy
+        // object is not the boolean the runner compares against.
+        return !!(calls.send.length === 1 && !calls.send[0].payload.text && calls.send[0].payload.attachment)
+          || JSON.stringify(calls.send);
+      });
+
+      await checkAsync('emptying a message with no files sends nothing at all', async () => {
+        // The regression this guards: the box can be cleared, and a blank
+        // message is not a share.
+        seed();
+        await open();
+        await setDraft('   ');
+        (lists()[0].querySelector('.result-item')).click();
+        await tick(60);
+        return calls.send.length === 0 || calls.send.length + ' blank messages went out';
+      });
+
+      await checkAsync('emptying the text leaves the picker open to be fixed', async () => {
+        seed();
+        await open();
+        await setDraft('');
+        (lists()[0].querySelector('.result-item')).click();
+        await tick(60);
+        const stillOpen = !document.querySelector('#modal-root').hidden;
+        return stillOpen || 'the picker closed on an empty share';
+      });
+
+      await checkAsync('the picker says which files are going along', async () => {
+        seed();
+        await open(msg({ attachments: [att(1), att(2)] }));
+        const line = filesLine();
+        return (/2 files going along/.test(line) && /file1\.png/.test(line) && /file2\.png/.test(line)) || line;
+      });
+
+      await checkAsync('no files line is shown when there are no files', async () => {
+        // Must open its own picker: without this it reads whatever modal the
+        // previous check left standing, and passes on the wrong evidence.
+        seed();
+        await open();
+        return filesLine() === '' || filesLine();
+      });
+
+      await checkAsync('the picker says where the message came from, without sending it', async () => {
+        seed();
+        await open();
+        const src = (document.querySelector('#modal-root .share-source') || {}).textContent || '';
+        return (/Alex/.test(src) && /Source chat/.test(src)) || JSON.stringify(src);
+      });
+
+      await checkAsync('picking a chat sends the message and nothing else', async () => {
         seed();
         await open();
         (lists()[0].querySelector('.result-item')).click();
         await tick(60);
         return (calls.send.length === 1
           && calls.send[0].chatID === '!other'
-          && calls.send[0].payload.text === 'Forwarded from Alex in Source chat\\n\\nhello')
+          && calls.send[0].payload.text === 'hello')
           || JSON.stringify(calls.send);
       });
 

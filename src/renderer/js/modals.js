@@ -6,10 +6,12 @@ import { state, bus, chatList, upsertChat, deletedList, clearDeletedMessages } f
 import { openModal, closeModal, toast } from './ui.js';
 import { avatarNode } from './sidebar.js';
 import {
+  shareText,
   shareQueue,
   shareableChats,
   partitionShareable,
   chatDisplayName,
+  canShare,
   shareNotice,
   deliverQueue,
 } from './share.js';
@@ -270,7 +272,14 @@ export function openNewChat() {
  * own. What is here is the picking and the sending.
  */
 export function openSharePicker(message, sourceChat) {
-  const queue = shareQueue(message, chatDisplayName(sourceChat));
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  const source = chatDisplayName(sourceChat);
+
+  // Editable before it goes. The value is set as a property rather than passed
+  // through el(), which sets attributes: a textarea has no value attribute, so
+  // the text would silently arrive empty.
+  const draft = el('textarea', { class: 'share-edit', rows: '4', placeholder: 'Add a message...' });
+  draft.value = shareText(message);
 
   const results = el('div', { class: 'result-list' });
   const contactResults = el('div', { class: 'result-list' });
@@ -283,6 +292,14 @@ export function openSharePicker(message, sourceChat) {
   });
 
   let busy = false;
+
+  /**
+   * What would be sent if a target were picked right now.
+   *
+   * Read at the moment of sending rather than captured when the picker opened:
+   * the whole point of the box is that the text can change in between.
+   */
+  const outgoing = () => ({ text: draft.value.trim(), attachments });
 
   function setSummary(text) {
     summary.textContent = text;
@@ -306,15 +323,32 @@ export function openSharePicker(message, sourceChat) {
 
   // A share can be several messages, so say so before it happens rather than
   // letting four messages turn up in someone else's chat unexplained.
-  const header = shareNotice(message, chatDisplayName(sourceChat));
+  const header = shareNotice(message);
+
+  // What it is being shared from, for the person deciding where to send it. Not
+  // part of the message: the outgoing text is whatever is in the box below, and
+  // nothing else.
+  const from = [
+    message.senderName ? `From ${message.senderName}` : '',
+    source ? source : '',
+  ].filter(Boolean).join(' in ');
 
   openModal({
     title: 'Share with...',
     body: el(
       'div',
       {},
+      from ? el('div', { class: 'share-source', text: from }) : null,
+      draft,
+      attachments.length
+        ? el('div', {
+            class: 'share-files',
+            text: `${attachments.length} file${attachments.length === 1 ? '' : 's'} going along: `
+              + attachments.map((a) => a.fileName || 'attachment').join(', '),
+          })
+        : null,
       el('div', { class: 'form-row' }, search),
-      el('div', { class: 'search-summary', text: header }),
+      el('div', { class: 'share-notice', text: header }),
       results,
       contactResults,
       summary,
@@ -324,15 +358,30 @@ export function openSharePicker(message, sourceChat) {
 
   search.focus();
 
+  /**
+   * The queue for whatever is in the box now.
+   *
+   * Emptying the text of a message that had no files leaves nothing to send, so
+   * that is caught here rather than being handed to Beeper as a blank message.
+   */
+  function currentQueue() {
+    const payload = outgoing();
+    if (!canShare(payload)) return null;
+    return shareQueue(payload, payload.text);
+  }
+
   /** Everything is frozen once a send starts, so it cannot be done twice. */
   function lock(message_) {
     busy = true;
     search.disabled = true;
+    draft.disabled = true;
     setSummary(message_);
   }
 
   async function sendToChat(chat) {
     if (busy) return;
+    const queue = currentQueue();
+    if (!queue) return complain();
     lock(`Sending to ${chatDisplayName(chat)}...`);
     const sent = await deliver(queue, chat.id);
     closeModal();
@@ -344,6 +393,9 @@ export function openSharePicker(message, sourceChat) {
     const contactID = contact.id || contact.userID;
     const who = contact.fullName || contact.username || 'this contact';
     if (!contactID) return;
+
+    const queue = currentQueue();
+    if (!queue) return complain();
 
     lock(`Starting a chat with ${who}...`);
 
@@ -379,6 +431,11 @@ export function openSharePicker(message, sourceChat) {
 
     closeModal();
     report(sent, who);
+  }
+
+  /** The box was emptied of everything there was to send. The picker stays open. */
+  function complain() {
+    setSummary('There is nothing to send - add some text, or keep a file.');
   }
 
   /**

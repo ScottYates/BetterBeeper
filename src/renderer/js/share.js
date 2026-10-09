@@ -30,47 +30,35 @@ export function canShare(message) {
 }
 
 /**
- * Where this came from, in one line.
- *
- * Said to the people receiving it, because a message forwarded with no context
- * reads as though they were the intended recipient. Empty when there is
- * genuinely nothing to say, rather than a line saying nothing.
- */
-export function shareAttribution(message, chatTitle = '') {
-  const who = String(message?.senderName || '').trim();
-  const where = String(chatTitle || '').trim();
-  if (who && where) return `Forwarded from ${who} in ${where}`;
-  if (who) return `Forwarded from ${who}`;
-  if (where) return `Forwarded from ${where}`;
-  return '';
-}
-
-/**
  * The text that goes into the other chat.
  *
- * The attribution goes above the message rather than after it, so the first
- * line a reader sees says where it came from.
+ * The message, unchanged, and nothing added to it. There used to be a
+ * "Forwarded from Alex in Team chat" line prefixed here. It is gone because the
+ * text is editable before it goes, and a line the sender never typed sitting
+ * above their own words reads to the recipient as though they wrote it.
  */
-export function shareText(message, chatTitle = '') {
-  const head = shareAttribution(message, chatTitle);
-  const body = String(message?.text || '').trim();
-  if (head && body) return `${head}\n\n${body}`;
-  return head || body;
+export function shareText(message) {
+  return String(message?.text || '').trim();
 }
 
 /**
  * The sends this share turns into.
  *
+ * `text` is what the user left in the box, which is not necessarily what the
+ * message said: it can be rewritten, trimmed, or emptied. Defaulting to the
+ * original keeps the callers that only care about shape - how many sends, in
+ * what order - from having to invent a text.
+ *
  * Beeper takes a single attachment per message, so the queue mirrors the
  * composer: the first file carries the text, the rest travel alone. A message
  * with no attachments is one send.
  */
-export function shareQueue(message, chatTitle = '') {
-  const text = shareText(message, chatTitle);
+export function shareQueue(message, text = shareText(message)) {
+  const body = String(text || '');
   const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
-  if (!attachments.length) return [{ text }];
+  if (!attachments.length) return [{ text: body }];
   return [
-    { text: text || undefined, attachment: attachments[0] },
+    { text: body || undefined, attachment: attachments[0] },
     ...attachments.slice(1).map((attachment) => ({ attachment })),
   ];
 }
@@ -81,8 +69,8 @@ export function shareQueue(message, chatTitle = '') {
  * Shown before the user commits, because four messages appearing in someone
  * else's chat is not something to discover afterwards.
  */
-export function shareSendCount(message) {
-  return shareQueue(message).length;
+export function shareSendCount(message, text) {
+  return shareQueue(message, text).length;
 }
 
 /**
@@ -97,8 +85,8 @@ export function shareSendCount(message) {
  * reads as though the first message carried no file at all. It carries the first
  * one.
  */
-export function shareNotice(message, chatTitle = '') {
-  const sends = shareQueue(message, chatTitle).length;
+export function shareNotice(message, text) {
+  const sends = shareQueue(message, text).length;
   if (sends <= 1) return 'Pick a chat or a contact to send this to.';
   return `Sending this sends ${sends} messages, one per file - Beeper takes a single file at a time.`;
 }
