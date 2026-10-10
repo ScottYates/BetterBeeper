@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>download-check harness</title>
+    <!--
+      The real stylesheet, so the button's position can be measured rather than
+      assumed. Nothing here is styled by hand: if the wrapper does not
+      shrink-wrap to the video, that is a finding, not a setup problem.
+    -->
+    <link rel="stylesheet" href="../src/renderer/styles.css" />
+  </head>
+  <body>
+    <!--
+      Blank page loaded by tools/download-check.js, so the renderer modules can
+      be imported as real ES modules from a file:// origin; a data: URL cannot
+      import modules.
+
+      The elements are the ones thread.js, sidebar.js and ui.js actually query,
+      found by scanning their source rather than by adding them one crash at a
+      time. They are empty on purpose: the check seeds messages into real state
+      and reads the real DOM that comes back out, and never looks at how any of
+      it is styled.
+    -->
+    <div id="chat-list"></div>
+
+    <div id="thread" hidden>
+      <div id="thread-avatar"></div>
+      <div id="thread-name"></div>
+      <div id="thread-sub"></div>
+      <div id="account-badges"></div>
+      <button id="btn-pin"></button>
+      <button id="btn-mute"></button>
+      <button id="btn-archive"></button>
+      <button id="btn-unread"></button>
+      <button id="btn-refresh"></button>
+      <div id="message-list"></div>
+      <div id="attachment-chips"></div>
+      <div id="reply-preview" hidden>
+        <span id="reply-preview-text"></span>
+        <button id="btn-cancel-reply"></button>
+      </div>
+      <div id="composer">
+        <button id="btn-attach"></button>
+        <button id="btn-attach-image"></button>
+        <button id="btn-emoji"></button>
+        <button id="btn-send"></button>
+      </div>
+    </div>
+
+    <div id="thread-empty"></div>
+    <div id="filter-row"></div>
+    <div id="inbox-label"></div>
+    <div id="search-input"></div>
+    <div id="search-scope"></div>
+    <div id="live-status"></div>
+    <div id="modal-root" hidden></div>
+    <div id="toast-root"></div>
+  </body>
+</html>

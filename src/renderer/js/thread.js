@@ -45,10 +45,17 @@ import {
   openLightbox,
   imageMenu,
   saveAttachment,
+  saveAttachments,
 } from './ui.js';
 import { setArchived } from './chat-actions.js';
 import { openSharePicker } from './modals.js';
 import { canShare } from './share.js';
+import {
+  downloadableAttachments,
+  downloadMenuItems,
+  videoSaveLabel,
+  videoSaveTitle,
+} from './download.js';
 import { shouldMarkOnReturn } from './focus-read.js';
 import { avatarNode, renderChats, networkBadge } from './sidebar.js';
 import { renderJobs } from './jobs.js';
@@ -161,12 +168,19 @@ export function initThread() {
   });
 
   // Right-click any image in the thread to copy it as a pasteable picture
-  // rather than a link. Delegated, so it covers attachments and images inside
-  // message text alike, and survives every re-render of the list.
+  // rather than a link. Delegated, so it survives every re-render of the list.
+  // Today the only <img> inside the list is an attachment - the sanitizer
+  // drops IMG out of message text and message avatars are drawn as initials -
+  // so the attachment is always there. It is still read off the element rather
+  // than assumed, so a Save item can only appear for an image that really has
+  // something behind it to save.
   $('#message-list').addEventListener('contextmenu', (event) => {
     const img = event.target.closest?.('img');
     if (!img || !img.src) return;
-    if (!imageMenu(img, img.src, { pointer: { x: event.clientX, y: event.clientY } })) return;
+    if (!imageMenu(img, img.src, {
+      pointer: { x: event.clientX, y: event.clientY },
+      attachment: img.__attachment,
+    })) return;
     event.preventDefault();
     event.stopPropagation();
   });
@@ -1155,11 +1169,19 @@ function attachmentsNode(message) {
 }
 
 /**
- * A video plays in place, with its own controls.
+ * A video plays in place, with its own controls, and carries a save button.
  *
- * If it will not decode, it is swapped for the ordinary download row rather
- * than left sitting there as a dead black rectangle: a file that claims to be
- * a video but is not one should still be saveable, and should say what it is.
+ * The button is the reason this is a wrapper and not a bare <video>. The app's
+ * image menu is wired to <img> only, so without a button a video would have
+ * exactly one route out - the full message menu, several clicks away - while
+ * every other kind of attachment can be saved by clicking the thing itself.
+ *
+ * If it will not decode, the whole wrapper is swapped for the ordinary download
+ * row rather than left sitting there as a dead black rectangle: a file that
+ * claims to be a video but is not one should still be saveable, and should say
+ * what it is. The wrapper is what gets replaced, because replacing the bare
+ * <video> would leave the button floating beside the file row with no video
+ * under it.
  */
 function videoElement(attachment) {
   const video = el('video', {
@@ -1170,9 +1192,29 @@ function videoElement(attachment) {
     title: attachment.fileName || 'video',
   });
 
+  const wrap = el(
+    'div',
+    { class: 'att-video-wrap' },
+    video,
+    el(
+      'button',
+      {
+        class: 'att-download',
+        type: 'button',
+        title: videoSaveTitle(attachment),
+        // Hyphenated on purpose. el() sets whatever key it is given, and an
+        // attribute name is lowercased by the DOM, so "ariaLabel" would become
+        // "arialabel" - present on the element and ignored by everything else.
+        'aria-label': videoSaveLabel(attachment),
+        onClick: () => saveAttachment(attachment),
+      },
+      el('span', { text: '⬇' }),
+    ),
+  );
+
   const fallback = () => {
-    if (!video.isConnected) return;
-    video.replaceWith(fileNode(attachment));
+    if (!wrap.isConnected) return;
+    wrap.replaceWith(fileNode(attachment));
   };
 
   video.addEventListener('error', fallback);
@@ -1180,7 +1222,7 @@ function videoElement(attachment) {
     if (url) video.src = url;
     else fallback();
   });
-  return video;
+  return wrap;
 }
 
 /**
@@ -1254,6 +1296,11 @@ function imageElement(attachment) {
   if (cached && !claimedImages.has(cached)) {
     claimedImages.add(cached);
     cached.alt = attachment.fileName || 'image';
+    // Refreshed on reuse as well as on create. The element outlives any single
+    // render, and an image can reappear in a later message with a different
+    // attachment object behind it, so carrying the first one forward would save
+    // the wrong file.
+    cached.__attachment = attachment;
     return cached;
   }
 
@@ -1266,6 +1313,11 @@ function imageElement(attachment) {
       openLightbox(event.currentTarget.src);
     },
   });
+  // The attachment is stashed on the element because the contextmenu handler is
+  // delegated to the message list and only has the <img> to work from. The src
+  // is not enough: it is a resolved beeper-file:// URL, which carries no name
+  // and nothing the save dialog can hand to the main process.
+  img.__attachment = attachment;
 
   if (key) {
     if (imgCache.size >= IMG_CACHE_LIMIT) {
@@ -1320,9 +1372,6 @@ function editingNode(message) {
  * Delete and Hide are deliberately not here: they are on the message row's
  * hover actions now. What is left is the slower, rarer list - replying,
  * copying, editing, and the local-only delete that needs a second thought.
- */
-/**
- * The context menu, for the things that are not one click.
  *
  * The trash on the message row is the local delete, which only hides the
  * message here. This Delete is the real one: it goes to Beeper, everyone else
@@ -1339,6 +1388,13 @@ export function messageMenuItems(anchor, message) {
     canShare(message)
       ? { label: 'Share with...', onSelect: () => openSharePicker(message, currentChat) }
       : null,
+    // Sits after Share because both are about the message leaving this window -
+    // to somebody, or to disk. Each attachment already has its own one-click
+    // route, so this is the bulk case and nothing more.
+    ...downloadMenuItems(message).map((item) => ({
+      label: item.label,
+      onSelect: () => { saveAttachments(downloadableAttachments(message)); },
+    })),
     canEdit ? { label: 'Edit', onSelect: () => { state.editing = message.id; onMessageUpserted(); } } : null,
     canEdit
       ? { label: 'Delete for everyone', danger: true, onSelect: () => deleteMessage(message) }

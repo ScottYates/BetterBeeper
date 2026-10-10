@@ -746,6 +746,47 @@ select { cursor: pointer; }
 .att-file .att-size { flex: none; color: var(--text-dim); font-size: 11.5px; }
 .att-file .att-save { flex: none; color: var(--text-dim); font-size: 13px; line-height: 1; }
 .att-file:hover .att-save, .att-file:focus-visible .att-save { color: var(--accent); }
+
+/* The video's wrapper exists only to give the save button somewhere to sit, and
+   it has to wrap the video's own box exactly.
+
+   It sits inside .msg-attachments, which is a column flex container. Two things
+   about that decide this rule, and neither is obvious:
+
+   - A flex item is blockified, so `display: inline-block` here does NOT keep the
+     wrapper shrink-wrapped. It becomes a block and, with the default
+     align-items: stretch, fills the bubble's width.
+   - max-width: 340px caps it at the same cap as the image, but a 340px cap on
+     something that would otherwise stretch is not the same as being 200px wide.
+
+   Together those put the button in the far corner of the empty space beside a
+   200px video: hovering the video shows a button floating to its right, over
+   nothing. align-self: flex-start is what actually stops the stretch, and the
+   wrapper then measures exactly as wide as the video inside it. */
+.att-video-wrap {
+  position: relative; align-self: flex-start;
+  display: inline-block; line-height: 0; max-width: 340px;
+}
+
+/* Hidden until the video is hovered or the button itself is focused, so a still
+   frame is not permanently marked up by a button nobody is reaching for.
+   pointer-events follows opacity for the same reason the hover actions use:
+   a transparent button that still takes clicks is a click nobody can see
+   coming. It stays hidden rather than merely dimmed, but is left reachable by
+   keyboard - focus-visible makes it solid, which is why it is opacity and not
+   display. */
+.att-download {
+  position: absolute; top: 6px; right: 6px;
+  width: 28px; height: 28px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.62); color: #fff;
+  font-family: inherit; font-size: 14px; line-height: 1;
+  cursor: pointer; opacity: 0; pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.att-video-wrap:hover .att-download, .att-download:focus-visible { opacity: 1; pointer-events: auto; }
+.att-download:hover { border-color: var(--accent); color: var(--accent); }
 .history-stats { display: block; margin-bottom: 16px; }
 .history-stats-inner { display: flex; flex-direction: column; gap: 2px; }
 .history-stats-inner .form-row { justify-content: space-between; }

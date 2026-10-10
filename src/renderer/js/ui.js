@@ -361,13 +361,40 @@ export async function saveAttachment(attachment) {
 }
 
 /**
- * Menu for a displayed image: open it, copy it out, or copy its address.
+ * Save several attachments in turn.
+ *
+ * One save dialog per file, deliberately: each attachment has its own name and
+ * its own place, and a single "where should these go" prompt would have to guess
+ * a folder and then move N files into it. Small numbers are the normal case, and
+ * each file says for itself when it lands.
+ *
+ * Returns how many were actually saved, so the caller can say so rather than
+ * implying all of them went.
+ */
+export async function saveAttachments(attachments) {
+  const list = (attachments || []).filter(Boolean);
+  let saved = 0;
+  for (const attachment of list) {
+    if (await saveAttachment(attachment)) saved++;
+  }
+  return saved;
+}
+
+/**
+ * Menu for a displayed image: open it, save it, copy it out, or copy its
+ * address.
  *
  * Uses the same popover as the message menu rather than a native one, so it
  * looks like the rest of the app and needs no new bridge surface - the only
  * thing the main process has to know about is the copy itself.
+ *
+ * `attachment` is optional and is what makes Save possible. It is not optional
+ * for decoration: an <img> with nothing behind it has a src and no filename, no
+ * size and nothing the save dialog can hand to the main process, so an item
+ * that appears anyway would open a dialog offering to save a file named after
+ * nothing. Without it, the menu is the same menu it always was.
  */
-export function imageMenu(anchor, srcUrl, { pointer } = {}) {
+export function imageMenu(anchor, srcUrl, { pointer, attachment } = {}) {
   if (!srcUrl) return false;
   if (!window.beeper?.images?.copy) return false;
 
@@ -382,11 +409,22 @@ export function imageMenu(anchor, srcUrl, { pointer } = {}) {
     origin = point;
   }
 
-  const menu = openPopover(origin, [
+  const items = [
     { label: 'Open image', onSelect: () => openLightbox(srcUrl) },
     { label: 'Copy image', onSelect: () => { copyImage(srcUrl); } },
     { label: 'Copy image address', onSelect: () => copyText(srcUrl) },
-  ]);
+  ];
+
+  if (attachment) {
+    // Straight after Open, because it is the other thing anyone wants from an
+    // image and it is the only route this file has out of the app.
+    items.splice(1, 0, {
+      label: 'Save image...',
+      onSelect: () => { saveAttachment(attachment); },
+    });
+  }
+
+  const menu = openPopover(origin, items);
 
   if (point && menu) {
     const cleanup = menu._cleanup;
