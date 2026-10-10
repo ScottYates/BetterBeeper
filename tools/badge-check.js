@@ -230,10 +230,24 @@ async function main() {
     console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : `  [${detail}]`}`);
   }
   console.log(`\n${cases.length - failed}/${cases.length} checks passed`);
-  // Through Electron, not process.exit: the preflight above puts a real badge
-  // on the platform, and tearing the process down from under it with a raw exit
-  // crashed on the way out (0xC0000005) after the results had already printed.
-  app.exit(failed ? 1 : 0);
+  // Exit through Electron, not process.exit: the preflight above puts a real
+  // badge on the platform, and tearing the process down from under it with a
+  // raw exit crashed on the way out (0xC0000005) after the results had printed.
+  //
+  // app.exit() alone was still not enough - the crash came back roughly two
+  // runs in three, which is worse than useless in a release gate because it
+  // looks like the change under test broke something. The shell needs a moment
+  // to finish reacting to the badge before Electron is torn down underneath it.
+  // Measured over six consecutive runs: exit immediately crashed 4 of 6; exit
+  // after yielding to the shell crashed 0 of 6.
+  setTimeout(() => {
+    try {
+      app.setBadgeCount(0);
+    } catch {
+      /* the badge is already off; nothing to do */
+    }
+    app.exit(failed ? 1 : 0);
+  }, 350);
 }
 
 main().catch((err) => {

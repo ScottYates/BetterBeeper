@@ -17,6 +17,7 @@ const {
 
 const ipc = require('./ipc');
 const { shouldNotify, notificationBody } = require('./notify');
+const flash = require('./flash');
 const updater = require('./updater');
 const mediaPath = require('./media-path');
 
@@ -548,6 +549,45 @@ function notificationPrefs() {
   return value;
 }
 
+/**
+ * The message this frame is actually about.
+ *
+ * A frame can carry several entries; `ids` names the ones that are new. Both
+ * the notification and the taskbar flash want the same one, and picking it
+ * twice is how two places end up disagreeing about whether a message was yours.
+ */
+function entryOf(frame) {
+  const ids = new Set(frame?.ids || []);
+  return frame?.entries?.find((e) => ids.has(String(e.id))) || frame?.entries?.[0] || null;
+}
+
+/**
+ * Flash the taskbar when a message lands and the window is in the background.
+ *
+ * Separate from wireNotifications on purpose. That one early-returns on the
+ * notification settings, and a taskbar flash is not a notification: someone who
+ * has turned toasts off should still see their button flashing.
+ *
+ * Windows only, and it never takes focus. Windows keeps flashing until it is
+ * told otherwise, so the focus handler is the other half of this.
+ */
+function wireFlash() {
+  if (!flash.supportsFlash(process.platform)) return;
+  flash.setWindowSource(() => mainWindow);
+
+  const { events } = services;
+  events.on('message.upserted', (frame) => {
+    if (!frame?.chatID) return;
+    flash.onIncoming(mainWindow, { messageIsOwn: Boolean(entryOf(frame)?.isSender) });
+  });
+
+  // focus and restore, because a taskbar click restores before it focuses, and
+  // a flash left running after the user is already back is the loudest way to
+  // get this wrong.
+  mainWindow.on('focus', () => flash.onFocus(mainWindow));
+  mainWindow.on('restore', () => flash.onFocus(mainWindow));
+}
+
 /** Desktop notification for messages that land while the window is in the background. */
 function wireNotifications() {
   if (!Notification.isSupported()) return;
@@ -565,8 +605,7 @@ function wireNotifications() {
     try {
       const chat = await client.getChat(chatID);
 
-      const ids = new Set(frame.ids || []);
-      const entry = frame.entries?.find((e) => ids.has(String(e.id))) || frame.entries?.[0];
+      const entry = entryOf(frame);
       if (!entry) return;
 
       // Re-check after the await: settings may have changed, and the user may
@@ -614,6 +653,7 @@ app.whenReady().then(async () => {
   });
   createWindow();
   wireNotifications();
+  wireFlash();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
