@@ -49,6 +49,7 @@ import {
 import { setArchived } from './chat-actions.js';
 import { openSharePicker } from './modals.js';
 import { canShare } from './share.js';
+import { shouldMarkOnReturn } from './focus-read.js';
 import { avatarNode, renderChats, networkBadge } from './sidebar.js';
 import { renderJobs } from './jobs.js';
 
@@ -652,6 +653,38 @@ async function markRead() {
 
   state.chats.set(chat.id, { ...state.chats.get(chat.id), unreadCount: 0 });
   renderChats();
+}
+
+/**
+ * Coming back to the window counts as having read what is on screen.
+ *
+ * renderMessages() only marks the thread read when the document has focus at the
+ * moment it runs, so a message that arrived while the window was in the
+ * background was rendered with focus false and declined - and nothing afterwards
+ * re-rendered, so nothing re-asked. The window coming back to the front is the
+ * moment the answer changes.
+ *
+ * Returns whether a mark was actually attempted, so a caller can tell "there was
+ * nothing to read" from "it was marked read".
+ */
+export function markReadOnReturn() {
+  const chat = currentChat;
+  const messages = chat ? state.messages.get(chat.id) || [] : [];
+  const last = messages[messages.length - 1];
+
+  const should = shouldMarkOnReturn({
+    windowFocused: document.hasFocus(),
+    windowVisible: document.visibilityState === 'visible',
+    hasOpenChat: Boolean(chat),
+    lastMessageUnread: Boolean(last?.isUnread),
+    markReadEnabled: state.settings.markReadOnOpen !== false,
+  });
+  if (!should) return false;
+
+  // Not awaited: the caller is a focus handler, and markRead() has its own
+  // retry backoff and its own optimistic state update.
+  markRead();
+  return true;
 }
 
 // ---------------------------------------------------------------------------

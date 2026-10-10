@@ -8,7 +8,7 @@ import {
   initSidebar, renderChats, renderAccountBadges, setLiveStatus, focusSearch, avatarNode,
   setView, currentView, renderViewChrome, VIEWS,
 } from './sidebar.js';
-import { initThread, openChat, applyMessageEvent, closeThread } from './thread.js';
+import { initThread, openChat, applyMessageEvent, closeThread, markReadOnReturn } from './thread.js';
 import { initJobs } from './jobs.js';
 import { openNewChat, openSettings, showToolsCatalog, applyTheme } from './modals.js';
 import { initLayout } from './layout.js';
@@ -339,9 +339,19 @@ async function boot() {
   // Both, not just focus: switching away from the window often does not fire
   // it, and coming back does not always. Together they cover the ways a
   // desktop window actually comes back to the foreground.
-  window.addEventListener('focus', refreshInboxOnFocus);
+  //
+  // Each also marks the open chat read. A message that arrived while the window
+  // was in the background was rendered with no focus and deliberately not
+  // marked, and nothing re-renders on return, so without this it stayed unread
+  // until you happened to switch chats.
+  window.addEventListener('focus', () => {
+    refreshInboxOnFocus();
+    markReadOnReturn();
+  });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') refreshInboxOnFocus();
+    if (document.visibilityState !== 'visible') return;
+    refreshInboxOnFocus();
+    markReadOnReturn();
   });
 
   $('#btn-new-chat').addEventListener('click', () => openNewChat());

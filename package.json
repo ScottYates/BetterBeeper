@@ -20,6 +20,7 @@
     "check:flash": "electron tools/flash-check.js",
     "check:send": "electron tools/send-check.js",
     "check:share": "electron tools/share-check.js",
+    "check:focusread": "electron tools/focusread-check.js",
     "check:rich": "electron tools/rich-text-check.js",
     "check:pin": "electron tools/pin-check.js",
     "check:archive": "electron tools/archive-check.js",
