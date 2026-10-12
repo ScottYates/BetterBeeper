@@ -8,9 +8,9 @@ import {
   initSidebar, renderChats, renderAccountBadges, setLiveStatus, focusSearch, avatarNode,
   setView, currentView, renderViewChrome, VIEWS,
 } from './sidebar.js';
-import { initThread, openChat, applyMessageEvent, closeThread } from './thread.js';
-import { initAssistant, toggleAssistant, showToolsCatalog } from './assistant.js';
-import { openNewChat, openSettings, applyTheme } from './modals.js';
+import { initThread, openChat, applyMessageEvent, closeThread, markReadOnReturn } from './thread.js';
+import { initJobs } from './jobs.js';
+import { openNewChat, openSettings, showToolsCatalog, applyTheme } from './modals.js';
 import { initLayout } from './layout.js';
 import { checkForUpdatesOnLaunch } from './updates.js';
 
@@ -123,10 +123,17 @@ async function enterApp() {
 
   await loadChats();
 
-  // Open the first unread chat, or the most recent one.
-  const firstUnread = chatList().find((c) => (c.unreadCount || 0) > 0);
-  const target = firstUnread || chatList()[0];
-  if (target) openChat(target.id);
+  // Deliberately no chat is opened here.
+  //
+  // This used to open the first unread chat, or the most recent one if there
+  // was nothing unread. That put a conversation on screen every time the app
+  // started - including a scrollback the user had not chosen and did not need
+  // to see, and a walk of its history started on their behalf before they had
+  // touched anything.
+  //
+  // Starting on "Select a chat" is the honest resting state: nothing is open
+  // because the user has not opened anything. An incoming message still marks
+  // its chat unread in the list, so nothing is missed by not being pre-selected.
 }
 
 async function loadChats() {
@@ -294,13 +301,11 @@ function wireKeyboard() {
 
   window.beeper.on.menuNewChat(() => openNewChat());
   window.beeper.on.menuFocusSearch(() => focusSearch());
-  window.beeper.on.menuToggleAssistant(() => toggleAssistant());
 
   bus.on('chat:open', (chatID, opts) => openChat(chatID, opts));
   bus.on('chat:activated', () => subscribeVisibleChats());
   bus.on('chat:close', () => closeActiveChat());
   window.addEventListener('open-settings', () => openSettings());
-  window.addEventListener('show-mcp-tools', () => showToolsCatalog());
 }
 
 // ---------------------------------------------------------------------------
@@ -311,8 +316,7 @@ async function boot() {
   if (bootstrapped) return;
   bootstrapped = true;
 
-  onApiError(({ context, message, code }) => {
-    if (code === 'no_model') return; // surfaced inside the assistant panel
+  onApiError(({ context, message }) => {
     toast(message || `Error during ${context}`, 'error', 4200);
   });
 
@@ -326,21 +330,32 @@ async function boot() {
     onSelectView: () => closeThread(),
   });
   initThread();
-  initAssistant();
+  // Before the first paint of the chat list, so the panel is never briefly
+  // blank while the queue is already working.
+  initJobs();
   wireEvents();
   wireKeyboard();
 
   // Both, not just focus: switching away from the window often does not fire
   // it, and coming back does not always. Together they cover the ways a
   // desktop window actually comes back to the foreground.
-  window.addEventListener('focus', refreshInboxOnFocus);
+  //
+  // Each also marks the open chat read. A message that arrived while the window
+  // was in the background was rendered with no focus and deliberately not
+  // marked, and nothing re-renders on return, so without this it stayed unread
+  // until you happened to switch chats.
+  window.addEventListener('focus', () => {
+    refreshInboxOnFocus();
+    markReadOnReturn();
+  });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') refreshInboxOnFocus();
+    if (document.visibilityState !== 'visible') return;
+    refreshInboxOnFocus();
+    markReadOnReturn();
   });
 
   $('#btn-new-chat').addEventListener('click', () => openNewChat());
   $('#btn-settings').addEventListener('click', () => openSettings());
-  $('#btn-assistant').addEventListener('click', () => toggleAssistant());
 
   // Beeper keeps search hidden until the magnifier is clicked.
   $('#btn-focus-search').addEventListener('click', () => {

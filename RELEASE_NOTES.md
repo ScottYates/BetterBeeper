@@ -1,11 +1,11 @@
-Better Beeper 1.3.2
+Better Beeper 1.17.0
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.3.2-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.17.0-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,6 +17,6 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
-- fix: the inbox preview must point at a message the thread actually shows (`0354000`)
+- feat: save a message attachment from an image, a video or the message menu (`81f4e9c`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.

@@ -14,12 +14,15 @@ import {
   escapeHtml,
 } from './util.js';
 import { api, call, callOk, FAILED } from './api.js';
+import { mediaKind } from './media-kind.js';
 import {
   state,
   bus,
   selfUserIDFor,
   upsertMessage,
+  upsertMessages,
   rekeyMessage,
+  markSendFailed,
   removeMessage,
   isNoteToSelf,
   networkNameFor,
@@ -34,9 +37,28 @@ import {
   hiddenList,
   deletedList,
 } from './state.js';
-import { toast, confirmDialog, openEmojiPicker, openPopover, openLightbox, imageMenu } from './ui.js';
+import {
+  toast,
+  confirmDialog,
+  openEmojiPicker,
+  openPopover,
+  openLightbox,
+  imageMenu,
+  saveAttachment,
+  saveAttachments,
+} from './ui.js';
 import { setArchived } from './chat-actions.js';
+import { openSharePicker } from './modals.js';
+import { canShare } from './share.js';
+import {
+  downloadableAttachments,
+  downloadMenuItems,
+  videoSaveLabel,
+  videoSaveTitle,
+} from './download.js';
+import { shouldMarkOnReturn } from './focus-read.js';
 import { avatarNode, renderChats, networkBadge } from './sidebar.js';
+import { renderJobs } from './jobs.js';
 
 let currentChat = null;
 let hasMore = false;
@@ -56,8 +78,62 @@ let focusMessageID = null;
 let lastThreadSignature = null;
 const renderedNodes = new Map();
 
+/**
+ * React to the backfill queue.
+ *
+ * Without this the first time you open a chat is a dead end: the store is
+ * empty, history.open returns nothing, the thread draws "No messages here yet",
+ * and the thousands of messages then arriving in the main process are never
+ * told about - so the chat stays empty until you open it a second time.
+ */
+function onHistoryProgress(payload) {
+  if (!payload?.chatID) return;
+
+  if (payload.state === 'recovered') {
+    toast('The local history could not be read and has been reset.', 'error', 4000);
+    return;
+  }
+
+  // Only the open chat needs drawing; the rest will be right when they open.
+  if (payload.state !== 'done' || payload.chatID !== state.activeChatID) return;
+
+  // history.page, deliberately, and never history.open.
+  //
+  // history.open asks the main process to queue a sync of this chat, and using
+  // it here closes a loop that never terminates: a finished sync reports "done",
+  // this redraws from the store, that redraw asks for another sync, and so on.
+  //
+  // It did not look like a slow sync, which is why it survived so long.
+  // Measured live on a one-message chat: 9,628 pages fetched in three minutes,
+  // about 25 syncs a second, never stopping, with the thread and the jobs panel
+  // repainting throughout. Reading the store is all this needs - the sync has
+  // already finished by the time the event arrives.
+  call(() => api.history.page(payload.chatID, {}), { context: 'history', fallback: null }).then((page) => {
+    if (!page || state.activeChatID !== payload.chatID) return;
+    // Same rule as opening the chat: what is behind this page in the store,
+    // not whether the backfill just finished.
+    hasMore = Boolean(page.hasMore);
+    upsertMessages(payload.chatID, page.messages);
+
+    onMessageUpserted();
+  });
+}
+
 export function initThread() {
   const composer = $('#composer');
+
+  window.beeper?.on?.historyProgress?.(onHistoryProgress);
+
+  // The refresh button. The work it starts is not awaited: it runs in the main
+  // process and the jobs panel is how it is watched.
+  $('#btn-refresh')?.addEventListener('click', () => refreshThisChat());
+
+  // A job's progress is the only thing that starts and stops the refresh
+  // button, and it arrives as a job event rather than as anything this chat did.
+  bus.on('jobs:changed', ({ chatID }) => {
+    if (chatID !== state.activeChatID) return;
+    renderRefreshButton();
+  });
 
   composer.addEventListener('input', () => {
     updateReplyPreview();
@@ -77,10 +153,10 @@ export function initThread() {
   // message. Anchored to the composer, the paste fired at the document and the
   // composer never heard about it.
   document.addEventListener('paste', (event) => {
-    // Only the chat composer claims an image. Anywhere else - the assistant,
-    // the search box, the token field - a paste is left alone.
+    // Only the chat composer claims an image. Anywhere else - the
+    // search box, the token field - a paste is left alone.
     const target = event.target;
-    if (target?.closest?.('#assistant-input, #search-input, #manual-token')) return;
+    if (target?.closest?.('#search-input, #manual-token')) return;
     if (!currentChat) return;
     // A screenshot arrives as a clipboard *file* with no text beside it, so the
     // textarea has nothing to insert and the paste would look like nothing
@@ -92,12 +168,19 @@ export function initThread() {
   });
 
   // Right-click any image in the thread to copy it as a pasteable picture
-  // rather than a link. Delegated, so it covers attachments and images inside
-  // message text alike, and survives every re-render of the list.
+  // rather than a link. Delegated, so it survives every re-render of the list.
+  // Today the only <img> inside the list is an attachment - the sanitizer
+  // drops IMG out of message text and message avatars are drawn as initials -
+  // so the attachment is always there. It is still read off the element rather
+  // than assumed, so a Save item can only appear for an image that really has
+  // something behind it to save.
   $('#message-list').addEventListener('contextmenu', (event) => {
     const img = event.target.closest?.('img');
     if (!img || !img.src) return;
-    if (!imageMenu(img, img.src, { pointer: { x: event.clientX, y: event.clientY } })) return;
+    if (!imageMenu(img, img.src, {
+      pointer: { x: event.clientX, y: event.clientY },
+      attachment: img.__attachment,
+    })) return;
     event.preventDefault();
     event.stopPropagation();
   });
@@ -195,26 +278,34 @@ export async function openChat(chatID, { focusMessageID: focusId } = {}) {
   const listEl = $('#message-list');
   listEl.append(el('div', { class: 'search-loading', text: 'Loading messages…' }));
 
-  // Latest page.
-  const page = await call(() => api.messages.list(chatID, { limit: 50 }), {
-    context: 'messages',
+  // Read from the local store, not from Beeper. This returns before any
+  // network call finishes, so a chat opens instantly and still opens when
+  // Beeper is unreachable; the main process brings it up to date behind us.
+  const page = await call(() => api.history.open(chatID), {
+    context: 'history',
+    fallback: { messages: [], complete: false, failed: true },
   });
 
   clear(listEl);
   renderedNodes.clear();
 
-  if (!page) {
+  if (page?.failed) {
     listEl.append(
       el('div', { class: 'empty-note', text: 'Could not load messages. Beeper may still be indexing this chat.' }),
     );
     return;
   }
 
-  hasMore = Boolean(page.hasMore);
-  const items = page.items || [];
-  for (const message of items) {
-    upsertMessage(chatID, message);
-  }
+  // Whether to offer scroll-back. This is what the store says is behind this
+  // page, NOT whether the backfill has finished: a fully-synced chat can hold
+  // thousands of messages past the opening page, and treating `complete` as
+  // "there is nothing older" made all of them unreachable.
+  hasMore = Boolean(page?.hasMore);
+  const items = page?.messages || [];
+  // One call, one render. Feeding the page in one message at a time re-sorted
+  // and re-rendered the thread 200 times over, which measured 2.9s for a store
+  // read that takes 45ms.
+  upsertMessages(chatID, items);
   renderAll();
 
   // If the user came from search, scroll to the hit once rendered.
@@ -286,8 +377,56 @@ function renderHeader() {
   archive.dataset.tip = isArchived(chat) ? 'Move back to inbox' : 'Archive chat';
   archive.classList.toggle('is-on', isArchived(chat));
 
+  const refresh = $('#btn-refresh');
+  renderRefreshButton(chat, refresh);
+
   const composer = $('#composer');
   if (composer) composer.placeholder = composerPlaceholder(chat);
+}
+
+/**
+ * The refresh button's busy state, and nothing else.
+ *
+ * Split out because a job event arrives several times a second, and the obvious
+ * way to react is to call renderHeader - which replaces the thread avatar, and
+ * would then repaint that image from initials on every progress event. Updating
+ * one button's class costs nothing and touches nothing else.
+ *
+ * It also has to run on *every* change, not only when a job ends. Opening a
+ * chat starts a sync of its own, so a refresh pressed while that is still
+ * running is served afterwards: the first job finishing cleared the busy state,
+ * and without this the button would sit idle while the refresh it asked for was
+ * still running.
+ */
+function renderRefreshButton(chat = currentChat, button) {
+  const btn = button || $('#btn-refresh');
+  if (!btn || !chat) return;
+  const busy = state.syncingChats.has(chat.id);
+  btn.classList.toggle('is-busy', busy);
+  btn.dataset.tip = busy ? 'Re-syncing in the background' : 'Re-sync this chat from Beeper';
+}
+
+/**
+ * Ask the main process to bring this chat fully up to date.
+ *
+ * Deliberately not awaited into anything the user waits on. The walk is the
+ * slow part - a chat with thousands of messages is hundreds of pages - and it
+ * runs in the main process, out of the renderer's way. What comes back is only
+ * whether the chat was queued, and the progress panel is how it is watched.
+ */
+async function refreshThisChat() {
+  const chat = currentChat;
+  if (!chat) return;
+  state.syncingChats.add(chat.id);
+  renderHeader();
+
+  const res = await call(() => api.history.refresh(chat.id), { context: 'refresh', fallback: null });
+  if (!res?.queued) {
+    // Already running or already queued: the button is doing what was asked.
+    toast('Already syncing this chat', 'success', 1600);
+  }
+  renderRefreshButton();
+  renderJobs();
 }
 
 /**
@@ -371,20 +510,39 @@ export async function pastedImages(dataTransfer) {
   return { images, rejected };
 }
 
-/** A pasted screenshot is a picture, not a document: do not label it as one. */
+/**
+ * A pasted screenshot is a picture, not a document, and a clip is neither.
+ * Labelling either as a document is a small lie on the chip the sender is
+ * looking at while deciding what they just attached.
+ */
 export function attachmentIcon(attachment) {
-  return String(attachment?.mimeType || '').startsWith('image/') ? '\u{1F5BC}' : '\u{1F4CE}';
+  const kind = mediaKind(attachment);
+  if (kind === 'image') return '\u{1F5BC}';
+  if (kind === 'video') return '\u{1F3AC}';
+  return '\u{1F4CE}';
 }
 
-/** Beeper's "Seen at 11:11 AM" line above the composer. */
-function renderSeenLine() {
-  const line = $('#seen-line');
-  if (!line) return;
+/**
+ * The read receipt under one of our messages, or '' when it has not been read
+ * back yet.
+ *
+ * Per message rather than one line for the whole thread: "seen at" on its own
+ * could only ever say when the *newest* message was read, which leaves a
+ * message that was read hours earlier looking unread. Each bubble carries its
+ * own answer, so the receipts read as a fact about that message.
+ *
+ * A reaction record has a `seen` of its own and is newer than the message it
+ * belongs to, but it is not a message - `renderableFrom` keeps it out of here.
+ */
+export function seenIndicatorText(message) {
+  if (!message?.isSender) return '';
+  const when = seenAt(message.seen);
+  return when ? `\u2713\u2713 ${messageTime(when)}` : '';
+}
 
-  const messages = state.messages.get(state.activeChatID) || [];
-  const lastSeen = [...messages].reverse().find((m) => m.isSender && seenAt(m.seen));
-  const when = lastSeen ? seenAt(lastSeen.seen) : null;
-  line.textContent = when ? `Seen at ${messageTime(when)}` : '';
+/** True when this message needs a meta row of its own to carry the receipt. */
+function hasSeenIndicator(message) {
+  return Boolean(seenIndicatorText(message));
 }
 
 /**
@@ -511,6 +669,38 @@ async function markRead() {
   renderChats();
 }
 
+/**
+ * Coming back to the window counts as having read what is on screen.
+ *
+ * renderMessages() only marks the thread read when the document has focus at the
+ * moment it runs, so a message that arrived while the window was in the
+ * background was rendered with focus false and declined - and nothing afterwards
+ * re-rendered, so nothing re-asked. The window coming back to the front is the
+ * moment the answer changes.
+ *
+ * Returns whether a mark was actually attempted, so a caller can tell "there was
+ * nothing to read" from "it was marked read".
+ */
+export function markReadOnReturn() {
+  const chat = currentChat;
+  const messages = chat ? state.messages.get(chat.id) || [] : [];
+  const last = messages[messages.length - 1];
+
+  const should = shouldMarkOnReturn({
+    windowFocused: document.hasFocus(),
+    windowVisible: document.visibilityState === 'visible',
+    hasOpenChat: Boolean(chat),
+    lastMessageUnread: Boolean(last?.isUnread),
+    markReadEnabled: state.settings.markReadOnOpen !== false,
+  });
+  if (!should) return false;
+
+  // Not awaited: the caller is a focus handler, and markRead() has its own
+  // retry backoff and its own optimistic state update.
+  markRead();
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Rendering messages
 // ---------------------------------------------------------------------------
@@ -553,7 +743,6 @@ function renderAll() {
     previous = message;
   }
 
-  renderSeenLine();
   if (stick) scrollToBottom();
 }
 
@@ -586,6 +775,10 @@ export function threadSignature(messages) {
       m.timestamp || '',
       m.editedTimestamp || '',
       m.linkedMessageID || '',
+      // The read receipt is drawn on the message itself now, so a receipt is a
+      // change the thread actually draws - and therefore has to be in here or
+      // the rebuild that would draw it gets skipped.
+      seenAt(m.seen) || '',
       (m.attachments || [])
         .map((a) => `${a.id || a.fileName || ''}:${a.fileSize || 0}:${a.mimeType || ''}`)
         .join(','),
@@ -654,7 +847,6 @@ function onMessageUpserted() {
     listEl.append(el('div', { class: 'empty-note', text: 'No messages here yet.' }));
   }
 
-  renderSeenLine();
   if (stick) scrollToBottom();
   if (window.document.hasFocus() && window.document.visibilityState === 'visible') markRead();
 }
@@ -728,7 +920,8 @@ export function messageNode(message, previous) {
     bubbleWrap.append(bubble);
   }
 
-  if (message.editedTimestamp || (message.isSender && message.sendStatus) || message.links?.length) {
+  if (message.editedTimestamp || (message.isSender && message.sendStatus)
+    || message.links?.length || hasSeenIndicator(message)) {
     bubbleWrap.append(metaNode(message));
   }
 
@@ -886,10 +1079,29 @@ function metaNode(message) {
   const bits = [];
   if (message.editedTimestamp) bits.push(el('span', { class: 'muted', text: 'edited' }));
 
+  // The read receipt, on the message it belongs to rather than as one line for
+  // the whole thread. `seen` is polymorphic, so the raw value would render as
+  // [object Object] next to a message that was plainly read.
+  const receipt = seenIndicatorText(message);
+
   if (message.isSender) {
-    const status = message.sendStatus || 'sent';
-    const label = { pending: '⏳ sending…', sent: '✓', failed: '✕ failed' }[status] || '✓';
-    bits.push(el('span', { class: `msg-status-${status}`, text: label }));
+    // Once it has been read, the plain "sent" tick says nothing the receipt has
+    // not already said - and sitting beside it reads as two ticks and a time.
+    if (!receipt || message.sendStatus !== 'sent') {
+      const status = message.sendStatus || 'sent';
+      const label = { pending: '⏳ sending…', sent: '✓', failed: '✕ failed' }[status] || '✓';
+      bits.push(el('span', { class: `msg-status-${status}`, text: label }));
+    }
+  }
+
+  if (receipt) {
+    bits.push(
+      el('span', {
+        class: 'msg-seen',
+        text: receipt,
+        title: `Seen at ${fullTime(seenAt(message.seen))}`,
+      }),
+    );
   }
 
   if (message.links?.length) {
@@ -948,29 +1160,94 @@ function reactionsNode(message, selfID) {
 function attachmentsNode(message) {
   const wrap = el('div', { class: 'msg-attachments' });
   for (const attachment of message.attachments || []) {
-    const isImage = attachment.type === 'img' || /^image\//i.test(attachment.mimeType || '');
-    if (isImage) {
-      wrap.append(imageElement(attachment));
-    } else {
-      const node = el(
-        'a',
-        {
-          class: 'att-file',
-          href: '#',
-          onClick: async (event) => {
-            event.preventDefault();
-            const url = await resolveSrc(attachment);
-            if (url) api.shell.openExternal(url);
-          },
-        },
-        el('span', { text: '📎' }),
-        el('span', { class: 'att-name', text: attachment.fileName || 'Attachment' }),
-        el('span', { class: 'muted tiny', text: fileSize(attachment.fileSize) }),
-      );
-      wrap.append(node);
-    }
+    const kind = mediaKind(attachment);
+    if (kind === 'image') wrap.append(imageElement(attachment));
+    else if (kind === 'video') wrap.append(videoElement(attachment));
+    else wrap.append(fileNode(attachment));
   }
   return wrap;
+}
+
+/**
+ * A video plays in place, with its own controls, and carries a save button.
+ *
+ * The button is the reason this is a wrapper and not a bare <video>. The app's
+ * image menu is wired to <img> only, so without a button a video would have
+ * exactly one route out - the full message menu, several clicks away - while
+ * every other kind of attachment can be saved by clicking the thing itself.
+ *
+ * If it will not decode, the whole wrapper is swapped for the ordinary download
+ * row rather than left sitting there as a dead black rectangle: a file that
+ * claims to be a video but is not one should still be saveable, and should say
+ * what it is. The wrapper is what gets replaced, because replacing the bare
+ * <video> would leave the button floating beside the file row with no video
+ * under it.
+ */
+function videoElement(attachment) {
+  const video = el('video', {
+    class: 'att-video',
+    controls: true,
+    preload: 'metadata',
+    playsinline: true,
+    title: attachment.fileName || 'video',
+  });
+
+  const wrap = el(
+    'div',
+    { class: 'att-video-wrap' },
+    video,
+    el(
+      'button',
+      {
+        class: 'att-download',
+        type: 'button',
+        title: videoSaveTitle(attachment),
+        // Hyphenated on purpose. el() sets whatever key it is given, and an
+        // attribute name is lowercased by the DOM, so "ariaLabel" would become
+        // "arialabel" - present on the element and ignored by everything else.
+        'aria-label': videoSaveLabel(attachment),
+        onClick: () => saveAttachment(attachment),
+      },
+      el('span', { text: '⬇' }),
+    ),
+  );
+
+  const fallback = () => {
+    if (!wrap.isConnected) return;
+    wrap.replaceWith(fileNode(attachment));
+  };
+
+  video.addEventListener('error', fallback);
+  resolveSrc(attachment).then((url) => {
+    if (url) video.src = url;
+    else fallback();
+  });
+  return wrap;
+}
+
+/**
+ * Anything that is not an image or a video.
+ *
+ * The whole row is the button, because this is the only way to get the file out
+ * of Beeper and a small target hidden at the right-hand end is exactly the
+ * thing nobody finds. The name is kept as text and never as markup: it comes
+ * from whoever sent the message.
+ */
+function fileNode(attachment) {
+  const name = attachment.fileName || 'Attachment';
+  return el(
+    'button',
+    {
+      class: 'att-file',
+      type: 'button',
+      title: `Save ${name}`,
+      onClick: () => saveAttachment(attachment),
+    },
+    el('span', { class: 'att-glyph', text: '📎' }),
+    el('span', { class: 'att-name', text: name }),
+    el('span', { class: 'att-size', text: fileSize(attachment.fileSize) }),
+    el('span', { class: 'att-save', text: '⬇' }),
+  );
 }
 
 const srcCache = new Map();
@@ -1019,6 +1296,11 @@ function imageElement(attachment) {
   if (cached && !claimedImages.has(cached)) {
     claimedImages.add(cached);
     cached.alt = attachment.fileName || 'image';
+    // Refreshed on reuse as well as on create. The element outlives any single
+    // render, and an image can reappear in a later message with a different
+    // attachment object behind it, so carrying the first one forward would save
+    // the wrong file.
+    cached.__attachment = attachment;
     return cached;
   }
 
@@ -1031,6 +1313,11 @@ function imageElement(attachment) {
       openLightbox(event.currentTarget.src);
     },
   });
+  // The attachment is stashed on the element because the contextmenu handler is
+  // delegated to the message list and only has the <img> to work from. The src
+  // is not enough: it is a resolved beeper-file:// URL, which carries no name
+  // and nothing the save dialog can hand to the main process.
+  img.__attachment = attachment;
 
   if (key) {
     if (imgCache.size >= IMG_CACHE_LIMIT) {
@@ -1085,9 +1372,6 @@ function editingNode(message) {
  * Delete and Hide are deliberately not here: they are on the message row's
  * hover actions now. What is left is the slower, rarer list - replying,
  * copying, editing, and the local-only delete that needs a second thought.
- */
-/**
- * The context menu, for the things that are not one click.
  *
  * The trash on the message row is the local delete, which only hides the
  * message here. This Delete is the real one: it goes to Beeper, everyone else
@@ -1101,6 +1385,16 @@ export function messageMenuItems(anchor, message) {
     { label: 'Reply', onSelect: () => setReplyTo(message) },
     { label: 'React', onSelect: () => openEmojiPicker(anchor, (e) => toggleReaction(message, e)) },
     { label: 'Copy text', onSelect: () => copyText(message.text || '') },
+    canShare(message)
+      ? { label: 'Share with...', onSelect: () => openSharePicker(message, currentChat) }
+      : null,
+    // Sits after Share because both are about the message leaving this window -
+    // to somebody, or to disk. Each attachment already has its own one-click
+    // route, so this is the bulk case and nothing more.
+    ...downloadMenuItems(message).map((item) => ({
+      label: item.label,
+      onSelect: () => { saveAttachments(downloadableAttachments(message)); },
+    })),
     canEdit ? { label: 'Edit', onSelect: () => { state.editing = message.id; onMessageUpserted(); } } : null,
     canEdit
       ? { label: 'Delete for everyone', danger: true, onSelect: () => deleteMessage(message) }
@@ -1245,9 +1539,12 @@ async function toggleReaction(message, key) {
  * drawn, not a deletion of the message we were sent.
  */
 export function renderableMessages(chatID) {
-  return (state.messages.get(chatID) || []).filter(
-    (m) => !m.isHidden && !isMessageDeleted(m.id),
-  );
+  return renderableFrom(state.messages.get(chatID));
+}
+
+/** The same filter, from a list rather than from state, so callers can hand it a list. */
+export function renderableFrom(list) {
+  return (list || []).filter((m) => !m.isHidden && !isMessageDeleted(m.id));
 }
 
 async function loadOlder() {
@@ -1261,15 +1558,17 @@ async function loadOlder() {
   const listEl = $('#message-list');
   const previousHeight = listEl.scrollHeight;
 
+  // Read from disk. No cursor round trip, so scrolling back stays instant
+  // however far back it goes, and works with Beeper switched off.
   const page = await call(
-    () => api.messages.list(chatID, { cursor: oldest.id, direction: 'before', limit: 50 }),
+    () => api.history.page(chatID, { before: oldest.id, limit: 50 }),
     { context: 'older messages' },
   );
   loadingOlder = false;
   if (!page || state.activeChatID !== chatID) return;
 
   hasMore = Boolean(page.hasMore);
-  for (const message of page.items || []) upsertMessage(chatID, message);
+  upsertMessages(chatID, page.messages);
 
   onMessageUpserted();
   // Keep the viewport anchored to the message the user was looking at.
@@ -1438,6 +1737,21 @@ function renderAttachments() {
   });
 }
 
+/**
+ * Whether a failed send should put its text back in the composer.
+ *
+ * A request Beeper refused did not send, so handing the text back is pure
+ * convenience. A timeout or an unreachable server is a different animal: the
+ * request may well have been accepted and only the answer lost, and silently
+ * offering the text again invites sending a second copy of a message that is
+ * already on its way. Those keep their text in the failed bubble instead.
+ */
+const AMBIGUOUS_SEND_ERRORS = new Set(['timeout', 'unreachable']);
+
+export function shouldRestoreComposer(code) {
+  return !AMBIGUOUS_SEND_ERRORS.has(String(code || ''));
+}
+
 async function sendCurrent() {
   const composer = $('#composer');
   const chat = currentChat;
@@ -1498,10 +1812,29 @@ async function sendCurrent() {
     }).catch((err) => ({ __error: err }));
 
     if (res?.__error) {
-      // Mark the bubble rather than leaving it spinning, and put the text back.
-      upsertMessage(chat.id, { id: txnID, sendStatus: 'failed' });
-      toast(`Could not send: ${res.__error.message}`, 'error', 5000);
-      if (payload.text) {
+      // Only the bubble we inserted can be failed. If it is already gone then a
+      // confirmation landed first and the message did go out, so marking
+      // anything here would put the same text in the thread a second time.
+      const stillOurs = markSendFailed(chat.id, txnID);
+
+      if (!stillOurs) {
+        toast('Beeper did not confirm the send, but the message arrived.', 'success');
+        break;
+      }
+
+      // "Could not send" is a claim the app cannot honestly make about a
+      // timeout: the message may well be on its way. Say what is known.
+      const ambiguous = !shouldRestoreComposer(res.__error.code);
+      toast(
+        ambiguous
+          ? 'Beeper did not answer, so this may not have sent. The text is still in the message.'
+          : `Could not send: ${res.__error.message}`,
+        'error',
+        5000,
+      );
+      // The text stays in the failed bubble either way; this only decides
+      // whether it is handed back ready to send again.
+      if (payload.text && !ambiguous) {
         composer.value = payload.text;
       }
       break;
@@ -1521,9 +1854,21 @@ async function sendCurrent() {
 export function applyMessageEvent(frame) {
   const chatID = frame.chatID;
   if (chatID !== state.activeChatID) return;
+  // A frame is a batch, and each entry also goes to the store on its own, but
+  // the thread is told once - otherwise a catch-up frame re-renders the whole
+  // conversation once per message it carries.
+  const messages = [];
   for (const entry of frame.entries || []) {
-    if (entry?.id) upsertMessage(chatID, { ...entry, chatID });
+    if (!entry?.id) continue;
+    const message = { ...entry, chatID };
+    messages.push(message);
+    // Write straight through to the local store. Without this the store only
+    // learns about a message when some backfill happens to walk over it, and
+    // the newest message in the app would be the one most likely to be missing
+    // from its own history.
+    api.history.upsert(chatID, message);
   }
+  upsertMessages(chatID, messages);
 }
 
 export function currentChatID() {

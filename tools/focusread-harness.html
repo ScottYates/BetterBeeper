@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>focusread-check harness</title>
+  </head>
+  <body>
+    <!--
+      Blank page loaded by tools/focusread-check.js, so the renderer modules can
+      be imported as real ES modules from a file:// origin; a data: URL cannot
+      import modules.
+
+      The elements are the ones thread.js, sidebar.js and ui.js actually query,
+      found by scanning their source rather than by adding them one crash at a
+      time. They are empty on purpose: the check drives openChat() and the mark
+      path directly and never looks at how any of it is styled.
+    -->
+    <div id="chat-list"></div>
+
+    <div id="thread" hidden>
+      <div id="thread-avatar"></div>
+      <div id="thread-name"></div>
+      <div id="thread-sub"></div>
+      <div id="account-badges"></div>
+      <button id="btn-pin"></button>
+      <button id="btn-mute"></button>
+      <button id="btn-archive"></button>
+      <button id="btn-unread"></button>
+      <button id="btn-refresh"></button>
+      <div id="message-list"></div>
+      <div id="attachment-chips"></div>
+      <div id="reply-preview" hidden>
+        <span id="reply-preview-text"></span>
+        <button id="btn-cancel-reply"></button>
+      </div>
+      <div id="composer">
+        <button id="btn-attach"></button>
+        <button id="btn-attach-image"></button>
+        <button id="btn-emoji"></button>
+        <button id="btn-send"></button>
+      </div>
+    </div>
+
+    <div id="thread-empty"></div>
+    <div id="filter-row"></div>
+    <div id="inbox-label"></div>
+    <div id="search-input"></div>
+    <div id="search-scope"></div>
+    <div id="live-status"></div>
+    <div id="modal-root" hidden></div>
+    <div id="toast-root"></div>
+  </body>
+</html>

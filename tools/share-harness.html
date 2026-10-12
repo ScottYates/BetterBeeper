@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>share-check harness</title>
+  </head>
+  <body>
+    <!--
+      Blank page loaded by tools/share-check.js. It exists only so the test can
+      import the renderer's share.js and modals.js as real ES modules from a
+      file:// origin; a data: URL cannot import modules.
+
+      openModal() writes into #modal-root and toast() into #toast-root, so the
+      two roots the share picker actually touches are here. The rest of the app
+      layout is not needed: nothing in the picker reads it.
+    -->
+    <div id="modal-root" hidden></div>
+    <div id="toast-root"></div>
+  </body>
+</html>

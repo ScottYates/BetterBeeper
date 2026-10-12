@@ -85,7 +85,6 @@
             <button id="btn-filters" class="icon-btn" data-tip="Filter chats" aria-label="Filter chats">≡</button>
             <button id="btn-focus-search" class="icon-btn" data-tip="Search chats and messages" aria-label="Search">⌕</button>
             <button id="btn-new-chat" class="icon-btn" data-tip="New chat (Ctrl+N)" aria-label="New chat">✎</button>
-            <button id="btn-assistant" class="icon-btn" data-tip="Toggle assistant (Ctrl+Shift+A)" aria-label="Toggle assistant">✦</button>
             <button id="btn-settings" class="icon-btn" data-tip="Settings" aria-label="Settings">⚙</button>
           </div>
         </header>
@@ -113,6 +112,15 @@
         </div>
 
         <div id="chat-list" class="chat-list" role="list"></div>
+
+        <section id="jobs-panel" class="jobs-panel" data-state="idle" aria-live="polite">
+          <button id="jobs-toggle" class="jobs-head" aria-expanded="true" aria-controls="jobs-list">
+            <span class="jobs-spinner" aria-hidden="true"></span>
+            <span id="jobs-summary" class="jobs-summary">Chats synced</span>
+            <span class="caret" aria-hidden="true">▾</span>
+          </button>
+          <div id="jobs-list" class="jobs-list"></div>
+        </section>
 
         <footer class="sidebar-footer">
           <span id="live-status" class="live" data-state="idle">offline</span>
@@ -148,6 +156,7 @@
               </div>
             </div>
             <div class="thread-actions">
+              <button id="btn-refresh" class="icon-btn" data-tip="Re-sync this chat from Beeper" aria-label="Refresh chat">↻</button>
               <button id="btn-mute" class="icon-btn" data-tip="Mute notifications" aria-label="Mute">🔔</button>
               <button id="btn-pin" class="icon-btn" data-tip="Pin to top" aria-label="Pin">📌</button>
               <button id="btn-archive" class="icon-btn" data-tip="Archive chat" aria-label="Archive">🗄</button>
@@ -161,8 +170,6 @@
             <span id="reply-preview-text" class="muted"></span>
             <button id="btn-cancel-reply" class="icon-btn tiny-btn" data-tip="Cancel reply" aria-label="Cancel reply">✕</button>
           </div>
-
-          <div id="seen-line" class="seen-line"></div>
 
           <footer class="composer">
             <button id="btn-attach" class="round-btn" data-tip="Attach a file" aria-label="Attach a file">+</button>
@@ -181,28 +188,6 @@
           </footer>
         </div>
       </main>
-
-      <aside id="assistant-pane" class="assistant-pane" hidden>
-        <header class="assistant-header">
-          <div>
-            <h3>Assistant</h3>
-            <p id="mcp-status" class="muted tiny">MCP not connected</p>
-          </div>
-          <button id="btn-assistant-close" class="icon-btn" data-tip="Close assistant" aria-label="Close assistant">✕</button>
-        </header>
-
-        <div id="assistant-log" class="assistant-log"></div>
-
-        <div id="assistant-input-row" class="assistant-input-row">
-          <textarea
-            id="assistant-input"
-            rows="1"
-            placeholder="Ask about your chats…"
-            spellcheck="true"
-          ></textarea>
-          <button id="btn-assistant-send" class="icon-btn send-btn" aria-label="Send">➤</button>
-        </div>
-      </aside>
     </div>
 
     <!-- ================= Modals ================= -->

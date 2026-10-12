@@ -6,10 +6,12 @@
  * Run with `npm run check:send`.
  */
 const path = require('path');
+const fs = require('fs');
 const harnessGuard = require('./harness-guard');
 const { pathToFileURL } = require('url');
 
 const statePath = path.join(__dirname, '..', 'src', 'renderer', 'js', 'state.js');
+const threadPath = path.join(__dirname, '..', 'src', 'renderer', 'js', 'thread.js');
 
 // state.js pulls in DOM helpers, so exercise it in a browser via Electron.
 async function main() {
@@ -24,6 +26,7 @@ async function main() {
 
       const reset = () => st.state.messages.set(chatID, []);
       const ids = () => (st.state.messages.get(chatID) || []).map((m) => m.id);
+      const pending = () => (st.state.messages.get(chatID) || []).filter((m) => m.sendStatus === 'pending');
 
       // A normal text send.
       reset();
@@ -76,6 +79,55 @@ async function main() {
       const noop = st.rekeyMessage(chatID, '~txn:local:2', '~txn:network:100');
       out.echoFirst = { result: noop, ids: ids().join(',') };
 
+      // A real confirmation carries no sendStatus at all - that was read off a
+      // live Beeper echo, not assumed. So merging one into a bubble that is
+      // still marked pending leaves the flag exactly as it was, and nothing in
+      // the app ever clears it.
+      reset();
+      st.upsertMessage(chatID, { id: '~txn:local:3', isSender: true, sendStatus: 'pending', text: 'merge', timestamp: new Date(now).toISOString(), sortKey: '1', attachments: [] });
+      st.rekeyMessage(chatID, '~txn:local:3', '~beeper-mautrix-go_1');
+      st.upsertMessage(chatID, { id: '~beeper-mautrix-go_1', isSender: true, text: 'merge', timestamp: new Date(now + 300).toISOString(), sortKey: '2', attachments: [] });
+      out.mergeStatus = (st.state.messages.get(chatID) || [])[0]?.sendStatus ?? '(none)';
+
+      // Two identical sends in flight. The confirmations arrive in the order the
+      // messages were sent, so the first one belongs to the oldest bubble still
+      // waiting - not to the newest one.
+      reset();
+      st.upsertMessage(chatID, { id: 'PH-G1', isSender: true, sendStatus: 'pending', text: 'same', timestamp: new Date(now).toISOString(), sortKey: '1', attachments: [] });
+      st.upsertMessage(chatID, { id: 'PH-G2', isSender: true, sendStatus: 'pending', text: 'same', timestamp: new Date(now + 400).toISOString(), sortKey: '2', attachments: [] });
+      st.upsertMessage(chatID, { id: 'REAL-G1', isSender: true, text: 'same', timestamp: new Date(now + 800).toISOString(), sortKey: '3', attachments: [] });
+      out.inFlight = ids();
+
+      // An optimistic insert is not a confirmation. Typing the same thing twice
+      // used to let the second bubble swallow the first as it was inserted, and
+      // the two sends then shared one placeholder.
+      reset();
+      st.upsertMessage(chatID, { id: 'PH-L1', isSender: true, sendStatus: 'pending', text: 'again', timestamp: new Date(now).toISOString(), sortKey: '1', attachments: [] });
+      st.upsertMessage(chatID, { id: 'PH-L2', isSender: true, sendStatus: 'pending', text: 'again', timestamp: new Date(now + 400).toISOString(), sortKey: '2', attachments: [] });
+      out.twoPlaceholders = ids().join(',');
+
+      // The stored text is not always byte-identical to what was typed. A
+      // confirmation nothing can match must still settle the oldest send rather
+      // than leave it on "sending" for good.
+      reset();
+      st.upsertMessage(chatID, { id: 'PH-I', isSender: true, sendStatus: 'pending', text: 'hi', timestamp: new Date(now).toISOString(), sortKey: '1', attachments: [] });
+      st.upsertMessage(chatID, { id: 'REAL-I', isSender: true, text: 'hi ', timestamp: new Date(now + 500).toISOString(), sortKey: '2', attachments: [] });
+      out.unmatchedText = { ids: ids().join(','), pending: pending().length };
+
+      // Marking a send failed must only ever touch the bubble we own.
+      reset();
+      st.upsertMessage(chatID, { id: 'PH-J', isSender: true, sendStatus: 'pending', text: 'boom', timestamp: new Date(now).toISOString(), sortKey: '1', attachments: [] });
+      out.markPresent = typeof st.markSendFailed === 'function' ? st.markSendFailed(chatID, 'PH-J') : 'MISSING';
+      out.markStatus = (st.state.messages.get(chatID) || [])[0]?.sendStatus ?? '(none)';
+
+      // The confirmation already absorbed it, so the message did go out. Failing
+      // it here would put the same text in the thread a second time.
+      reset();
+      st.upsertMessage(chatID, { id: 'PH-K', isSender: true, sendStatus: 'pending', text: 'boom', timestamp: new Date(now).toISOString(), sortKey: '1', attachments: [] });
+      st.upsertMessage(chatID, { id: 'REAL-K', isSender: true, text: 'boom', timestamp: new Date(now + 200).toISOString(), sortKey: '2', attachments: [] });
+      out.markGone = typeof st.markSendFailed === 'function' ? st.markSendFailed(chatID, 'PH-K') : 'MISSING';
+      out.markGoneIds = ids().join(',');
+
       return JSON.stringify(out);
     })()
   `;
@@ -94,6 +146,14 @@ async function main() {
 
 main()
   .then((out) => {
+    if (process.env.SEND_CHECK_DEBUG) console.log(JSON.stringify(out, null, 2));
+    const threadSrc = fs.readFileSync(threadPath, 'utf8');
+    // Wiring: the failure branch has to go through the helper. Asserting on the
+    // helper alone would pass while thread.js went on re-inserting bubbles.
+    const failureBranch = /markSendFailed\(chat\.id, txnID\)/.test(threadSrc);
+    const resurrects =
+      /upsertMessage\(\s*chat\.id,\s*\{\s*id:\s*txnID,\s*sendStatus:\s*'failed'/.test(threadSrc);
+
     const cases = [
       ['text send absorbs its placeholder', out.textSend.join(',') === 'REAL-A'],
       ['attachment send absorbs its placeholder', out.attachmentSend.join(',') === 'REAL-B'],
@@ -103,6 +163,13 @@ main()
       ['re-key adopts the id Beeper returns', out.rekeyed === '~txn:network:99'],
       ['authoritative message merges into the re-keyed bubble', out.afterMerge.join(',') === '~txn:network:99'],
       ['re-key is a no-op once the echo absorbed it', out.echoFirst.result === false && out.echoFirst.ids === 'REAL-F'],
+      ['a confirmation stops the bubble claiming to be in flight', out.mergeStatus === '(none)'],
+      ['the first confirmation settles the oldest of two in-flight sends', out.inFlight.join(',') === 'PH-G2,REAL-G1'],
+      ['typing the same thing twice keeps both bubbles', out.twoPlaceholders === 'PH-L1,PH-L2'],
+      ['a confirmation nothing matches still settles a send', out.unmatchedText.ids === 'REAL-I' && out.unmatchedText.pending === 0],
+      ['a failed send marks the bubble it owns', out.markPresent === true && out.markStatus === 'failed'],
+      ['a failed send never re-inserts a bubble that already landed', out.markGone === false && out.markGoneIds === 'REAL-K'],
+      ['the renderer fails a send through that helper', failureBranch && !resurrects],
     ];
     let failed = 0;
     for (const [name, ok] of cases) {

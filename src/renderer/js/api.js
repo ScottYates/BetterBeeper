@@ -49,6 +49,7 @@ export async function callOk(fn, opts = {}) {
 export const api = {
   bootstrap: () => window.beeper.app.bootstrap(),
   refreshDiscovery: () => window.beeper.app.refreshDiscovery(),
+  setBadge: (count) => window.beeper.app.badge(count),
 
   updateCheck: () => window.beeper.updater.check(),
   updateDownload: () => window.beeper.updater.download(),
@@ -87,7 +88,9 @@ export const api = {
     upload: (path) => window.beeper.assets.upload(path),
     uploadBytes: (payload) => window.beeper.assets.uploadBytes(payload),
     download: (input) => window.beeper.assets.download(input),
+    reupload: (attachment) => window.beeper.assets.reupload(attachment),
     resolve: (attachment) => window.beeper.assets.resolve(attachment),
+    saveAs: (attachment) => window.beeper.assets.saveAs(attachment),
     pick: () => window.beeper.assets.pick(),
   },
 
@@ -95,9 +98,18 @@ export const api = {
     subscribe: (chatIDs) => window.beeper.events.subscribe(chatIDs),
   },
 
-  assistant: {
-    tools: () => window.beeper.assistant.tools(),
-    ask: (history) => window.beeper.assistant.ask(history),
+  history: {
+    open: (chatID) => window.beeper.history.open(chatID),
+    page: (chatID, opts) => window.beeper.history.page(chatID, opts),
+    upsert: (chatID, message) => window.beeper.history.upsert(chatID, message),
+    search: (query, opts) => window.beeper.history.search(query, opts),
+    status: () => window.beeper.history.status(),
+    refresh: (chatID) => window.beeper.history.refresh(chatID),
+    jobs: () => window.beeper.history.jobs(),
+  },
+
+  mcp: {
+    tools: () => window.beeper.mcp.tools(),
   },
 
   settings: {

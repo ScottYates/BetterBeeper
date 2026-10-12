@@ -13,8 +13,10 @@ import {
   networkMeta,
   isPinned,
   isArchived,
+  localStateVersion,
 } from './state.js';
 import { toast, openLightbox } from './ui.js';
+import { totalUnread } from './unread.js';
 import { setArchived } from './chat-actions.js';
 import { networkIconMarkup, badgeBackground } from './network-icons.js';
 
@@ -130,11 +132,70 @@ export function setView(id) {
 // Chat list
 // ---------------------------------------------------------------------------
 
+/**
+ * chatID -> { node, signature } for the row currently on screen.
+ *
+ * The list used to be cleared and rebuilt on every render, and that is visible:
+ * `clear(list)` destroys every avatar <img>, and avatarNode then repaints each
+ * one from initials only once an assets:resolve round trip comes back. Every
+ * avatar in the inbox therefore blinked out and back whenever anything
+ * re-rendered the list - a chat event, or the inbox timer - which reads as the
+ * icons flashing rather than as a repaint.
+ *
+ * It also cost one IPC call per chat with a picture, per render, on the
+ * renderer's main thread.
+ *
+ * So rows are kept and only rebuilt when what they draw changes. The signature
+ * covers every input to the row, including the local-only state (pins,
+ * archives, hidden and deleted messages) that lives outside the chat object and
+ * would otherwise leave a deleted message sitting in a preview line.
+ */
+const rows = new Map();
+
+function rowSignature(chat, kind) {
+  return [
+    kind,
+    localStateVersion(),
+    chat.id === state.activeChatID ? 1 : 0,
+    isUnread(chat) ? 1 : 0,
+    chat.unreadCount || 0,
+    chat.title || '',
+    chat.imgURL || '',
+    chat.network || '',
+    chat.lastActivity || '',
+    chat.draft?.text || '',
+    rowFlags(chat).join(''),
+    chatPreviewText(chat),
+  ].join('|');
+}
+
+/** Move `node` into position `index`, doing nothing if it is already there. */
+function place(list, node, index) {
+  if (list.children[index] === node) return false;
+  list.insertBefore(node, list.children[index] || null);
+  return true;
+}
+
+/**
+ * Put the unread total on the app icon.
+ *
+ * Only sent when it changes. The chat list is re-rendered on every chat event,
+ * and a busy account produces those constantly; telling the main process to
+ * repaint the taskbar each time would flash a number nobody asked for.
+ */
+let badgeCount = null;
+
+function syncBadge() {
+  const total = totalUnread(chatList(), isArchived);
+  if (total === badgeCount) return;
+  badgeCount = total;
+  call(() => api.setBadge(total), { context: 'app badge', fallback: null });
+}
+
 export function renderChats() {
   const list = $('#chat-list');
+  syncBadge();
   if (state.searchQuery) return; // search view owns the pane
-
-  clear(list);
 
   const all = chatList().filter((chat) => {
     if (chat.mergedIntoChatID) return false; // hidden inside a merged chat
@@ -151,6 +212,8 @@ export function renderChats() {
   });
 
   if (!all.length) {
+    clear(list);
+    rows.clear();
     list.append(
       el('div', {
         class: 'empty-note',
@@ -171,7 +234,29 @@ export function renderChats() {
     return new Date(b.lastActivity || 0).getTime() - new Date(a.lastActivity || 0).getTime();
   });
 
-  for (const chat of ordered) list.append(isNoteToSelf(chat) ? noteItem(chat) : chatItem(chat));
+  const next = [];
+  for (const chat of ordered) {
+    const kind = isNoteToSelf(chat) ? 'note' : 'chat';
+    const signature = rowSignature(chat, kind);
+    const entry = rows.get(chat.id);
+    if (entry && entry.signature === signature) {
+      next.push(entry.node);
+      continue;
+    }
+    const node = kind === 'note' ? noteItem(chat) : chatItem(chat);
+    rows.set(chat.id, { node, signature });
+    next.push(node);
+  }
+
+  next.forEach((node, i) => place(list, node, i));
+
+  // Anything left over is a chat that left this view, or the empty-note.
+  while (list.children.length > next.length) list.removeChild(list.lastChild);
+
+  const live = new Set(next);
+  for (const [id, entry] of [...rows]) {
+    if (!live.has(entry.node)) rows.delete(id);
+  }
 }
 
 /** The pin, mute and draft glyphs in a row's corner. */
@@ -355,6 +440,38 @@ function chatItem(chat) {
 }
 
 /**
+ * Avatar URLs we have already resolved, by the source URL Beeper gave us.
+ *
+ * `assets.resolve` is asynchronous, so without this every avatar is built as a
+ * coloured circle with initials and swapped for the real picture a frame later.
+ * The first time an avatar appears that is invisible - it was never there before
+ * to compare against. But the app rebuilds avatars: the chat list on every local
+ * state change, and the thread header twice on every open, because a rebuilt
+ * one has no memory of the image it had. So that first frame was being replayed
+ * in front of the user over and over, which is a flash.
+ *
+ * Caching the answer lets a rebuilt avatar be constructed with the image already
+ * in it, so the repaint is one frame showing the same picture it showed before.
+ */
+const resolvedAvatars = new Map();
+
+/** The <img> for an avatar. Split out so both paths build it identically. */
+function avatarImg(url, lightbox) {
+  return el('img', {
+    src: url,
+    alt: '',
+    ...(lightbox
+      ? {
+          onClick: (e) => {
+            e.stopPropagation();
+            openLightbox(url);
+          },
+        }
+      : {}),
+  });
+}
+
+/**
  * An avatar for a chat, contact or message.
  *
  * `lightbox: false` leaves the click to the row. A note-to-self row needs that:
@@ -371,6 +488,16 @@ export function avatarNode(source, name, size = '', { lightbox = true } = {}) {
     text: initials(label),
   });
 
+  const known = imgURL ? resolvedAvatars.get(imgURL) : null;
+  if (known) {
+    // Already known, so the picture goes in now rather than after a round trip.
+    // This is the path every rebuilt avatar takes, which is what stops the
+    // repaint from being a flash.
+    clear(node);
+    node.append(avatarImg(known, lightbox));
+    return node;
+  }
+
   if (imgURL) {
     call(() => api.assets.resolve({ srcURL: imgURL, id: imgURL }), {
       context: 'avatar',
@@ -379,20 +506,9 @@ export function avatarNode(source, name, size = '', { lightbox = true } = {}) {
       .then((data) => data?.url || null)
       .then((url) => {
         if (!url) return;
-        const img = el('img', {
-          src: url,
-          alt: '',
-          ...(lightbox
-            ? {
-                onClick: (e) => {
-                  e.stopPropagation();
-                  openLightbox(url);
-                },
-              }
-            : {}),
-        });
+        resolvedAvatars.set(imgURL, url);
         clear(node);
-        node.append(img);
+        node.append(avatarImg(url, lightbox));
       });
   }
   return node;
@@ -450,7 +566,7 @@ async function runSearch() {
   clear(list);
   list.append(el('div', { class: 'search-loading', text: 'Searching…' }));
 
-  const [chats, messages] = await Promise.all([
+  const [chats, remote, local] = await Promise.all([
     wantChats
       ? call(() => api.chats.search({ query, limit: 50 }), { context: 'chat search', fallback: null })
       : null,
@@ -458,15 +574,40 @@ async function runSearch() {
       // 20 is the ceiling Beeper accepts for message search; asking for more is a 400.
       ? call(() => api.messages.search({ query, limit: 20 }), { context: 'message search', fallback: null })
       : null,
+    wantMessages
+      // The local store answers with everything it holds, which is neither
+      // capped at 20 nor limited to what a bridge has indexed. It only knows
+      // about chats that have been opened, so Beeper's answer is merged in
+      // rather than replaced.
+      ? call(() => api.history.search(query, { limit: 50 }), { context: 'local search', fallback: null })
+      : null,
   ]);
 
   if (token !== searchToken) return; // a newer search superseded this one
 
-  searchResults = { chats: chats?.items || [], messages: messages?.items || [] };
+  const merged = mergeMessageHits(remote?.items || [], local || []);
+  searchResults = { chats: chats?.items || [], messages: merged };
   searchMode = wantMessages ? 'messages' : 'chats';
 
   if (wantChats) for (const chat of searchResults.chats) upsertChat(chat);
   renderSearchResults(query);
+}
+
+/**
+ * Local first, because it reaches further back, then Beeper's for the chats the
+ * store has never seen. Deduplicated by message id so a message both sides know
+ * about appears once.
+ */
+function mergeMessageHits(remoteItems, localItems) {
+  const seen = new Set();
+  const out = [];
+  for (const hit of [...localItems, ...remoteItems]) {
+    const key = `${hit.chatID || ''}|${hit.id || ''}`;
+    if (!hit.id || seen.has(key)) continue;
+    seen.add(key);
+    out.push(hit);
+  }
+  return out;
 }
 
 function renderSearchResults(query) {
@@ -498,7 +639,7 @@ function renderSearchResults(query) {
     list.append(
       el('div', {
         class: 'empty-note',
-        text: 'No matches. Beeper only searches message history it has indexed for your bridges.',
+        text: 'No matches. Beeper only searches history it has indexed, and the local store only knows chats you have opened.',
       }),
     );
   }
@@ -506,6 +647,10 @@ function renderSearchResults(query) {
 
 function messageHit(message) {
   const chat = state.chats.get(message.chatID);
+  // The local store knows the chat's name even when this session never loaded
+  // it, which is the whole reason that name is kept on disk. A hit from an
+  // old chat is close to useless if it can only be identified by its sender.
+  const chatName = chat?.title || message.chatTitle || '';
   const text = message.text || message.type || 'message';
   return el(
     'div',
@@ -513,11 +658,11 @@ function messageHit(message) {
       class: 'result-item',
       onClick: () => onSelectChat(message.chatID, { focusMessageID: message.id }),
     },
-    avatarNode(chat, chat?.title || message.senderName || '?', 'sm'),
+    avatarNode(chat, chatName || message.senderName || '?', 'sm'),
     el(
       'div',
       { class: 'result-item-body message-hit' },
-      el('div', { class: 'result-item-sub', text: `${chat?.title || 'Chat'} · ${message.senderName || 'Unknown'}` }),
+      el('div', { class: 'result-item-sub', text: `${chatName || 'Chat'} · ${message.senderName || 'Unknown'}` }),
       el('div', {
         class: 'result-item-title',
         html: highlight(text.slice(0, 140), state.searchQuery),

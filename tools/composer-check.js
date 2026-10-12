@@ -90,6 +90,77 @@ async function main() {
           || ('untitled: ' + JSON.stringify(a) + ' null: ' + JSON.stringify(b));
       });
 
+      // Recovery after a failed send. Putting the text back is a convenience
+      // when the request was refused outright, and the cause of a duplicate
+      // send when the answer was merely lost: the message may already be on the
+      // other end, and handing the text straight back invites sending it again.
+      const restore = T.shouldRestoreComposer;
+      add('a refused request gives its text back', () => {
+        return typeof restore === 'function' && restore('http_400') === true
+          || ('got ' + JSON.stringify(typeof restore === 'function' ? restore('http_400') : restore));
+      });
+
+      add('a server error gives its text back', () => {
+        return typeof restore === 'function' && restore('http_500') === true
+          || ('got ' + JSON.stringify(typeof restore === 'function' ? restore('http_500') : restore));
+      });
+
+      add('a timeout does not, because it may already have sent', () => {
+        return typeof restore === 'function' && restore('timeout') === false
+          || ('got ' + JSON.stringify(typeof restore === 'function' ? restore('timeout') : restore));
+      });
+
+      add('an unreachable Beeper does not either', () => {
+        return typeof restore === 'function' && restore('unreachable') === false
+          || ('got ' + JSON.stringify(typeof restore === 'function' ? restore('unreachable') : restore));
+      });
+
+      // The read receipt. It is drawn on each message rather than as one line for
+      // the thread, so these assert on one message at a time. They compare one
+      // result against another rather than against a clock: the text is
+      // formatted in local time, so a hardcoded "12:30" is only right in some
+      // of the world's timezones.
+      const seen = T.seenIndicatorText;
+      const msg = (o) => Object.assign(
+        { id: 'm', isSender: true, text: 'hi', timestamp: '2026-10-08T12:00:00.000Z' },
+        o,
+      );
+      const READ_OLD = { '@them:x': '2026-10-08T12:30:00.000Z' };
+      const READ_NEW = { '@them:x': '2026-10-08T13:45:00.000Z' };
+      const receipt = (m) => (typeof seen === 'function' ? seen(m) : seen);
+      const oldReceipt = receipt(msg({ seen: READ_OLD }));
+
+      add('a read message carries its receipt', () => {
+        return typeof oldReceipt === 'string' && oldReceipt.length > 0
+          || ('got ' + JSON.stringify(oldReceipt));
+      });
+
+      add('the receipt is marked as a check, not a bare time', () => {
+        return oldReceipt.startsWith('\\u2713\\u2713')
+          || ('got ' + JSON.stringify(oldReceipt));
+      });
+
+      add('two messages read at different times say different things', () => {
+        const newer = receipt(msg({ seen: READ_NEW }));
+        return newer !== oldReceipt
+          || ('both rendered as ' + JSON.stringify(oldReceipt));
+      });
+
+      add('an unread message carries no receipt', () => {
+        const out = receipt(msg({}));
+        return out === '' || ('got ' + JSON.stringify(out));
+      });
+
+      add("someone else's message never carries one", () => {
+        const out = receipt(msg({ isSender: false, seen: READ_OLD }));
+        return out === '' || ('got ' + JSON.stringify(out));
+      });
+
+      add('a bare true seen is not a time and gets no receipt', () => {
+        const out = receipt(msg({ seen: true }));
+        return out === '' || ('got ' + JSON.stringify(out));
+      });
+
       add('a title of only spaces is treated as untitled', () => {
         const out = placeholder(person('   '));
         return out === 'Write a message…' || ('got ' + JSON.stringify(out));

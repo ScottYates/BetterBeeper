@@ -6,9 +6,13 @@ const { EventEmitter } = require('node:events');
  * MCP client for Beeper's built-in MCP server.
  *
  * The chat UI talks to the REST API + WebSocket directly (cheaper, typed, and
- * realtime). The MCP server is used for the assistant panel, because it already
- * exposes Beeper's full agent-facing surface as tools - no need to re-declare
- * a schema for every capability we want the assistant to reach.
+ * realtime). The MCP server is Beeper's agent-facing surface: it already
+ * publishes a schema for every capability, which is why it exists as a client
+ * at all.
+ *
+ * The assistant that used to drive these tools is gone. The connection is kept
+ * because the app reports MCP status at startup and Settings can list the
+ * catalogue, so Beeper's server is still worth being able to reach.
  *
  * Auth: per the Beeper docs, MCP authentication is bypassed when a valid
  * Bearer token is supplied, so we forward the same OAuth token.
@@ -33,7 +37,7 @@ class McpClient extends EventEmitter {
   async connect() {
     const token = this.getToken();
     if (!token) {
-      this.#setStatus('unauthenticated', 'Connect to Beeper to use the assistant.');
+      this.#setStatus('unauthenticated', 'Connect to Beeper to reach its MCP server.');
       return { ok: false, error: 'Not connected to Beeper.' };
     }
     if (this.client) {

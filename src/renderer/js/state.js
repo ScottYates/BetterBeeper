@@ -47,6 +47,14 @@ export const state = {
   editing: null,
   /** accountID -> 'me', for reaction "is mine" styling */
   selfUserIDs: new Set(),
+  /**
+   * chatIDs with a background job in flight right now.
+   *
+   * Drives the refresh button's busy state. A Set rather than a flag per chat
+   * because the queue runs several at once and the header only cares about the
+   * one being looked at.
+   */
+  syncingChats: new Set(),
 };
 
 export function accountFor(chatOrMessage) {
@@ -143,22 +151,74 @@ export function networkMeta(source) {
 export function upsertMessage(chatID, message) {
   if (!message?.id) return;
   const list = state.messages.get(chatID) || [];
+  applyMessage(list, message);
+  sortForDisplay(list);
+  publish(chatID, message);
+  state.messages.set(chatID, list);
+}
 
+/**
+ * Insert or replace a whole page at once.
+ *
+ * A page is the unit everything actually arrives in - opening a chat, scrolling
+ * back, a live frame - and feeding it in one message at a time is quadratic:
+ * every `upsertMessage` re-sorts the list, rescans it, and emits
+ * `messages:changed`, which re-signatures the whole thread and re-renders it.
+ * Opening a chat therefore did 200 rebuilds to show 200 rows, and measured
+ * 2.9 seconds for a store read that takes 45ms.
+ *
+ * One emit, one sort, one render - the same rows, none of the repeated work.
+ */
+export function upsertMessages(chatID, messages) {
+  const list = [...(state.messages.get(chatID) || [])];
+  let last = null;
+  for (const message of messages || []) {
+    if (!message?.id) continue;
+    applyMessage(list, message);
+    last = message;
+  }
+  if (!last) return;
+  sortForDisplay(list);
+  state.messages.set(chatID, list);
+  publish(chatID, last);
+}
+
+/** Insert or replace one message in an existing list, in place. */
+function applyMessage(list, message) {
   const idx = list.findIndex((m) => m.id === message.id);
   if (idx >= 0) {
-    list[idx] = { ...list[idx], ...message };
-  } else {
-    absorbPendingPlaceholder(list, message);
-    list.push(message);
+    const merged = { ...list[idx], ...message };
+    // A message that carries no status of its own came from Beeper rather than
+    // from an optimistic insert here, so its arrival *is* the confirmation the
+    // send was waiting for. Merging cannot drop a key the incoming message does
+    // not have, so without this the flag survives - and nothing else in the app
+    // ever clears it, leaving the bubble on "sending" for good.
+    if (message.sendStatus === undefined) delete merged.sendStatus;
+    list[idx] = merged;
+    return;
   }
+  absorbPendingPlaceholder(list, message);
+  list.push(message);
+}
 
+/** Oldest first, ties broken by sortKey so equal timestamps keep a stable order. */
+function sortForDisplay(list) {
   list.sort((a, b) => {
     const at = new Date(a.timestamp || 0).getTime();
     const bt = new Date(b.timestamp || 0).getTime();
     if (at !== bt) return at - bt;
     return String(a.sortKey || '').localeCompare(String(b.sortKey || ''));
   });
-  state.messages.set(chatID, list);
+}
+
+/**
+ * Announce a change. The sidebar preview falls back to the message list only
+ * when Beeper's newest message is one the user deleted here, so that is the
+ * only case where an arriving message changes what a sidebar row says. Bumping
+ * on every message would throw away the row reuse this exists for.
+ */
+function publish(chatID, message) {
+  if (isMessageDeleted(state.chats.get(chatID)?.preview?.id)) bumpLocal();
   bus.emit('messages:changed', { chatID, message });
 }
 
@@ -168,11 +228,33 @@ const PLACEHOLDER_TTL_MS = 3 * 60 * 1000;
 // swallow the placeholder.
 const PLACEHOLDER_TTL_MS_NO_TEXT = 60 * 1000;
 
+/**
+ * Settle the optimistic bubble this message confirms.
+ *
+ * Beeper's send endpoint answers with a `pendingMessageID` and the confirmed
+ * message later arrives over the WebSocket under an unrelated id, so the two can
+ * only be tied together by what was sent - there is no transaction id in the
+ * echo to match on. A bubble that nothing reconciles stays on "sending"
+ * permanently, so a confirmation that claims no text match still settles the
+ * oldest send it can rather than leaving it spinning.
+ *
+ * Returns true when a placeholder was absorbed.
+ */
 function absorbPendingPlaceholder(list, incoming) {
-  if (!incoming.isSender) return;
+  if (!incoming.isSender) return false;
+  // A pending message is one of our own optimistic inserts, not something
+  // Beeper confirmed. Without this, typing a second message with the same text
+  // as the first swallowed the first bubble the moment it was inserted, and the
+  // two sends shared one placeholder.
+  if (incoming.sendStatus === 'pending') return false;
   const incomingAt = new Date(incoming.timestamp || Date.now()).getTime();
 
-  for (let i = list.length - 1; i >= 0; i -= 1) {
+  // Oldest first. With several sends in flight the confirmations arrive in the
+  // order the messages were sent, so the first one to land belongs to the
+  // oldest bubble still waiting. Scanning from the other end let the first
+  // confirmation swallow the newest placeholder and strand its own.
+  let oldestInWindow = -1;
+  for (let i = 0; i < list.length; i += 1) {
     const existing = list[i];
     if (existing.sendStatus !== 'pending') continue;
 
@@ -181,15 +263,24 @@ function absorbPendingPlaceholder(list, incoming) {
     // values used to stop the whole match dead and leave the bubble stuck.
     const existingText = existing.text || '';
     const incomingText = incoming.text || '';
-    if (existingText !== incomingText) continue;
-
     const at = new Date(existing.timestamp || 0).getTime();
     const window = existingText ? PLACEHOLDER_TTL_MS : PLACEHOLDER_TTL_MS_NO_TEXT;
     if (Math.abs(incomingAt - at) > window) continue;
 
-    list.splice(i, 1);
-    return;
+    if (existingText === incomingText) {
+      list.splice(i, 1);
+      return true;
+    }
+    // Remembered, not taken. An exact match is proof; this is only for a
+    // message Beeper stored differently from the bytes that were sent.
+    if (oldestInWindow < 0) oldestInWindow = i;
   }
+
+  if (oldestInWindow >= 0) {
+    list.splice(oldestInWindow, 1);
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -209,6 +300,26 @@ export function rekeyMessage(chatID, fromID, toID) {
   const idx = list.findIndex((m) => m.id === fromID);
   if (idx < 0) return false;
   list[idx] = { ...list[idx], id: toID };
+  state.messages.set(chatID, list);
+  bus.emit('messages:changed', { chatID, message: list[idx] });
+  return true;
+}
+
+/**
+ * Mark one of our own sends as failed.
+ *
+ * Deliberately not `upsertMessage`: that inserts when the id is unknown, and a
+ * confirmation that arrived before the failure left is exactly the case where
+ * the id is unknown - the bubble is gone because the message went out, and
+ * re-inserting it puts the same text in the thread a second time.
+ *
+ * Returns whether the bubble was still there to fail.
+ */
+export function markSendFailed(chatID, messageID) {
+  const list = state.messages.get(chatID);
+  const idx = (list || []).findIndex((m) => m.id === messageID);
+  if (idx < 0) return false;
+  list[idx] = { ...list[idx], sendStatus: 'failed' };
   state.messages.set(chatID, list);
   bus.emit('messages:changed', { chatID, message: list[idx] });
   return true;
@@ -244,6 +355,31 @@ export function upsertChat(chat) {
 // honouring isPinned for real.
 // ---------------------------------------------------------------------------
 
+/**
+ * A counter for everything the sidebar draws that is NOT part of a chat object.
+ *
+ * Pins, archives, hidden and deleted messages all live outside `state.chats`,
+ * but they change what a row shows. The sidebar reuses row elements between
+ * renders (see renderChats) and decides whether a row needs rebuilding from a
+ * signature of what it draws, so anything that changes a row without changing
+ * the chat has to be in that signature - or a hidden message would leave its
+ * text sitting in the preview line.
+ *
+ * Bumped on those changes only. Not on every message: a row whose preview is
+ * not locally deleted does not read the message list at all, and bumping per
+ * message would throw away the reuse this exists for.
+ */
+let localVersion = 0;
+
+/** The current value. Any change to local-only state moves it on. */
+export function localStateVersion() {
+  return localVersion;
+}
+
+function bumpLocal() {
+  localVersion++;
+}
+
 /** chatID -> the user's explicit choice, true or false. */
 const pinOverrides = new Map();
 
@@ -254,6 +390,7 @@ export function loadPins(map) {
       if (typeof value === 'boolean') pinOverrides.set(id, value);
     }
   }
+  bumpLocal();
 }
 
 export function pinMap() {
@@ -274,6 +411,7 @@ export function isPinned(chat) {
 export function setPinned(chatID, pinned) {
   if (!chatID) return false;
   pinOverrides.set(chatID, Boolean(pinned));
+  bumpLocal();
   return pinOverrides.get(chatID);
 }
 
@@ -304,6 +442,7 @@ export function loadArchived(ids) {
   if (Array.isArray(ids)) {
     for (const id of ids) if (typeof id === 'string' && id) archivedOverrides.add(id);
   }
+  bumpLocal();
 }
 
 export function archivedList() {
@@ -320,6 +459,7 @@ export function setArchivedOverride(chatID, archived) {
   if (!chatID) return false;
   if (archived) archivedOverrides.add(chatID);
   else archivedOverrides.delete(chatID);
+  bumpLocal();
   return archivedOverrides.has(chatID);
 }
 
@@ -349,6 +489,7 @@ export function loadHiddenMessages(ids) {
   if (Array.isArray(ids)) {
     for (const id of ids) if (typeof id === 'string' && id) hiddenMessages.add(id);
   }
+  bumpLocal();
 }
 
 export function loadDeletedMessages(ids) {
@@ -356,6 +497,7 @@ export function loadDeletedMessages(ids) {
   if (Array.isArray(ids)) {
     for (const id of ids) if (typeof id === 'string' && id) deletedMessages.add(id);
   }
+  bumpLocal();
 }
 
 export function hiddenList() {
@@ -376,6 +518,7 @@ export function deletedList() {
 export function clearDeletedMessages() {
   const count = deletedMessages.size;
   deletedMessages.clear();
+  bumpLocal();
   return count;
 }
 
@@ -391,6 +534,7 @@ export function setMessageHidden(messageID, hidden) {
   if (!messageID) return false;
   if (hidden) hiddenMessages.add(messageID);
   else hiddenMessages.delete(messageID);
+  bumpLocal();
   return hiddenMessages.has(messageID);
 }
 
@@ -403,6 +547,7 @@ export function setMessageDeleted(messageID, deleted) {
   } else {
     deletedMessages.delete(messageID);
   }
+  bumpLocal();
   return deletedMessages.has(messageID);
 }
 

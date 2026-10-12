@@ -203,6 +203,40 @@ async function main() {
   // Expire on our own rather than being killed from outside, which would pop
   // an Electron error dialog that looks like the app under test crashing.
   harnessGuard(app, { label: 'check:layout' });
+
+  // Starting the app opened the first unread chat, or the most recent one:
+  // enterApp() picked a chat out of chatList() and opened it. That put a
+  // conversation on screen every launch that the user had not chosen, and
+  // started a walk of its history before they had touched anything.
+  //
+  // It is enterApp() and not boot() that matters here: enterApp is the path
+  // taken on first entry and again on every reconnect, so it is what decides
+  // what the window shows each time the app comes up. Checking boot() instead
+  // would have watched the wrong function entirely and passed no matter what.
+  //
+  // A source check rather than a rendered one, and deliberately narrow.
+  // enterApp() would need a dozen stubbed APIs to run for real, and a harness
+  // that heavy would mostly be testing its own stubs. What it forbids is the app
+  // choosing a chat for itself - reaching into the list and opening one of them.
+  // A startup auto-open written some other way, without consulting the list,
+  // would slip past this.
+  const bootSrc = require('fs').readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'js', 'main.js'),
+    'utf8',
+  );
+  const enterStart = bootSrc.indexOf('async function enterApp()');
+  const enterEnd = enterStart < 0 ? -1 : bootSrc.indexOf('\n}', enterStart);
+  const enterBody = enterStart < 0 || enterEnd < 0 ? '' : bootSrc.slice(enterStart, enterEnd);
+  const restCases = [];
+
+  if (enterStart < 0 || enterEnd < 0) {
+    restCases.push(['the app-entry sequence can be found to read', false, 'enterApp() moved or is not a top-level function']);
+  } else if (/\bchatList\s*\(/.test(enterBody)) {
+    restCases.push(['starting the app picks no chat for itself', false, 'enterApp() chooses a chat out of chatList()']);
+  } else {
+    restCases.push(['starting the app picks no chat for itself', true, '']);
+  }
+
   const win = new BrowserWindow({ show: false, width: 900, height: 700 });
   await win.loadFile(path.join(__dirname, 'layout-harness.html'));
   const out = JSON.parse(await win.webContents.executeJavaScript(harness, true));
@@ -211,6 +245,7 @@ async function main() {
     console.error('harness threw: ' + out.error);
     process.exit(1);
   }
+  out.cases.unshift(...restCases);
 
   let failed = 0;
   for (const [name, ok, detail] of out.cases) {

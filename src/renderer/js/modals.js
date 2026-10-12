@@ -1,10 +1,21 @@
-/** Modals: start a new chat (contact search) and app settings. */
+/** Modals: start a new chat, share a message with someone, and app settings. */
 
 import { $, el, clear, debounce, escapeHtml, initials, hueFor, fullTime, renderRichText } from './util.js';
 import { api, call } from './api.js';
-import { state, bus, upsertChat, deletedList, clearDeletedMessages } from './state.js';
+import { state, bus, chatList, upsertChat, deletedList, clearDeletedMessages } from './state.js';
 import { openModal, closeModal, toast } from './ui.js';
 import { avatarNode } from './sidebar.js';
+import {
+  shareText,
+  shareQueue,
+  shareableChats,
+  partitionShareable,
+  chatDisplayName,
+  canShare,
+  shareNotice,
+  deliverQueue,
+} from './share.js';
+import { setJobStats } from './jobs.js';
 import { checkNow } from './updates.js';
 
 /**
@@ -43,6 +54,44 @@ function deletedCountText() {
   const n = deletedList().length;
   if (!n) return 'None';
   return `${n} hidden on this device`;
+}
+
+/** Human-readable size. Same scale the thread uses for attachments. */
+function bytesLabel(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+/**
+ * The History section's numbers, filled in once the main process answers.
+ *
+ * Rendered as a placeholder and then filled rather than awaited inline, so
+ * opening Settings never waits on a disk walk to size the media folder.
+ */
+function historyStatRow() {
+  const row = el('div', { class: 'history-stats-inner' }, el('span', { class: 'muted tiny', text: 'Measuring…' }));
+
+  call(() => api.history.status(), { context: 'history', fallback: null }).then((s) => {
+    if (!s) {
+      row.replaceChildren(el('span', { class: 'muted tiny', text: 'History is not available yet.' }));
+      return;
+    }
+    // Keep the sidebar's idle line honest without making it its own source of
+    // truth: Settings already measures the totals, so hand them over.
+    setJobStats(s);
+    const syncing = s.running ? 'Fetching older messages…' : s.queued ? `${s.queued} chat${s.queued === 1 ? '' : 's'} queued` : 'Up to date';
+    row.replaceChildren(
+      el('div', { class: 'form-row' }, el('label', { text: 'Stored' }), el('span', { text: `${s.messages || 0} message${s.messages === 1 ? '' : 's'} in ${s.chats || 0} chat${s.chats === 1 ? '' : 's'}` })),
+      el('div', { class: 'form-row' }, el('label', { text: 'Database' }), el('span', { text: bytesLabel(s.bytes) })),
+      el('div', { class: 'form-row' }, el('label', { text: 'Attachments' }), el('span', { text: s.mediaCount ? `${s.mediaCount} file${s.mediaCount === 1 ? '' : 's'}, ${bytesLabel(s.mediaBytes)}` : 'None yet' })),
+      el('div', { class: 'form-row' }, el('label', { text: 'Status' }), el('span', { text: syncing })),
+    );
+  });
+
+  return row;
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +256,294 @@ export function openNewChat() {
 }
 
 // ---------------------------------------------------------------------------
+// Share a message with someone else
+// ---------------------------------------------------------------------------
+
+/**
+ * Who a message can be shared with.
+ *
+ * One list holding two kinds of target: the chats that already exist, and the
+ * contacts that do not have one yet. Both are needed - sharing into a chat you
+ * have to go and create first is not sharing, and it is the common case when
+ * you are forwarding something to someone you have never messaged.
+ *
+ * The decisions - what counts as shareable, what the forwarded text says, how
+ * many sends it turns into - live in share.js so they can be checked on their
+ * own. What is here is the picking and the sending.
+ */
+export function openSharePicker(message, sourceChat) {
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  const source = chatDisplayName(sourceChat);
+
+  // Editable before it goes. The value is set as a property rather than passed
+  // through el(), which sets attributes: a textarea has no value attribute, so
+  // the text would silently arrive empty.
+  const draft = el('textarea', { class: 'share-edit', rows: '4', placeholder: 'Add a message...' });
+  draft.value = shareText(message);
+
+  const results = el('div', { class: 'result-list' });
+  const contactResults = el('div', { class: 'result-list' });
+  const summary = el('div', { class: 'search-summary' });
+  const search = el('input', {
+    type: 'search',
+    placeholder: 'Search chats and contacts...',
+    autocomplete: 'off',
+    spellcheck: 'false',
+  });
+
+  let busy = false;
+
+  /**
+   * What would be sent if a target were picked right now.
+   *
+   * Read at the moment of sending rather than captured when the picker opened:
+   * the whole point of the box is that the text can change in between.
+   */
+  const outgoing = () => ({ text: draft.value.trim(), attachments });
+
+  function setSummary(text) {
+    summary.textContent = text;
+  }
+
+  function row({ title, sub, avatar, onPick, list = results }) {
+    list.append(
+      el(
+        'div',
+        { class: 'result-item', onClick: () => onPick() },
+        avatar,
+        el(
+          'div',
+          { class: 'result-item-body' },
+          el('div', { class: 'result-item-title', text: title }),
+          sub ? el('div', { class: 'result-item-sub', text: sub }) : null,
+        ),
+      ),
+    );
+  }
+
+  // A share can be several messages, so say so before it happens rather than
+  // letting four messages turn up in someone else's chat unexplained.
+  const header = shareNotice(message);
+
+  // What it is being shared from, for the person deciding where to send it. Not
+  // part of the message: the outgoing text is whatever is in the box below, and
+  // nothing else.
+  const from = [
+    message.senderName ? `From ${message.senderName}` : '',
+    source ? source : '',
+  ].filter(Boolean).join(' in ');
+
+  openModal({
+    title: 'Share with...',
+    body: el(
+      'div',
+      {},
+      from ? el('div', { class: 'share-source', text: from }) : null,
+      draft,
+      attachments.length
+        ? el('div', {
+            class: 'share-files',
+            text: `${attachments.length} file${attachments.length === 1 ? '' : 's'} going along: `
+              + attachments.map((a) => a.fileName || 'attachment').join(', '),
+          })
+        : null,
+      el('div', { class: 'form-row' }, search),
+      el('div', { class: 'share-notice', text: header }),
+      results,
+      contactResults,
+      summary,
+    ),
+    footer: [el('button', { class: 'btn', text: 'Cancel', onClick: closeModal })],
+  });
+
+  search.focus();
+
+  /**
+   * The queue for whatever is in the box now.
+   *
+   * Emptying the text of a message that had no files leaves nothing to send, so
+   * that is caught here rather than being handed to Beeper as a blank message.
+   */
+  function currentQueue() {
+    const payload = outgoing();
+    if (!canShare(payload)) return null;
+    return shareQueue(payload, payload.text);
+  }
+
+  /** Everything is frozen once a send starts, so it cannot be done twice. */
+  function lock(message_) {
+    busy = true;
+    search.disabled = true;
+    draft.disabled = true;
+    setSummary(message_);
+  }
+
+  async function sendToChat(chat) {
+    if (busy) return;
+    const queue = currentQueue();
+    if (!queue) return complain();
+    lock(`Sending to ${chatDisplayName(chat)}...`);
+    const sent = await deliver(queue, chat.id);
+    closeModal();
+    report(sent, chatDisplayName(chat));
+  }
+
+  async function sendToContact(contact) {
+    if (busy) return;
+    const contactID = contact.id || contact.userID;
+    const who = contact.fullName || contact.username || 'this contact';
+    if (!contactID) return;
+
+    const queue = currentQueue();
+    if (!queue) return complain();
+
+    lock(`Starting a chat with ${who}...`);
+
+    // The chat is created empty and the queue is sent into it afterwards, the
+    // same way it is sent into a chat that already existed. Beeper does take an
+    // opening message with a new chat, and using it here would mean the text
+    // went out twice over the moment the first message had an attachment.
+    const created = await call(
+      () =>
+        api.chats.create({
+          accountID: sourceChat?.accountID || connectedAccountID(),
+          type: 'single',
+          participantIDs: [contactID],
+        }),
+      { context: 'start a chat to share into', throwOnError: true },
+    ).catch((err) => ({ __error: err }));
+
+    if (created?.__error) {
+      closeModal();
+      toast(created.__error.message, 'error', 5000);
+      return;
+    }
+
+    const chatID = created?.id || created?.chatID;
+    if (chatID) {
+      upsertChat(created);
+      bus.emit('chats:changed');
+    }
+
+    const sent = chatID
+      ? await deliver(queue, chatID)
+      : { ok: false, count: 0, error: 'Beeper did not return a chat to send into.' };
+
+    closeModal();
+    report(sent, who);
+  }
+
+  /** The box was emptied of everything there was to send. The picker stays open. */
+  function complain() {
+    setSummary('There is nothing to send - add some text, or keep a file.');
+  }
+
+  /**
+   * All chats and contacts matching what has been typed so far.
+   *
+   * Two lists rather than one: the contacts search takes a round trip, and
+   * appending into a single list after that await meant either losing the chats
+   * or redrawing them while the user was already clicking on them.
+   */
+  async function refresh() {
+    const query = search.value.trim();
+    const found = shareableChats(chatList(), { sourceChatID: sourceChat?.id || '', query });
+    const { writable, readOnly } = partitionShareable(found);
+
+    clear(results);
+    clear(contactResults);
+
+    for (const chat of writable) {
+      row({
+        title: chatDisplayName(chat),
+        sub: chat.network ? `Chat on ${chat.network}` : 'Chat',
+        avatar: avatarNode(chat, initials(chatDisplayName(chat)) || '?', 'sm'),
+        onPick: () => sendToChat(chat),
+      });
+    }
+
+    // Contacts only once there is something to search for: everyone Beeper has
+    // synced is a long list nobody asked to scroll.
+    if (query) {
+      const accountID = connectedAccountID();
+      if (accountID) {
+        contactResults.append(el('div', { class: 'search-summary', text: 'Searching contacts...' }));
+        const res = await call(
+          () => api.contacts(accountID, { query, limit: 20 }),
+          { context: 'contacts to share with', fallback: null },
+        );
+        clear(contactResults);
+        for (const contact of res?.items || []) {
+          if (!contact.id && !contact.userID) continue;
+          row({
+            list: contactResults,
+            title: contact.fullName || contact.username || contact.phoneNumber || 'Contact',
+            sub: `Start a new chat - ${contact.username || contact.phoneNumber || contact.email || 'contact'}`,
+            avatar: avatarNode(contact, contact.fullName || contact.username || '?', 'sm'),
+            onPick: () => sendToContact(contact),
+          });
+        }
+      }
+    }
+
+    const hidden = readOnly.length
+      ? ` ${readOnly.length} read-only chat${readOnly.length === 1 ? '' : 's'} left out - they cannot receive messages.`
+      : '';
+    const offered = results.childElementCount + contactResults.childElementCount;
+    if (!offered) {
+      setSummary(query ? `Nothing matched "${query}".${hidden}` : `No chats to share into yet.${hidden}`);
+    } else {
+      setSummary(`${offered} option${offered === 1 ? '' : 's'}.${hidden}`);
+    }
+  }
+
+  search.addEventListener('input', debounce(refresh, 200));
+  refresh();
+}
+
+function connectedAccountID() {
+  const connected = state.accounts.filter((a) => a.status === 'connected');
+  return connected[0]?.accountID || state.accounts[0]?.accountID || '';
+}
+
+/**
+ * Send the queue into one chat.
+ *
+ * All this does is supply the network. The order, the stop-on-first-failure and
+ * the count of what got through are decided in share.js, which is where they can
+ * be checked without an account.
+ */
+function deliver(queue, chatID) {
+  return deliverQueue(queue, {
+    // A reupload that resolves to nothing is a failure, not an empty result:
+    // `call` returns its fallback for a falsy value, and passing that straight
+    // on would send the message with the file quietly dropped.
+    reupload: async (attachment) => {
+      const uploaded = await call(() => api.assets.reupload(attachment), {
+        context: 'copy the file for the other chat',
+        throwOnError: true,
+      });
+      if (!uploaded) throw new Error('The file could not be copied to the other chat.');
+      return uploaded;
+    },
+    send: (payload) =>
+      call(() => api.messages.send(chatID, payload), {
+        context: 'send the shared message',
+        throwOnError: true,
+      }),
+  });
+}
+
+function report(sent, where) {
+  if (!sent?.ok) {
+    const partial = sent?.count ? `${sent.count} of the messages went, then it failed. ` : '';
+    toast(`${partial}${sent?.error || 'Could not share this.'}`, 'error', 6000);
+    return;
+  }
+  toast(sent.count > 1 ? `Shared to ${where} as ${sent.count} messages` : `Shared to ${where}`, 'success', 2400);
+}
+
+// ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
 
@@ -214,32 +551,6 @@ export async function openSettings() {
   const settings = (await call(() => api.settings.get(), { context: 'settings' })) || {};
   state.settings = { ...state.settings, ...settings };
 
-  const provider = el('select');
-  for (const [value, label] of [
-    ['openai', 'OpenAI-compatible (OpenAI, OpenRouter, Groq, Ollama, LM Studio, vLLM…)'],
-    ['anthropic', 'Anthropic'],
-  ]) {
-    provider.append(el('option', { value, text: label, selected: settings.provider === value }));
-  }
-
-  const baseUrl = el('input', {
-    type: 'text',
-    value: settings.baseUrl || '',
-    placeholder: 'https://api.openai.com/v1',
-    spellcheck: 'false',
-  });
-  const model = el('input', {
-    type: 'text',
-    value: settings.model || '',
-    placeholder: 'gpt-4o-mini',
-    spellcheck: 'false',
-  });
-  const apiKey = el('input', {
-    type: 'password',
-    value: '',
-    placeholder: settings.hasApiKey ? '•••••••• (stored)' : 'sk-…',
-    autocomplete: 'off',
-  });
   const theme = el('select');
   for (const value of ['system', 'dark', 'light']) {
     theme.append(el('option', { value, text: value, selected: (settings.theme || 'system') === value }));
@@ -321,32 +632,26 @@ export async function openSettings() {
   notifyEnabled.addEventListener('change', syncNotifyOptions);
   syncNotifyOptions();
 
-  const baseUrlField = el(
-    'div',
-    { class: 'form-row' },
-    el('label', { text: 'Base URL' }),
-    baseUrl,
-    el('p', {
-      class: 'hint',
-      text: 'Base URL of an OpenAI-compatible API. Leave the default for OpenAI; for Ollama use http://localhost:11434/v1.',
-    }),
-  );
-  const baseUrlHint = baseUrlField.querySelector('.hint');
-
-  provider.addEventListener('change', () => {
-    if (provider.value === 'anthropic') {
-      baseUrl.value = 'https://api.anthropic.com';
-      baseUrlHint.textContent = 'Leave as the default for Anthropic.';
-    } else if (baseUrl.value.includes('anthropic')) {
-      baseUrl.value = 'https://api.openai.com/v1';
-      baseUrlHint.textContent = baseUrlHint.textContent.replace('Anthropic', 'OpenAI');
-    }
-  });
-
   const body = el(
     'div',
     {},
-    // First on purpose. The modal body scrolls, and this section sat 240px below
+    // History first, on purpose. The modal body caps at 86vh and scrolls, and this
+    // section measured 302-550 inside a 107-484 body - present in the DOM,
+    // answering every "is it there" check, and 66px below the fold where nobody
+    // would ever scroll to find it. A history store that quietly fills the disk
+    // and a backfill the user cannot see are both things you only find out
+    // about too late, so the numbers go where they cannot be missed.
+    el('h4', { text: 'History', style: { marginBottom: '10px' } }),
+    // Measured, never estimated. "Fully self-contained" is worth very little
+    // if it quietly fills the disk, so the real numbers are on screen.
+    el('div', { class: 'history-stats' }, historyStatRow()),
+    el('p', {
+      class: 'hint',
+      style: { marginTop: '-6px', marginBottom: '18px' },
+      text: 'Every message you open is kept on this computer, so history survives a restart and search reaches further back than Beeper can. Beeper still decides what exists.',
+    }),
+
+    // First of the rest on purpose. The modal body scrolls, and this section sat 240px below
     // the fold at a 115% text scale - which is the same as not existing: it was
     // in the DOM, every check that asked whether it was *there* passed, and
     // nobody could find it. The only way back after deleting a message on this
@@ -397,25 +702,11 @@ export async function openSettings() {
       }),
     ),
 
-    el('h4', { text: 'Assistant', style: { margin: '20px 0 10px' } }),
-    el('div', { class: 'form-row' }, el('label', { text: 'Provider' }), provider),
-    baseUrlField,
-    el(
-      'div',
-      { class: 'form-grid' },
-      el('div', { class: 'form-row' }, el('label', { text: 'Model' }), model),
-      el('div', { class: 'form-row' }, el('label', { text: 'API key' }), apiKey),
-    ),
-    el('p', {
-      class: 'hint',
-      style: { marginTop: '-6px', marginBottom: '16px' },
-      text: 'The key is stored encrypted in your OS keychain and only ever used from the main process.',
-    }),
     el('button', {
       class: 'btn btn-sm',
       text: 'Show available MCP tools',
       style: { marginBottom: '22px' },
-      onClick: () => window.dispatchEvent(new CustomEvent('show-mcp-tools')),
+      onClick: () => showToolsCatalog(),
     }),
 
     el('h4', { text: 'Behaviour', style: { marginBottom: '10px' } }),
@@ -525,9 +816,6 @@ export async function openSettings() {
         text: 'Save',
         onClick: async () => {
           const patch = {
-            provider: provider.value,
-            baseUrl: baseUrl.value.trim(),
-            model: model.value.trim(),
             theme: theme.value,
             textScale: Number(textScale.value),
             sendOnEnter: sendOnEnter.checked,
@@ -539,8 +827,6 @@ export async function openSettings() {
             notifyWhenFocused: notifyWhenFocused.checked,
             autoUpdates: autoUpdates.checked,
           };
-          if (apiKey.value.trim()) patch.apiKey = apiKey.value.trim();
-          if (apiKey.value === '') delete patch.apiKey;
 
           const saved = await call(() => api.settings.set(patch), { context: 'save settings' });
           if (saved) {
@@ -560,6 +846,42 @@ export function applyTheme(theme) {
   const prefersLight = window.matchMedia?.('(prefers-color-scheme: light)').matches;
   const resolved = theme === 'system' ? (prefersLight ? 'light' : 'dark') : theme;
   document.documentElement.dataset.theme = resolved;
+}
+
+/**
+ * What Beeper's MCP server will let a client ask it to do.
+ *
+ * This outlived the assistant, which was the only thing that ever called the
+ * tools. Beeper still runs the server and the app still connects to it, so
+ * being able to see the catalogue is the honest reason to keep doing so.
+ */
+export async function showToolsCatalog() {
+  const body = el('div', { class: 'result-list' }, el('p', { class: 'muted', text: 'Loading MCP tools…' }));
+  openModal({ title: 'Beeper MCP tools', body });
+
+  const tools = (await call(() => api.mcp.tools(), { context: 'mcp tools', fallback: [] })) || [];
+  clear(body);
+  if (!tools.length) {
+    body.append(el('p', { class: 'muted', text: 'Beeper reported no MCP tools.' }));
+    return;
+  }
+  body.append(
+    el('p', { class: 'muted tiny', text: `${tools.length} tools exposed by Beeper’s MCP server:` }),
+  );
+  for (const tool of tools) {
+    body.append(
+      el(
+        'div',
+        { class: 'result-item', style: { cursor: 'default' } },
+        el(
+          'div',
+          { class: 'result-item-body' },
+          el('div', { class: 'result-item-title', text: tool.name || '(unnamed)' }),
+          tool.description ? el('div', { class: 'result-item-sub', text: tool.description }) : null,
+        ),
+      ),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

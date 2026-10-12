@@ -11,8 +11,13 @@ const { BeeperClient, BeeperError } = require('./beeper-client');
 const { BeeperEvents } = require('./beeper-ws');
 const { McpClient } = require('./mcp-client');
 const auth = require('./auth');
-const { runAssistantTurn } = require('./assistant');
+const badge = require('./badge');
 const mediaPath = require('./media-path');
+const assetSource = require('./asset-source');
+const { openMessageStore, OPEN_PAGE } = require('./message-store');
+const { openMediaStore } = require('./media-store');
+const { createHistorySync } = require('./history-sync');
+const { makeTitleRecorder } = require('./chat-titles');
 const updater = require('./updater');
 
 /** Wraps a handler so the renderer always gets {ok, data|error}. */
@@ -58,6 +63,15 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   const userData = app.getPath('userData');
   const tokenStore = new TokenStore(userData);
   const settings = new SettingsStore(userData);
+
+  // Opened further down, once the client is known to be reachable. Declared
+  // here because the chat handlers above already hold every title this app
+  // will ever be told, and the history store is the only place worth keeping
+  // them: without it, a synced chat can only be identified by its id.
+  let historyStore = null;
+
+  // Runs on the paths that already fetch chats, so it costs nothing extra.
+  const rememberChatTitles = makeTitleRecorder(() => historyStore);
 
   // Live endpoint discovery, refreshed on startup and whenever Beeper restarts.
   const endpoints = {
@@ -126,6 +140,14 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
 
   // ---- IPC surface -----------------------------------------------------
 
+  // The unread count on the app icon. The renderer owns the chat list, so it
+  // decides the number and main only applies it - one source of truth, and no
+  // second copy of "what is unread" to keep in step.
+  ipcMain.handle('app:badge', handle(async (count) => {
+    const applied = await badge.applyBadge(count);
+    return ok({ applied, count: badge.currentBadge() });
+  }));
+
   ipcMain.handle('app:bootstrap', handle(async () => {
     const discovery = await discover();
     const token = tokenStore.read();
@@ -149,6 +171,14 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   }));
 
   ipcMain.handle('app:refreshDiscovery', handle(async () => ok(await discover())));
+
+  // Deferred until after discovery so the first chat can open immediately
+  // rather than queueing behind a disk sweep.
+  setTimeout(() => {
+    adoptStoredMedia().catch((err) => {
+      console.warn('[history] could not copy stored attachments:', err.message);
+    });
+  }, 5000);
 
   // ---- updates ---------------------------------------------------------
   //
@@ -234,9 +264,21 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
 
   ipcMain.handle('accounts:list', handle(() => client.listAccounts()));
   ipcMain.handle('contacts:list', handle((accountID, params) => client.listContacts(accountID, params || {})));
-  ipcMain.handle('chats:list', handle((params) => client.listChats(params || {})));
-  ipcMain.handle('chats:search', handle((params) => client.searchChats(params || {})));
-  ipcMain.handle('chats:get', handle((chatID, params) => client.getChat(chatID, params || {})));
+  ipcMain.handle('chats:list', handle(async (params) => {
+    const page = await client.listChats(params || {});
+    rememberChatTitles(page);
+    return page;
+  }));
+  ipcMain.handle('chats:search', handle(async (params) => {
+    const page = await client.searchChats(params || {});
+    rememberChatTitles(page);
+    return page;
+  }));
+  ipcMain.handle('chats:get', handle(async (chatID, params) => {
+    const chat = await client.getChat(chatID, params || {});
+    rememberChatTitles([chat]);
+    return chat;
+  }));
   ipcMain.handle('chats:patch', handle((chatID, patch) => client.patchChat(chatID, patch)));
   ipcMain.handle('chats:archive', handle((chatID, archived) => client.archiveChat(chatID, archived !== false)));
   ipcMain.handle('chats:markRead', handle((chatID, messageID) => client.markChatRead(chatID, messageID)));
@@ -270,11 +312,73 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
 
   ipcMain.handle('assets:download', handle(async (input) => client.downloadAsset(input || {})));
 
+  // Sharing a message with another chat re-uploads the files that came with it:
+  // the other chat cannot reach into this one's assets. Done here, in one
+  // piece, so the renderer never handles a local path or a buffer holding
+  // somebody else's attachment - and so the original file name survives, which
+  // uploading the cached copy by path would lose.
+  ipcMain.handle('assets:reupload', handle(async (attachment) => {
+    if (!attachment) throw new Error('There was no file to share.');
+    const source = await assetSource.locateAttachment(attachment, (input) => client.downloadAsset(input));
+
+    let bytes;
+    if (source.localPath) {
+      bytes = await fs.promises.readFile(source.localPath);
+    } else {
+      const response = await fetch(source.url);
+      if (!response.ok) throw new Error(`Beeper's bridge answered ${response.status}.`);
+      bytes = Buffer.from(await response.arrayBuffer());
+    }
+    if (!bytes.length) throw new Error('That file came back empty.');
+
+    return client.uploadAssetBytes(
+      bytes,
+      attachment.fileName || 'attachment',
+      attachment.mimeType,
+    );
+  }));
+
+  // Saving is the only way out of the app for anything that is not an image or
+  // a video, so it has to accept whatever Beeper sends and must never let the
+  // message choose where the file lands - hence safeFileName on the suggestion.
+  ipcMain.handle('assets:saveAs', handle(async (attachment) => {
+    if (!attachment) throw new Error('There was nothing to save.');
+
+    const suggested = mediaPath.safeFileName(attachment.fileName, 'attachment');
+    const win = getWindow();
+    const choice = await dialog.showSaveDialog(win, {
+      title: 'Save attachment',
+      defaultPath: path.join(app.getPath('downloads'), suggested),
+      properties: ['createDirectory', 'showOverwriteConfirmation'],
+    });
+
+    // A cancelled dialog is not a failure, and must not read as one in the UI.
+    if (choice.canceled || !choice.filePath) return ok({ saved: false, cancelled: true });
+
+    const source = await assetSource.locateAttachment(attachment, (input) => client.downloadAsset(input));
+    if (source.localPath) {
+      await fs.promises.copyFile(source.localPath, choice.filePath);
+    } else {
+      // The rare remote case. Buffered rather than streamed, which is the wrong
+      // shape for a very large file but is not the common path.
+      const response = await fetch(source.url);
+      if (!response.ok) throw new Error(`Beeper's bridge answered ${response.status}.`);
+      await fs.promises.writeFile(choice.filePath, Buffer.from(await response.arrayBuffer()));
+    }
+
+    return ok({ saved: true, path: choice.filePath, name: path.basename(choice.filePath) });
+  }));
+
   ipcMain.handle('assets:resolve', handle(async (attachment) => {
     // Turn a possibly-remote attachment into something the renderer can load.
     if (!attachment) return null;
 
-    const local = localMediaUrl(attachment.srcURL || attachment.imgURL);
+    // Our own copy first, if the history store has one. It is the only copy
+    // that is guaranteed to still be there after Beeper evicts its cache.
+    const mine = historyMedia.urlFor(attachment.localMediaHash || '');
+    if (mine) return { ...attachment, url: mine, ownedByUs: true };
+
+    const local = mediaPath.localMediaUrl(attachment.srcURL || attachment.imgURL);
     if (local) return { ...attachment, url: local };
 
     try {
@@ -283,7 +387,7 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
         fileName: attachment.fileName,
         mimeType: attachment.mimeType,
       });
-      if (res?.srcURL) return { ...attachment, url: toRendererUrl(res.srcURL) };
+      if (res?.srcURL) return { ...attachment, url: mediaPath.toRendererUrl(res.srcURL) };
     } catch (err) {
       return { ...attachment, url: null, error: err.message };
     }
@@ -328,6 +432,182 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     return ok(res.filePaths.map((p) => ({ path: p, name: path.basename(p) })));
   }));
 
+  // ---- local history ----------------------------------------------------
+  //
+  // Beeper serves a page of at most 20 messages and forgets nothing, but it
+  // only replays what it still holds, and it replays it on every visit. This
+  // is the local record that stops that mattering: opened instantly, survives a
+  // restart, and readable while Beeper is unreachable.
+
+  historyStore = openMessageStore(userData, {
+    onRecover: ({ reason }) => {
+      // Say so plainly. A store that silently starts empty is indistinguishable
+      // from having lost the history, and this one really was lost.
+      console.warn('[history] the local database was unreadable and has been reset:', reason);
+      broadcast('history:progress', { state: 'recovered', error: reason });
+    },
+  });
+  const historyMedia = openMediaStore(userData);
+  const historySync = createHistorySync({
+    store: historyStore,
+    media: historyMedia,
+    fetchPage: (chatID, params) => client.listMessages(chatID, params),
+    // Copy each attachment into our own store before the page is written, so
+    // the path to our copy travels with the message. Without this the whole
+    // store is only as permanent as Beeper's cache, which is not a promise.
+    adoptMedia: async (messages) => {
+      for (const message of messages) {
+        for (const attachment of message?.attachments || []) {
+          if (!attachment || attachment.localMediaHash) continue;
+          try {
+            const source = await assetSource.locateAttachment(attachment, (input) => client.downloadAsset(input));
+            if (!source.localPath) continue;
+            const adopted = historyMedia.adopt(source.localPath, attachment);
+            if (adopted) {
+              attachment.localMediaPath = adopted.relativePath;
+              attachment.localMediaHash = adopted.hash;
+            }
+          } catch {
+            // A picture that will not copy is a picture that may stop loading.
+            // It is not a reason to drop the message it belongs to.
+          }
+        }
+      }
+    },
+    onProgress: (payload) => broadcast('history:progress', payload),
+  });
+
+  /**
+   * Copy attachments for messages that were stored before media adoption
+   * existed.
+   *
+   * Those chats are marked complete and will never be re-walked, so without
+   * this their pictures stay exactly as temporary as Beeper's cache while
+   * everything around them is local. No network is needed: the payload already
+   * holds the source path, so this is a disk copy rather than another fetch.
+   */
+  async function adoptStoredMedia() {
+    let cursor = 0;
+    let adopted = 0;
+    for (let batch = 0; batch < 500; batch++) {
+      const rows = historyStore.afterRowid(cursor, 200);
+      if (!rows.length) break;
+      cursor = rows[rows.length - 1].rowid;
+
+      for (const row of rows) {
+        const message = row.message;
+        const attachments = message?.attachments || [];
+        if (!attachments.length) continue;
+        let changed = false;
+        for (const attachment of attachments) {
+          if (!attachment || attachment.localMediaHash) continue;
+          try {
+            const source = await assetSource.locateAttachment(attachment, (input) => client.downloadAsset(input));
+            if (!source.localPath) continue;
+            const got = historyMedia.adopt(source.localPath, attachment);
+            if (got) {
+              attachment.localMediaPath = got.relativePath;
+              attachment.localMediaHash = got.hash;
+              changed = true;
+              adopted++;
+            }
+          } catch {
+            /* the file is gone; the message stays */
+          }
+        }
+        if (changed) historyStore.upsertMessages(row.chatID, [message]);
+      }
+      broadcast('history:progress', { state: 'adopting', adopted });
+    }
+    if (adopted) console.log(`[history] copied ${adopted} stored attachments into the local media folder`);
+    return adopted;
+  }
+
+  ipcMain.handle('history:open', handle(async (chatID) => {
+    if (!chatID) return ok({ messages: [], hasMore: false, complete: false });
+    const status = historyStore.chatStatus(chatID);
+    // hasMore comes from the store, not from `complete`. A finished backfill
+    // says Beeper has nothing older; it says nothing about the thousands of
+    // messages already sitting in this database.
+    const { messages, hasMore } = historyStore.pageWithMore(chatID, { limit: OPEN_PAGE });
+    // Ask the queue to bring this chat up to date in the background. A chat
+    // already complete costs one page; an unfinished one resumes where it
+    // stopped.
+    historySync.request(chatID);
+    const sync = historySync.status();
+    return ok({
+      messages,
+      hasMore,
+      complete: status.complete,
+      syncing: sync.runningChats.includes(chatID),
+      queued: sync.queued.includes(chatID),
+    });
+  }));
+
+  ipcMain.handle('history:page', handle(async (chatID, { before, limit } = {}) => {
+    if (!chatID) return ok({ messages: [], hasMore: false, complete: false });
+    const { messages, hasMore } = historyStore.pageWithMore(chatID, {
+      before,
+      limit: limit || 50,
+    });
+    const status = historyStore.chatStatus(chatID);
+    return ok({
+      messages,
+      // Whatever is behind this page in the store, independent of whether the
+      // backfill has finished. The thread keeps its scroll-up affordance up
+      // for as long as this stays true, and drops it only at the real start.
+      hasMore,
+      complete: status.complete,
+    });
+  }));
+
+  // Live messages are written straight through, so the store stays current
+  // without waiting for the next backfill.
+  ipcMain.handle('history:upsert', handle(async (chatID, message) => {
+    if (!chatID || !message?.id) return ok({ written: 0 });
+    return ok({ written: historyStore.upsertMessages(chatID, [message]) });
+  }));
+
+  ipcMain.handle('history:search', handle(async (query, opts) =>
+    ok(historyStore.search(query, opts || {}))));
+
+  ipcMain.handle('history:status', handle(async () => {
+    const stats = historyStore.stats();
+    const sync = historySync.status();
+    return ok({
+      ...stats,
+      running: sync.running,
+      queued: sync.queued.length,
+      mediaBytes: historyMedia.totalBytes(),
+      mediaCount: historyMedia.count(),
+    });
+  }));
+
+  // What every background job is doing, for the progress panel.
+  //
+  // Asked for once at startup and then driven by the history:progress events,
+  // so a reload lands on the real state rather than an empty panel.
+  ipcMain.handle('history:jobs', handle(async () => {
+    const sync = historySync.status();
+    return ok({
+      jobs: sync.jobs,
+      running: sync.running,
+      queued: sync.queued.length,
+      ...historyStore.stats(),
+    });
+  }));
+
+  // The refresh button on one chat.
+  //
+  // Returns as soon as the chat is queued, never when it is finished. The walk
+  // is the long part and belongs in the background; the panel is how the user
+  // watches it. A caller that waited for the result would block the renderer on
+  // a job that is deliberately built to outlive the click.
+  ipcMain.handle('history:refresh', handle(async (chatID) => {
+    if (!chatID) return ok({ queued: false });
+    return ok({ queued: historySync.refresh(chatID) });
+  }));
+
   ipcMain.handle('shell:openExternal', handle(async (url) => {
     if (!/^https?:\/\//i.test(String(url))) throw new Error('Refusing to open non-http URL.');
     await shell.openExternal(String(url));
@@ -351,7 +631,7 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   // Diagnostic: what the live socket has actually seen.
   ipcMain.handle('events:debug', handle(async () => ok(events.debugState())));
 
-  // ---- assistant --------------------------------------------------------
+  // ---- settings and diagnostics -----------------------------------------
 
   ipcMain.handle('settings:get', handle(() => settings.read()));
   ipcMain.handle('settings:set', handle((patch) => {
@@ -370,88 +650,25 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     return ok(res.tools);
   }));
 
-  ipcMain.handle('assistant:ask', handle(async (history) => {
-    const config = settings.read();
-    if (!config.model) {
-      throw Object.assign(new Error('No AI model configured. Open Settings to add one.'), {
-        code: 'no_model',
-      });
-    }
-
-    const res = await mcp.connect();
-    if (!res.ok) throw Object.assign(new Error(res.error), { code: 'mcp_unavailable' });
-
-    broadcast('assistant:event', { type: 'turn_start' });
-
-    const onEvent = (evt) => broadcast('assistant:event', evt);
-
-    try {
-      const result = await runAssistantTurn({
-        config,
-        history,
-        tools: mcp.tools,
-        callTool: (name, args) => mcp.callTool(name, args),
-        onEvent,
-      });
-      return ok({ text: result.text });
-    } catch (err) {
-      onEvent({ type: 'error', message: err.message });
-      throw err;
-    }
-  }));
-
-  ipcMain.handle('assistant:clear', handle(() => ok(true)));
-
-  // Invoke a single Beeper MCP tool directly. Used by the assistant's tool
-  // loop, and exposed so a tool can be run on its own from diagnostics.
-  ipcMain.handle('assistant:callTool', handle(async (name, args) => {
-    const res = await mcp.connect();
-    if (!res.ok) throw Object.assign(new Error(res.error), { code: 'mcp_unavailable' });
-    return ok(await mcp.callTool(name, args || {}));
-  }));
-
-  return { client, events, mcp, settings, tokenStore, discover, startLive, stopLive, endpoints };
-}
-
-/**
- * Beeper is inconsistent about local media locations: message attachments come
- * back as `file:///C:/...` URLs, while chat avatars are bare filesystem paths
- * such as `C:\Users\...`. Both mean "a file on this machine".
- *
- * They are rewritten to `beeper-file://local/<path>`. The fixed `local` host
- * keeps the drive letter inside the path segment, so a Windows drive can never
- * be mistaken for a URL hostname.
- */
-function localMediaUrl(raw) {
-  if (!raw) return null;
-  const value = String(raw);
-
-  if (/^(https?|data):/i.test(value)) return value;
-
-  let filePath = null;
-  if (/^file:\/\//i.test(value)) {
-    filePath = decodeURIComponentSafe(value.replace(/^file:\/\/\/?/i, ''));
-  } else if (/^[a-z]:[\\/]/i.test(value) || value.startsWith('\\\\')) {
-    filePath = value;
-  } else if (value.startsWith('/')) {
-    filePath = value;
-  }
-  if (!filePath) return null;
-
-  return `beeper-file://local/${filePath.replace(/\\/g, '/').replace(/^\/+/, '')}`;
-}
-
-/** Passes anything already usable (http/data) through untouched. */
-function toRendererUrl(raw) {
-  return localMediaUrl(raw) ?? String(raw);
-}
-
-function decodeURIComponentSafe(value) {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
+  return {
+    client,
+    events,
+    mcp,
+    settings,
+    tokenStore,
+    discover,
+    startLive,
+    stopLive,
+    endpoints,
+    historyStore,
+    historySync,
+    // Closed on quit so WAL is checkpointed rather than left to be replayed on
+    // the next launch.
+    closeHistory: () => {
+      historySync.stop();
+      historyStore.close();
+    },
+  };
 }
 
 module.exports = { register };

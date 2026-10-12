@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('beeper', {
   app: {
     bootstrap: () => invoke('app:bootstrap'),
     refreshDiscovery: () => invoke('app:refreshDiscovery'),
+    badge: (count) => invoke('app:badge', count),
   },
   updater: {
     check: () => invoke('updater:check'),
@@ -68,22 +69,32 @@ contextBridge.exposeInMainWorld('beeper', {
     upload: (filePath) => invoke('assets:upload', filePath),
     uploadBytes: (payload) => invoke('assets:uploadBytes', payload),
     download: (input) => invoke('assets:download', input),
+    reupload: (attachment) => invoke('assets:reupload', attachment),
     resolve: (attachment) => invoke('assets:resolve', attachment),
+    saveAs: (attachment) => invoke('assets:saveAs', attachment),
     pick: () => invoke('dialog:pickAttachment'),
   },
   images: {
     openViewer: (srcURL, alt) => invoke('images:openViewer', { srcURL, alt }),
     copy: (srcURL) => invoke('images:copy', { srcURL }),
   },
+  history: {
+    open: (chatID) => invoke('history:open', chatID),
+    page: (chatID, opts) => invoke('history:page', chatID, opts),
+    upsert: (chatID, message) => invoke('history:upsert', chatID, message),
+    search: (query, opts) => invoke('history:search', query, opts),
+    status: () => invoke('history:status'),
+    // Queues the work and returns. It never waits for the walk to finish.
+    refresh: (chatID) => invoke('history:refresh', chatID),
+    jobs: () => invoke('history:jobs'),
+  },
   events: {
     subscribe: (chatIDs) => invoke('events:subscribe', chatIDs),
     status: () => invoke('events:status'),
     debug: () => invoke('events:debug'),
   },
-  assistant: {
+  mcp: {
     tools: () => invoke('mcp:tools'),
-    ask: (history) => invoke('assistant:ask', history),
-    callTool: (name, args) => invoke('assistant:callTool', name, args),
   },
   settings: {
     get: () => invoke('settings:get'),
@@ -100,10 +111,9 @@ contextBridge.exposeInMainWorld('beeper', {
     eventsReady: (fn) => on('events:ready', fn),
     eventsFrame: (fn) => on('events:frame', fn),
     mcpStatus: (fn) => on('mcp:status', fn),
-    assistantEvent: (fn) => on('assistant:event', fn),
     updaterProgress: (fn) => on('updater:progress', fn),
     menuNewChat: (fn) => on('menu:newChat', fn),
     menuFocusSearch: (fn) => on('menu:focusSearch', fn),
-    menuToggleAssistant: (fn) => on('menu:toggleAssistant', fn),
+    historyProgress: (fn) => on('history:progress', fn),
   },
 });

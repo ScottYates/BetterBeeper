@@ -26,3 +26,10 @@ Thumbs.db
 # negation below unreachable.
 /docs/*
 !/docs/network-glyphs.png
+
+# Generated from index.html by check:historyrender and check:sidebar on every run
+/tools/.history-render-harness.html
+/tools/.sidebar-check-harness.html
+
+# Copied in by tools/download-shot.js to render a real video; not part of the repo
+/tools/.shot-video.mp4
