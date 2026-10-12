@@ -23,6 +23,7 @@
  * Run with `npm run check:update`.
  */
 const path = require('path');
+const fs = require('node:fs');
 
 const ROOT = path.join(__dirname, '..');
 const updaterPath = path.join(ROOT, 'src', 'main', 'updater.js');
@@ -195,6 +196,77 @@ add('the module exports the functions the check drives', () => {
     'checkForUpdate', 'downloadAsset', 'stageUpdate', 'applyPendingUpdate', 'pendingStatus']) {
     if (typeof updater[name] !== 'function') return 'missing ' + name;
   }
+  return true;
+});
+
+// ---- the API surface updater.js actually uses ------------------------------
+//
+// This is here because of a real failure: Electron's ClientRequest has no
+// setTimeout method, and calling it threw a TypeError synchronously inside the
+// download's promise executor. Every unit check above still passed, because
+// they all exercise pure functions and none of them runs a request. The bug
+// only appeared when a user clicked Install.
+//
+// The methods below are the ones updater.js calls on Electron objects. Each is
+// checked against the documented Electron API rather than against Node's http,
+// because the whole point is that they are NOT interchangeable. A call to any
+// other method here would be the same mistake wearing a different name.
+
+const NET_CLIENTREQUEST = ['on', 'end', 'abort', 'destroy', 'write', 'getHeader', 'setHeader'];
+const NODE_ONLY = ['setTimeout', 'setHeader0', 'flushHeaders', 'socket', 'connection'];
+
+add('updater only calls documented ClientRequest methods', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
+  const used = new Set();
+  for (const m of src.matchAll(/\breq\.([a-zA-Z_$][\w$]*)\s*\(/g)) used.add(m[1]);
+
+  const bogus = [...used].filter((m) => !NET_CLIENTREQUEST.includes(m));
+  return bogus.length === 0
+    || ('calls ' + bogus.join(', ') + ' on the Electron ClientRequest');
+});
+
+add('updater never calls a node-only http method on the request', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
+  const used = new Set();
+  for (const m of src.matchAll(/\breq\.([a-zA-Z_$][\w$]*)\s*\(/g)) used.add(m[1]);
+
+  const leaked = [...used].filter((m) => NODE_ONLY.includes(m));
+  return leaked.length === 0
+    || ('uses ' + leaked.join(', ') + ', which node http has but Electron does not');
+});
+
+add('the download reads its body from the request, not the response', () => {
+  // res.on('data') never fires: Electron's response object is not a readable
+  // stream, so this variant of the download hangs with no error at all.
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
+  if (/\bres\.on\(/.test(src)) return 'subscribes to the response body, which never emits data';
+  return true;
+});
+
+add('the download timeout is a node timer that gets cleared', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
+  if (!/timer = setTimeout\(/.test(src)) return 'no node timer set for the download deadline';
+  if (!/clearTimeout\(timer\)/.test(src)) return 'the timer is never cleared, so it outlives the request';
+  return true;
+});
+
+add('the write stream has an error handler', () => {
+  // fs.createWriteStream emits 'error' on its own. Unhandled, that is an
+  // uncaught exception that takes the main process down instead of rejecting
+  // the caller's promise.
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
+  if (!/\bout\.on\(\s*'error'/.test(src)) return 'the write stream can fail with nothing listening';
+  return true;
+});
+
+add('the renderer does not double-report one download failure', () => {
+  // call() reports an error itself unless throwOnError is set. Without it the
+  // catch never runs, the real message is toasted, and then the fall-through
+  // toasts a vague second one over the top of it.
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'renderer', 'js', 'updates.js'), 'utf8');
+  const line = src.split('\n').find((l) => l.includes('api.updateDownload()'));
+  if (!line) return 'cannot find the updateDownload call site';
+  if (!line.includes('throwOnError')) return 'call() will swallow the error and toast it twice';
   return true;
 });
 
