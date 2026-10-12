@@ -1,11 +1,11 @@
-Better Beeper 1.17.4
+Better Beeper 1.18.0
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.17.4-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.18.0-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,5 +17,7 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
+- fix: the status window set its bar with an unterminated quote (`7b36ca7`)
+- feat: show a status window while the update installs (`dbc5221`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.
