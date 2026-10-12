@@ -171,8 +171,12 @@ async function runDownload(info) {
     }
   });
 
+  // throwOnError, so the real message reaches the catch below and surfaces
+  // exactly once. Without it call() reports the error itself and returns null,
+  // which meant two toasts for one failure: the real one, then a vague
+  // "could not be downloaded" that hid the actual reason.
   try {
-    const res = await call(() => api.updateDownload(), { context: 'update download' });
+    const res = await call(() => api.updateDownload(), { context: 'update download', throwOnError: true });
 
     if (res?.skipped) {
       off?.();

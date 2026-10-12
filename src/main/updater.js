@@ -240,9 +240,12 @@ async function downloadAsset(asset, onProgress, { timeout = DOWNLOAD_TIMEOUT_MS 
 
   await new Promise((resolve, reject) => {
     let settled = false;
+    let timer = null;
+
     const finish = (err) => {
       if (settled) return;
       settled = true;
+      if (timer) clearTimeout(timer);
       if (err) {
         out.destroy();
         try { fs.rmSync(dest, { force: true }); } catch { /* best effort */ }
@@ -262,38 +265,49 @@ async function downloadAsset(asset, onProgress, { timeout = DOWNLOAD_TIMEOUT_MS 
     let written = 0;
     let lastPercent = -1;
 
+    // Electron's ClientRequest has no setTimeout method. Calling it threw a
+    // TypeError synchronously inside this executor, which rejected the promise
+    // before a single byte was written and surfaced as two error toasts with a
+    // progress bar that never moved. The deadline is a plain Node timer.
+    timer = setTimeout(() => {
+      finish(new Error('the download timed out'));
+      req.abort();
+    }, timeout);
+
     req.on('response', (res) => {
       if (res.statusCode >= 400) {
         finish(new Error(`the download server answered ${res.statusCode}`));
         req.abort();
-        return;
       }
+    });
 
-      res.on('data', (chunk) => {
-        out.write(chunk);
-        written += chunk.length;
-        if (typeof onProgress !== 'function') return;
-        // Throttle to whole percentage points. A 90 MB asset arriving in 64 KB
-        // chunks is over a thousand messages, and each one is a structured
-        // clone across the context bridge to the renderer.
-        const percent = total > 0 ? Math.floor((written / total) * 100) : 0;
-        if (percent === lastPercent) return;
-        lastPercent = percent;
-        onProgress({ written, total, percent });
-      });
+    // The ClientRequest is itself the readable stream. There is no separate
+    // response body to subscribe to: reading 'data' off the response object
+    // never fires, which is a second way this promise could hang forever.
+    req.on('data', (chunk) => {
+      out.write(chunk);
+      written += chunk.length;
+      if (typeof onProgress !== 'function') return;
+      // Throttle to whole percentage points. A 90 MB asset arriving in 64 KB
+      // chunks is over a thousand messages, and each one is a structured
+      // clone across the context bridge to the renderer.
+      const percent = total > 0 ? Math.floor((written / total) * 100) : 0;
+      if (percent === lastPercent) return;
+      lastPercent = percent;
+      onProgress({ written, total, percent });
+    });
 
-      res.on('end', () => {
-        if (typeof onProgress === 'function') onProgress({ written, total, percent: 100 });
-        finish(null);
-      });
-      res.on('error', (err) => finish(err));
+    req.on('end', () => {
+      if (typeof onProgress === 'function') onProgress({ written, total, percent: 100 });
+      finish(null);
     });
 
     req.on('error', (err) => finish(err));
-    req.setTimeout(timeout, () => {
-      finish(new Error('the download timed out'));
-      req.abort();
-    });
+
+    // A write stream reports its own failures. Unhandled, that is an uncaught
+    // exception in the main process rather than a rejection the caller can show.
+    out.on('error', (err) => finish(err));
+
     req.end();
 
     if (typeof onProgress === 'function') onProgress({ written: 0, total, percent: 0 });
