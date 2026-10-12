@@ -421,19 +421,31 @@ async function main() {
   // an Electron error dialog that looks like the app under test crashing.
   harnessGuard(app, { label: 'check:gif' });
 
-  // Shown, because a page the browser considers hidden runs no image animation
-  // and clamps its timers to one per second. Raised and focused so it is not
-  // judged occluded by whatever window the developer is looking at.
-  const win = new BrowserWindow({ show: true });
-  win.setAlwaysOnTop(true, 'screen-saver');
-  win.setPosition(20, 20);
+  // Offscreen, because this check must not put a window in front of the person
+  // running it. A plain window cannot do it. `show: false` is worse than
+  // useless here: it reports visibilityState 'hidden', and a hidden page runs no
+  // image animation and clamps its timers, which is the exact failure this
+  // check exists to catch. Offscreen rendering is not hidden, it simply has no
+  // on-screen surface, so the browser still animates and still says 'visible'.
+  const win = new BrowserWindow({
+    show: false,
+    width: 800,
+    height: 600,
+    webPreferences: { offscreen: true, backgroundThrottling: false },
+  });
 
   // A real file:// page, so it can load a file:// image and the app's own
   // stylesheet, both of which a data: URL harness could not do.
   await win.loadFile(path.join(__dirname, 'gif-harness.html'));
-  win.show();
-  win.focus();
-  win.moveTop();
+
+  // An offscreen window paints nothing until something asks for a frame, so
+  // wait for the first one before capturing. Skipping this is how capturePage
+  // hands back an empty image and every frame comparison below reads as blank.
+  await new Promise((resolve) => {
+    win.webContents.once('paint', () => resolve());
+    // Never hang the whole suite if the paint never arrives.
+    setTimeout(resolve, 2000);
+  });
 
   const { add, cases } = reporter();
 
