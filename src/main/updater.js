@@ -35,6 +35,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { Readable } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 
 const { app, net } = require('electron');
 
@@ -242,83 +244,60 @@ async function downloadAsset(asset, onProgress, { timeout = DOWNLOAD_TIMEOUT_MS 
 
   const total = Number(asset.size) || 0;
   const dest = path.join(app.getPath('temp'), asset.name);
-  const out = fs.createWriteStream(dest);
 
-  await new Promise((resolve, reject) => {
-    let settled = false;
-    let timer = null;
+  let written = 0;
+  let lastPercent = -1;
+  const report = () => {
+    if (typeof onProgress !== 'function') return;
+    const percent = total > 0 ? Math.floor((written / total) * 100) : 0;
+    if (percent === lastPercent) return;
+    lastPercent = percent;
+    onProgress({ written, total, percent });
+  };
 
-    const finish = (err) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      if (err) {
-        out.destroy();
-        try { fs.rmSync(dest, { force: true }); } catch { /* best effort */ }
-        reject(err);
-      } else {
-        out.end(() => resolve());
-      }
-    };
+  if (typeof onProgress === 'function') onProgress({ written: 0, total, percent: 0 });
 
-    const req = net.request({
-      url: asset.url,
+  let res;
+  try {
+    // net.fetch, not net.request. Measured on Electron 38.8.6: net.request
+    // emits 'finish' then 'close' within a few milliseconds, having sent
+    // nothing and raised no error, for every URL tried. The request object is
+    // a Writable stream with no way to read the response, and in this build it
+    // never gets one. net.fetch on the same URLs returns 200 and streams the
+    // whole asset. Both go through Chromium's stack and honour the proxy, so
+    // nothing is lost by using the one that works.
+    res = await net.fetch(asset.url, {
       method: 'GET',
       redirect: 'follow',
       headers: { 'User-Agent': USER_AGENT },
+      signal: AbortSignal.timeout(timeout),
     });
+  } catch (err) {
+    throw new Error(`the download could not start: ${err.message}`);
+  }
 
-    let written = 0;
-    let lastPercent = -1;
+  if (!res.ok) throw new Error(`the download server answered ${res.status}`);
+  if (!res.body) throw new Error('the download server sent no body');
 
-    // Electron's ClientRequest has no setTimeout method. Calling it threw a
-    // TypeError synchronously inside this executor, which rejected the promise
-    // before a single byte was written and surfaced as two error toasts with a
-    // progress bar that never moved. The deadline is a plain Node timer.
-    timer = setTimeout(() => {
-      finish(new Error('the download timed out'));
-      req.abort();
-    }, timeout);
-
-    req.on('response', (res) => {
-      if (res.statusCode >= 400) {
-        finish(new Error(`the download server answered ${res.statusCode}`));
-        req.abort();
-      }
-    });
-
-    // The ClientRequest is itself the readable stream. There is no separate
-    // response body to subscribe to: reading 'data' off the response object
-    // never fires, which is a second way this promise could hang forever.
-    req.on('data', (chunk) => {
-      out.write(chunk);
+  const out = fs.createWriteStream(dest);
+  try {
+    // res.body is a web ReadableStream. Readable.fromWeb adapts it, and
+    // pipeline does the copying, the backpressure and the error handling in
+    // one place, so a write failure surfaces as a rejection rather than an
+    // uncaught exception in the main process.
+    const src = Readable.fromWeb(res.body);
+    src.on('data', (chunk) => {
       written += chunk.length;
-      if (typeof onProgress !== 'function') return;
-      // Throttle to whole percentage points. A 90 MB asset arriving in 64 KB
-      // chunks is over a thousand messages, and each one is a structured
-      // clone across the context bridge to the renderer.
-      const percent = total > 0 ? Math.floor((written / total) * 100) : 0;
-      if (percent === lastPercent) return;
-      lastPercent = percent;
-      onProgress({ written, total, percent });
+      report();
     });
+    await pipeline(src, out);
+  } catch (err) {
+    out.destroy();
+    try { fs.rmSync(dest, { force: true }); } catch { /* best effort */ }
+    throw new Error(`the download failed part way: ${err.message}`);
+  }
 
-    req.on('end', () => {
-      if (typeof onProgress === 'function') onProgress({ written, total, percent: 100 });
-      finish(null);
-    });
-
-    req.on('error', (err) => finish(err));
-
-    // A write stream reports its own failures. Unhandled, that is an uncaught
-    // exception in the main process rather than a rejection the caller can show.
-    out.on('error', (err) => finish(err));
-
-    req.end();
-
-    if (typeof onProgress === 'function') onProgress({ written: 0, total, percent: 0 });
-  });
-
+  if (typeof onProgress === 'function') onProgress({ written, total, percent: 100 });
   return dest;
 }
 

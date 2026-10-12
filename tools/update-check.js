@@ -202,61 +202,92 @@ add('the module exports the functions the check drives', () => {
 
 // ---- the API surface updater.js actually uses ------------------------------
 //
-// This is here because of a real failure: Electron's ClientRequest has no
-// setTimeout method, and calling it threw a TypeError synchronously inside the
-// download's promise executor. Every unit check above still passed, because
-// they all exercise pure functions and none of them runs a request. The bug
-// only appeared when a user clicked Install.
+// This is here because of a real failure, and then a second one of the same
+// shape. Electron's ClientRequest has no setTimeout, and calling it threw a
+// TypeError synchronously inside the download's promise executor. Every unit
+// check above still passed, because they all exercise pure functions and none
+// of them runs a request.
 //
-// The methods below are the ones updater.js calls on Electron objects. Each is
-// checked against the documented Electron API rather than against Node's http,
-// because the whole point is that they are NOT interchangeable. A call to any
-// other method here would be the same mistake wearing a different name.
+// The follow-up is the harder lesson. The download was then rewritten to read
+// the body off net.request instead of the response, on the belief that the
+// response never emits data. That belief was never tested, and it was wrong:
+// net.request is a Writable stream with no readable side, and on this Electron
+// build it returns no response and raises no error at all. The download hung
+// silently at 0%, and the checks below agreed with it.
+//
+// Two checks here used to scan for req.* method calls. Once the download moved
+// to net.fetch there was no req left to scan, so both passed on an empty set
+// while verifying nothing. A check that cannot fail is worse than no check,
+// because it reads as coverage.
 
-const NET_CLIENTREQUEST = ['on', 'end', 'abort', 'destroy', 'write', 'getHeader', 'setHeader'];
-const NODE_ONLY = ['setTimeout', 'setHeader0', 'flushHeaders', 'socket', 'connection'];
-
-add('updater only calls documented ClientRequest methods', () => {
+add('the updater builds no ClientRequest at all', () => {
+  // The strongest form of the old check. Rather than auditing which methods
+  // are called on a request object, assert there is no request object: the
+  // whole class is unusable for this job here, so any future use of it is a
+  // regression regardless of which methods it calls.
   const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
-  const used = new Set();
-  for (const m of src.matchAll(/\breq\.([a-zA-Z_$][\w$]*)\s*\(/g)) used.add(m[1]);
+  return !/net\.request\(/.test(src)
+    || 'constructs a ClientRequest, which cannot carry a response body here';
+});
 
-  const bogus = [...used].filter((m) => !NET_CLIENTREQUEST.includes(m));
+// These four replaced an earlier set that asserted the shape of an earlier
+// implementation, and every one of them was wrong in the same direction: they
+// described code that had never run. The download was broken three times over
+// and a green suite agreed with it every time.
+//
+// What is asserted now is the thing that was actually measured. On Electron
+// 38.8.6, net.request emitted 'finish' then 'close' inside four milliseconds,
+// having sent nothing and raised no error, for every URL tried. That is the
+// hang: no response, no error, no data, so the progress bar sat at 0% until the
+// 30 minute deadline. net.fetch on the same URLs returned 200 and streamed all
+// 95,335,200 bytes in under five seconds.
+
+add('the download uses net.fetch, not net.request', () => {
+  // The regression guard that matters. net.request is a Writable stream, so it
+  // cannot carry a response body, and in this Electron build it never gets one.
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
+  if (/net\.request\(/.test(src)) return 'uses net.request, which returns no body and raises no error here';
+  if (!/net\.fetch\(/.test(src)) return 'does not fetch the asset at all';
+  return true;
+});
+
+add('the request is never used as a readable stream', () => {
+  // The exact shape of the hang: req.on('data') registers cleanly as an
+  // EventEmitter listener and then never fires, because ClientRequest cannot
+  // emit it. No error, no end, promise pends until the deadline.
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
+  const bogus = ['data', 'end'].filter((e) => new RegExp(`\\breq\\.on\\(\\s*'${e}'`).test(src));
   return bogus.length === 0
-    || ('calls ' + bogus.join(', ') + ' on the Electron ClientRequest');
+    || ('subscribes to req.on(' + bogus.map((e) => `'${e}'`).join(') and req.on(') + '), which a write-only stream cannot emit');
 });
 
-add('updater never calls a node-only http method on the request', () => {
+add('the download deadline is an AbortSignal on the fetch', () => {
+  // Better than the plain timer it replaced: aborting actually cancels the
+  // in-flight request instead of only settling the promise, which would have
+  // left a socket pulling 90 MB into a file nobody was reading.
   const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
-  const used = new Set();
-  for (const m of src.matchAll(/\breq\.([a-zA-Z_$][\w$]*)\s*\(/g)) used.add(m[1]);
-
-  const leaked = [...used].filter((m) => NODE_ONLY.includes(m));
-  return leaked.length === 0
-    || ('uses ' + leaked.join(', ') + ', which node http has but Electron does not');
-});
-
-add('the download reads its body from the request, not the response', () => {
-  // res.on('data') never fires: Electron's response object is not a readable
-  // stream, so this variant of the download hangs with no error at all.
-  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
-  if (/\bres\.on\(/.test(src)) return 'subscribes to the response body, which never emits data';
+  if (!/AbortSignal\.timeout\(/.test(src)) return 'the fetch has no deadline signal';
+  if (!/signal:/.test(src)) return 'the deadline signal is built but never passed to the fetch';
   return true;
 });
 
-add('the download timeout is a node timer that gets cleared', () => {
+add('the body is streamed to disk, never buffered whole', () => {
+  // pipeline() over Readable.fromWeb copies with backpressure and turns any
+  // write failure into a rejection. Hand-rolling this with a 'data' listener
+  // and out.write() is how a disk error becomes an uncaught exception in the
+  // main process instead of something the caller can display.
   const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
-  if (!/timer = setTimeout\(/.test(src)) return 'no node timer set for the download deadline';
-  if (!/clearTimeout\(timer\)/.test(src)) return 'the timer is never cleared, so it outlives the request';
+  if (!/Readable\.fromWeb\(/.test(src)) return 'the body is not adapted from the web stream';
+  if (!/\bpipeline\(/.test(src)) return 'the copy is hand-rolled, so a write failure is unhandled';
   return true;
 });
 
-add('the write stream has an error handler', () => {
-  // fs.createWriteStream emits 'error' on its own. Unhandled, that is an
-  // uncaught exception that takes the main process down instead of rejecting
-  // the caller's promise.
+add('a failed download removes the partial file', () => {
+  // Otherwise the next attempt finds a truncated installer already sitting at
+  // the destination path and the user gets a corrupt install rather than an
+  // error they can act on.
   const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
-  if (!/\bout\.on\(\s*'error'/.test(src)) return 'the write stream can fail with nothing listening';
+  if (!/rmSync\(dest/.test(src)) return 'a failed download leaves a partial installer behind';
   return true;
 });
 
