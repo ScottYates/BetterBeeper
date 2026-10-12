@@ -160,8 +160,8 @@ async function runDownload(info) {
     bar.setAttribute('aria-valuenow', String(pct));
 
     if (progress.phase === 'ready') {
-      label.textContent = 'Downloaded. Restarting...';
-      detail.textContent = 'The app will close and reopen by itself.';
+      label.textContent = 'Downloaded. Installing now...';
+      detail.textContent = 'A small window will open and close itself when it is done. This app restarts by itself.';
     } else {
       label.textContent = `Downloading ${pct}%`;
       const parts = [];
@@ -186,8 +186,11 @@ async function runDownload(info) {
     }
 
     if (res?.requiresRestart) {
-      // Give the renderer a beat to paint 100% before the window goes away.
-      await new Promise((r) => setTimeout(r, 700));
+      // Long enough to actually be read. The install that follows takes about a
+      // minute during which there is no window at all, so this is the only
+      // moment the user is told why their app is about to vanish. It used to be
+      // 700ms, which is roughly how long it takes to notice something.
+      await new Promise((r) => setTimeout(r, 4000));
       off?.();
       await api.updateQuit();
       return;

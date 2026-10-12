@@ -53,6 +53,24 @@ const INSTALL_RESULT_FILE = 'update-result.txt';
 /** The batch file the detached cmd actually runs. Kept on disk, not in argv. */
 const APPLY_SCRIPT_FILE = 'update-apply.cmd';
 
+/**
+ * The window the user sees while the installer runs.
+ *
+ * A silent NSIS install replaces the whole install folder, so for the minute it
+ * takes the app is simply gone: no window, no process, and an install directory
+ * that is briefly empty. Every part of that reads as a crash. The status window
+ * is batch only, deliberately: a separate visible console opened with `start`,
+ * which works regardless of how the parent process was spawned.
+ */
+const STATUS_SCRIPT_FILE = 'update-status.cmd';
+
+/**
+ * Exists only while an install is in flight. The status window polls it and
+ * closes itself when it goes, which is what stops an orphaned window sitting
+ * on screen after a failed update.
+ */
+const RUNNING_FLAG_FILE = 'update-running.flag';
+
 const DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
@@ -337,14 +355,27 @@ function stageUpdate(installerPath) {
  * app should still come back, rather than leaving the user with nothing running
  * and no way back in.
  */
-function installScript(installer, exe, { settleSeconds = 3, statusFile = null } = {}) {
+function installScript(installer, exe, { settleSeconds = 3, statusFile = null, runningFlag = null, statusScript = null } = {}) {
   // `ping` is a sleep that works in a windowed session with no console.
   const settle = settleSeconds > 0 ? `ping -n ${settleSeconds} 127.0.0.1 >NUL\r\n` : '';
   // Delayed expansion, so the code read is the installer's and not whatever the
   // shell happened to hold when the line was parsed. Needs /v:on to be on.
   const record = statusFile ? `echo !errorlevel!>"${statusFile}"\r\n` : '';
+  // Opened with `start`, which requests its own console no matter how this
+  // process was spawned - that is the reliable way to put a window on screen
+  // from a detached, windowless parent. /v:on because the status window builds
+  // its bar by appending in a loop. Guarded on the file existing so the check
+  // suite, which writes this script on its own without the status companion,
+  // cannot flash a console at the person running the tests.
+  const showStatus = statusScript
+    ? `if exist "${statusScript}" start "Better Beeper Update" cmd.exe /v:on /c ""${statusScript}""\r\n`
+    : '';
+  // Cleared after the installer exits, which is the signal the status window
+  // waits on to close itself.
+  const clearFlag = runningFlag ? `del "${runningFlag}" >NUL 2>&1\r\n` : '';
   return [
     '@echo off',
+    showStatus,
     settle,
     // `call`, not a bare invocation: running one batch file from another without
     // it transfers control and the caller never resumes, so the relaunch below
@@ -352,11 +383,79 @@ function installScript(installer, exe, { settleSeconds = 3, statusFile = null } 
     // which is what this actually runs against in production.
     `call "${installer}" /S`,
     record,
+    clearFlag,
     // /B: relaunch without opening a console window. The app is a GUI binary
     // so it never needed one, but a plain `start` opens one for anything it
     // launches, and the first version of this flashed an empty cmd window at the
     // user every time it ran.
     `start "" /B "${exe}"`,
+    '',
+  ].join('\r\n');
+}
+
+/**
+ * The window shown while the installer runs.
+ *
+ * Batch only and no dependencies, because this is the one thing standing
+ * between the user and an unexplained disappearance. It polls the running flag
+ * and closes itself when the install finishes, with a bounded loop so a failed
+ * update cannot strand a window on screen.
+ */
+function statusWindowScript(flag, { pollSeconds = 2, maxTicks = 300 } = {}) {
+  // Sized to the text and nothing more: 60 columns by 16 rows is exactly the
+  // widest line plus the prompt. `mode` needs a real console, which is what
+  // `start` gives it.
+  //
+  // The bar is deliberately indeterminate and says so. NSIS running with /S
+  // reports no progress, so a bar that filled up would be inventing a number
+  // the app does not have. It sweeps instead, and the tick count is the honest
+  // part: it goes up, which is what tells the user nothing is wedged.
+  //
+  // Note the +1 on the ping. `-n` is a count of pings, not a duration, so
+  // `ping -n 1` returns immediately and the loop spins as fast as the disk
+  // allows. That is not a theoretical concern: it burned through maxTicks and
+  // closed the window in milliseconds, which is exactly the bug this window
+  // exists to prevent.
+  return [
+    '@echo off',
+    'mode con: cols=60 lines=16',
+    'title Better Beeper Update',
+    'setlocal EnableDelayedExpansion',
+    'set "TRACK=...................."',
+    'set /a __ticks=0',
+    'set /a __phase=0',
+    ':wait',
+    `if not exist "${flag}" goto done`,
+    'set /a __ticks+=1',
+    `if !__ticks! GEQ ${maxTicks} goto done`,
+    'set /a __phase+=1',
+    'if !__phase! GEQ 21 set /a __phase=1',
+    'set "BAR=',
+    'for /L %%i in (1,1,%__phase%) do set "BAR=!BAR!#"',
+    `ping -n ${pollSeconds + 1} 127.0.0.1 >NUL`,
+    'cls',
+    'echo   Better Beeper is updating',
+    'echo.',
+    'echo   Installing now. The installer is about 90 MB, so this can',
+    'echo   take a minute. Better Beeper is closed while this happens,',
+    'echo   which is why the app disappears for a moment.',
+    'echo.',
+    'echo   ========================================================',
+    'echo     DO NOT CLOSE THIS WINDOW',
+    'echo.',
+    'echo     Closing it stops the update and leaves Better Beeper',
+    'echo     half installed. It closes itself when it is done.',
+    'echo   ========================================================',
+    'echo.',
+    'echo   [!BAR!]  !__ticks!',
+    'goto wait',
+    ':done',
+    'cls',
+    'echo   Update finished.',
+    'echo.',
+    'echo   Better Beeper is starting now. This window closes itself',
+    'echo   in a moment.',
+    'ping -n 4 127.0.0.1 >NUL',
     '',
   ].join('\r\n');
 }
@@ -407,16 +506,23 @@ function applyPendingUpdate() {
   if (!installer || !fs.existsSync(installer)) return false;
 
   const statusFile = path.join(app.getPath('userData'), INSTALL_RESULT_FILE);
+  const runningFlag = path.join(app.getPath('userData'), RUNNING_FLAG_FILE);
+  const statusPath = path.join(app.getPath('userData'), STATUS_SCRIPT_FILE);
   const relaunch = pending.relaunch || process.execPath;
 
   let scriptPath;
   try {
     scriptPath = path.join(app.getPath('userData'), APPLY_SCRIPT_FILE);
+    fs.writeFileSync(statusPath, statusWindowScript(runningFlag), 'utf8');
     fs.writeFileSync(
       scriptPath,
-      installScript(installer, relaunch, { statusFile }),
+      installScript(installer, relaunch, { statusFile, runningFlag, statusScript: statusPath }),
       'utf8',
     );
+    // Written before the installer starts, not by the script: the status window
+    // is opened from inside that script, and a window that appears before the
+    // flag exists would check once, see nothing, and close itself immediately.
+    fs.writeFileSync(runningFlag, String(Date.now()), 'utf8');
   } catch {
     return false;
   }
@@ -461,6 +567,7 @@ module.exports = {
   pickInstallerAsset,
   isNewerRelease,
   installScript,
+  statusWindowScript,
   checkForUpdate,
   downloadAsset,
   stageUpdate,

@@ -44,7 +44,7 @@ Module._load = function patched(request, parent, isMain) {
 };
 
 const updater = require(updaterPath);
-const { compareVersions, pickInstallerAsset, isNewerRelease, installScript } = updater;
+const { compareVersions, pickInstallerAsset, isNewerRelease, installScript, statusWindowScript } = updater;
 Module._load = realLoad;
 
 const cases = [];
@@ -194,7 +194,7 @@ add('the picked asset carries a download url', () => {
 add('the module exports the functions the check drives', () => {
   for (const name of ['compareVersions', 'pickInstallerAsset', 'isNewerRelease',
     'checkForUpdate', 'downloadAsset', 'stageUpdate', 'applyPendingUpdate', 'pendingStatus',
-    'installScript']) {
+    'installScript', 'statusWindowScript']) {
     if (typeof updater[name] !== 'function') return 'missing ' + name;
   }
   return true;
@@ -300,6 +300,94 @@ add('the renderer does not double-report one download failure', () => {
   if (!line) return 'cannot find the updateDownload call site';
   if (!line.includes('throwOnError')) return 'call() will swallow the error and toast it twice';
   return true;
+});
+
+// ---- telling the user what is happening -------------------------------------
+//
+// A silent NSIS install empties the whole install folder for about a minute.
+// The app is gone, there is no process, and launching it again in that window
+// does nothing. Reported from a real run: the folder looked empty, and the
+// replacement started outside the console it had been launched from. All of
+// that is correct behaviour and all of it reads as a crash, so the update says
+// what it is doing and puts a window up while it does it.
+
+add('the apply script opens a status window while it installs', () => {
+  const script = installScript('C:\\setup.exe', 'C:\\app.exe', {
+    statusScript: 'C:\\user data\\update-status.cmd',
+  });
+  // `start`, not a bare invocation: it requests its own console regardless of
+  // how the parent was spawned, which is what makes it work from a detached,
+  // windowless cmd.
+  return script.includes('start "Better Beeper Update" cmd.exe /v:on /c')
+    || ('the apply script opens no window: ' + JSON.stringify(script));
+});
+
+add('the status window is not opened when its script is missing', () => {
+  // The check suite writes the apply script on its own, with no status
+  // companion. Unguarded, running the suite would flash a console at whoever
+  // is running it, which is the exact thing it is meant to prevent.
+  const script = installScript('C:\\setup.exe', 'C:\\app.exe', {});
+  return !/start "Better Beeper Update"/.test(script)
+    || 'opens a status window even with nothing to show';
+});
+
+add('the status window closes itself when the install finishes', () => {
+  // Polls for the flag and falls through to the closing branch. Without this
+  // the window outlives the update and sits on screen explaining nothing.
+  const script = statusWindowScript('C:\\flag');
+  const wait = script.indexOf(':wait');
+  const done = script.indexOf(':done');
+  if (wait < 0 || done < wait) return 'the status window has no wait loop';
+  return script.includes('if not exist "C:\\flag" goto done')
+    || ('the status window does not poll for the flag: ' + JSON.stringify(script));
+});
+
+add('the status window warns against closing it', () => {
+  // Closing the window kills the installer mid flight, which leaves Better
+  // Beeper half installed. That is worse than doing nothing, so it has to be
+  // said plainly, and it has to be on screen for the whole wait rather than
+  // printed once and scrolled away by the progress bar's redraw.
+  const script = statusWindowScript('C:\\flag');
+  if (!/DO NOT CLOSE THIS WINDOW/.test(script)) return 'nothing warns against closing the window';
+  const at = script.indexOf('DO NOT CLOSE THIS WINDOW');
+  const loopStart = script.indexOf(':wait');
+  const loopEnd = script.indexOf('goto wait');
+  return at > loopStart && at < loopEnd
+    || 'the warning is not redrawn on every pass, so it scrolls away';
+});
+
+add('the status window cannot sit on screen forever', () => {
+  // Bounded, so an install that dies mid-flight still closes the window rather
+  // than leaving it up with nothing to report.
+  //
+  // The `!`s are load-bearing and this check insists on them. A bare `if
+  // __ticks GEQ 300` looks identical in the source but never fires, because cmd
+  // does not resolve a bare word in an if condition: it compared the literal
+  // strings, always false, and the loop ran forever. The previous version of
+  // this check matched that broken line and passed it happily. Measured: a 26
+  // tick bound let the loop run to 58 and never stopped.
+  const script = statusWindowScript('C:\\flag');
+  if (/if __ticks GEQ/.test(script)) return 'the bound compares a bare word, so the loop never ends';
+  return /if !__ticks! GEQ \d+ goto done/.test(script)
+    || 'the poll loop has no bound';
+});
+
+add('the running flag exists before the script that opens the window', () => {
+  // The window is opened from inside the apply script, so a flag written by
+  // that same script would land after the window had already checked for it and
+  // closed itself. It has to be written from here, before the spawn.
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
+  return /writeFileSync\(runningFlag/.test(src)
+    || 'the flag is not written before the apply script is spawned';
+});
+
+add('the renderer explains the restart, and stays up long enough to read it', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'renderer', 'js', 'updates.js'), 'utf8');
+  if (!/Installing now/.test(src)) return 'nothing explains where the app went';
+  const m = src.match(/setTimeout\(r,\s*(\d+)\)/);
+  const linger = m ? Number(m[1]) : 0;
+  // It was 700ms, which is about how long it takes to notice something.
+  return linger >= 2000 || (`the message is shown for only ${linger}ms`);
 });
 
 // ---- the install command ---------------------------------------------------
