@@ -20,7 +20,14 @@
  * intact, and a silent truncation would be indistinguishable from success
  * until somebody tried to install the thing.
  *
- * Usage:  node tools/release.js [--dry-run] [--bump=patch|minor|major]
+ * Usage:  node tools/release.js [--dry-run] [--skip-install] [--bump=patch|minor|major]
+ *
+ * --skip-install publishes without replacing the installed copy. That exists for
+ * testing the update path itself: an app can only ever be offered a release that
+ * is strictly newer than the one it is running, so to exercise the download you
+ * need a published tag with the local install left behind on purpose. Publishing
+ * 1.17.2 while 1.17.1 is installed is otherwise impossible, because the default
+ * step 3 overwrites 1.17.1 with 1.17.2 and there is then nothing to be offered.
  */
 const { execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
@@ -207,6 +214,7 @@ function findGh() {
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
+  const skipInstall = args.includes('--skip-install');
   const forced = (args.find((a) => a.startsWith('--bump=')) || '').split('=')[1];
 
   const pkg = JSON.parse(fs.readFileSync(PKG, 'utf8'));
@@ -295,9 +303,17 @@ async function main() {
   const localHash = sha256(installer);
   console.log(`installer       : ${built}  (${(fs.statSync(installer).size / 1048576).toFixed(2)} MB)`);
 
-  // 3. Install it, so the running copy is the thing that was published.
-  console.log('installing over the existing copy...');
-  run(installer, ['/S'], { stdio: 'ignore' });
+  // 3. Install it, so the running copy is the thing that was published. Skipped
+  //    with --skip-install, which is the whole point of that flag: see the usage
+  //    note above. The asset is still built from the tagged commit either way, and
+  //    the hash verification below still compares against that same build, so a
+  //    skipped install costs the integrity check nothing.
+  if (skipInstall) {
+    console.log('--skip-install: leaving the installed copy alone.');
+  } else {
+    console.log('installing over the existing copy...');
+    run(installer, ['/S'], { stdio: 'ignore' });
+  }
 
   // 4. Publish.
   console.log(`publishing ${releaseTag}...`);
