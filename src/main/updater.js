@@ -430,7 +430,7 @@ function statusWindowScript(flag, { pollSeconds = 2, maxTicks = 300 } = {}) {
     `if !__ticks! GEQ ${maxTicks} goto done`,
     'set /a __phase+=1',
     'if !__phase! GEQ 21 set /a __phase=1',
-    'set "BAR=',
+    'set "BAR="',
     'for /L %%i in (1,1,%__phase%) do set "BAR=!BAR!#"',
     `ping -n ${pollSeconds + 1} 127.0.0.1 >NUL`,
     'cls',

@@ -356,6 +356,22 @@ add('the status window warns against closing it', () => {
     || 'the warning is not redrawn on every pass, so it scrolls away';
 });
 
+add('every set in the status window is quoted on both sides', () => {
+  // A missing closing quote does not throw. cmd happily defines a variable
+  // whose name includes the quote character, the next line redefines it
+  // properly, and the visible behaviour looks fine. One shipped here as
+  // `set "BAR=` and the bar still swept 1 to 20, which is the worst kind of
+  // typo: invisible until something else depends on it.
+  const script = statusWindowScript('C:\\flag');
+  for (const line of script.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!/^set "/.test(t)) continue;
+    const quotes = t.split('"').length - 1;
+    if (quotes % 2 !== 0) return 'unterminated quote: ' + t;
+  }
+  return true;
+});
+
 add('the status window cannot sit on screen forever', () => {
   // Bounded, so an install that dies mid-flight still closes the window rather
   // than leaving it up with nothing to report.
