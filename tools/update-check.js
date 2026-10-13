@@ -445,6 +445,39 @@ add('the handoff targets the framework Windows already ships', () => {
   return true;
 });
 
+add('the status window can be moved out of the way', () => {
+  // ControlBox is off, so there is no caption bar and the window is not movable
+  // by the user at all. It would sit dead centre for the whole install.
+  //
+  // The labels get their own handler because a Label consumes MouseDown rather
+  // than passing it to the form, so without those the window would only drag
+  // from the few pixels of bare background - which is the kind of thing that
+  // looks implemented and is not.
+  const src = fs.readFileSync(path.join(HELPER_PROJECT, 'StatusForm.cs'), 'utf8');
+  // The *call*, not the declarations. Deleting the drag leaves the [DllImport]
+  // attributes and the WM_NCLBUTTONDOWN constant in the file, so a check that
+  // only asks whether those names appear passes on a window that cannot move.
+  const movesIt = /SendMessage\(\s*Handle,\s*WM_NCLBUTTONDOWN/.test(src)
+    && /if\s*\(\s*ReleaseCapture\(\)\s*\)/.test(src);
+  if (!movesIt) return 'the window cannot be dragged at all';
+
+  const wired = (src.match(/MouseDown\s*\+=\s*DragFrom/g) || []).length;
+  const fromForm = /override void OnMouseDown/.test(src);
+  return (fromForm && wired >= 3)
+    || ('only ' + wired + ' labels drag, and the form itself does not');
+});
+
+add('the status window does not force itself to the top', () => {
+  // Comments stripped first: the word TopMost is discussed in the source, and a
+  // bare substring test over the file would be satisfied by the explanation of
+  // why it is not set.
+  const src = fs.readFileSync(path.join(HELPER_PROJECT, 'StatusForm.cs'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+  return !/TopMost\s*=\s*true/.test(src)
+    || 'the window is TopMost, so it cannot be pushed behind anything';
+});
+
 add('the built helper, if there is one, has no console subsystem', () => {
   // Read out of the PE header rather than trusted from the csproj, because the
   // csproj is the intention and the header is the artifact. This is the whole

@@ -28,6 +28,7 @@ const FILES = {
   updater: path.join(ROOT, 'src', 'main', 'updater.js'),
   csproj: path.join(ROOT, 'tools', 'update-helper', 'UpdateHelper.csproj'),
   helper: path.join(ROOT, 'tools', 'update-helper', 'Program.cs'),
+  form: path.join(ROOT, 'tools', 'update-helper', 'StatusForm.cs'),
   yml: path.join(ROOT, 'electron-builder.yml'),
 };
 
@@ -141,6 +142,27 @@ const MUTATIONS = [
     from: 'function launchInstall(pending,',
     to: 'function installScript() { return "@echo off"; }\r\n\r\nfunction launchInstall(pending,',
     expect: 'the updater writes no script at all',
+  },
+  {
+    what: 'the window is not draggable',
+    file: 'form',
+    from: '            if (ReleaseCapture())\n            {\n                SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);\n            }',
+    to: '            // drag removed',
+    expect: 'the status window can be moved out of the way',
+  },
+  {
+    what: 'only the bare background drags, not the labels',
+    file: 'form',
+    from: '            title.MouseDown += DragFrom;\n            _status.MouseDown += DragFrom;\n            _elapsed.MouseDown += DragFrom;\n            _warning.MouseDown += DragFrom;\n',
+    to: '',
+    expect: 'the status window can be moved out of the way',
+  },
+  {
+    what: 'the window insists on staying on top',
+    file: 'form',
+    from: '            StartPosition = FormStartPosition.CenterScreen;',
+    to: '            TopMost = true;\n            StartPosition = FormStartPosition.CenterScreen;',
+    expect: 'the status window does not force itself to the top',
   },
 ];
 

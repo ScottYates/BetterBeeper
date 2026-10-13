@@ -15,6 +15,7 @@
 
 using System;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -51,7 +52,10 @@ namespace BetterBeeper.UpdateHelper
             ControlBox = false;
             MaximizeBox = false;
             MinimizeBox = false;
-            TopMost = true;
+            // Not TopMost. The window is the only thing on screen at this point -
+            // the app is gone - so there is nothing to stay above, and a window
+            // that insists on being in front is a window someone cannot get out
+            // of the way of.
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(470, 200);
             BackColor = Color.FromArgb(24, 26, 30);
@@ -85,7 +89,60 @@ namespace BetterBeeper.UpdateHelper
             Controls.AddRange(new Control[] { title, _status, _bar, _elapsed, _warning });
 
             _timer.Tick += OnTick;
+
+            // Draggable by grabbing anything on it.
+            //
+            // With ControlBox off there is no caption bar, and a borderless window
+            // is not movable by the user at all - it would sit dead centre for the
+            // whole install, which is exactly the "cannot get out of the way"
+            // experience TopMost was causing by a different route.
+            //
+            // The labels get the handler explicitly: a Label consumes its own
+            // MouseDown rather than letting it reach the form, so without this the
+            // window would only drag from the few pixels of bare background.
+            title.MouseDown += DragFrom;
+            _status.MouseDown += DragFrom;
+            _elapsed.MouseDown += DragFrom;
+            _warning.MouseDown += DragFrom;
         }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button == MouseButtons.Left) BeginDrag();
+        }
+
+        private void DragFrom(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left) BeginDrag();
+        }
+
+        /// <summary>
+        /// Moves the window with the mouse, the way a caption bar would.
+        ///
+        /// There is no Control.DragMove() - it is a common thing to assume exists,
+        /// and it does not, so this is the Win32 pair the framework has always
+        /// needed for a borderless form: tell Windows we have captured the mouse,
+        /// then send ourselves the same message a title-bar click would send.
+        /// Letting the window manager do the moving is what keeps the drag
+        /// correct at the screen edges.
+        /// </summary>
+        private void BeginDrag()
+        {
+            if (ReleaseCapture())
+            {
+                SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+            }
+        }
+
+        private const int WM_NCLBUTTONDOWN = 0x00A1;
+        private const int HTCAPTION = 2;
+
+        [DllImport("user32.dll")]
+        private static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
         /// <summary>Shows the window and pumps messages until the work is finished and the linger is over.</summary>
         public void Pump()
