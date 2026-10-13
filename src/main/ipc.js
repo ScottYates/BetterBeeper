@@ -214,8 +214,15 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   // Quitting is the main process's own business, but the renderer asks rather
   // than reaching for it, so the "restart now" button and the auto-quit after a
   // staged update go through one path.
+  //
+  // quitAndInstall rather than app.quit(): a plain quit after a staged update
+  // closes the app and schedules nothing, because the marker it staged is only
+  // consumed on the next launch. That left the promise on screen - the app
+  // "will close and reopen by itself" - with nothing behind it. It starts the
+  // install first, then exits, so the status window opens and the app comes back
+  // without anyone having to reopen it by hand.
   ipcMain.handle('updater:quit', handle(async () => {
-    setTimeout(() => app.quit(), 150);
+    updater.quitAndInstall();
     return ok(true);
   }));
 

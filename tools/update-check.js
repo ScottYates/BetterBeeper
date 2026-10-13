@@ -31,12 +31,29 @@ const updaterPath = path.join(ROOT, 'src', 'main', 'updater.js');
 // updater.js requires electron at load time. Stub the handful of things it
 // touches so the pure functions can be exercised in plain Node, the same way
 // notify.js and media-path.js are.
+//
+// The stub is held in a variable rather than an inline literal because the
+// checks below drive the real file-writing and quitting paths, and they need to
+// point userData at a sandbox and observe the exit rather than performing one.
+const os = require('node:os');
+
+let userDataPath = ROOT;
+const exits = [];
+const quits = [];
+const appStub = {
+  getVersion: () => '1.3.3',
+  getPath: (name) => (name === 'userData' ? userDataPath : ROOT),
+  exit: (code) => exits.push(code),
+  quit: () => quits.push(true),
+  get isQuitting() { return false; },
+};
+
 const Module = require('module');
 const realLoad = Module._load;
 Module._load = function patched(request, parent, isMain) {
   if (request === 'electron') {
     return {
-      app: { getVersion: () => '1.3.3', getPath: () => ROOT, exit: () => {} },
+      app: appStub,
       net: { fetch: async () => { throw new Error('network is not available in check:update'); } },
     };
   }
@@ -318,8 +335,31 @@ add('the apply script opens a status window while it installs', () => {
   // `start`, not a bare invocation: it requests its own console regardless of
   // how the parent was spawned, which is what makes it work from a detached,
   // windowless cmd.
-  return script.includes('start "Better Beeper Update" cmd.exe /v:on /c')
+  return /start "Better Beeper Update" "C:\\user data\\update-status\.cmd"/.test(script)
     || ('the apply script opens no window: ' + JSON.stringify(script));
+});
+
+add('the status window line is one cmd can actually parse', () => {
+  // The line this replaced was:
+  //   start "Better Beeper Update" cmd.exe /v:on /c ""<path>""
+  // which fails with "The syntax of the command is incorrect" - cmd does not
+  // unwrap the second layer of quotes around a /c argument. The window never
+  // opened, and two releases of string-matching checks said the line was fine
+  // because they were matching the text rather than running it.
+  //
+  // This cannot be settled by running the suite, because settling it means
+  // opening a window, which is the thing the status window is for. So the check
+  // is about the shape that is known to parse: the path handed straight to
+  // `start`, with no nested cmd and no doubled quotes.
+  const script = installScript('C:\\setup.exe', 'C:\\app.exe', {
+    statusScript: 'C:\\user data\\update-status.cmd',
+  });
+  const line = script.split(/\r?\n/).find((l) => l.includes('Better Beeper Update')) || '';
+  if (/cmd\.exe|\/c\b/.test(line)) {
+    return ('the status window still goes through cmd /c: ' + line);
+  }
+  if (line.includes('""')) return ('the path is double-quoted: ' + line);
+  return true;
 });
 
 add('the status window is not opened when its script is missing', () => {
@@ -423,7 +463,6 @@ add('the renderer explains the restart, and stays up long enough to read it', ()
  * the inner quotes for the Windows command line and cmd then reads the
  * backslashes as part of the path.
  */
-const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
 const stampDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-update-cmd-'));
@@ -594,6 +633,164 @@ add('the script is passed as a file, never as a quoted /c argument', () => {
     || 'applyPendingUpdate passes the command through argv';
 });
 
+// ---- the quit has to start the install --------------------------------------
+//
+// The bug this is for, and it was found by using the app rather than by reading
+// it: staging writes a marker, and a marker is consumed on the *next* launch. But
+// the quit that followed a staged download only quit. Nothing ran the script
+// that opens the status window, installs, and starts the app again.
+//
+// So the app closed and stayed closed. The status window the release notes
+// promised never appeared, because the script that opens it is only written by
+// the launch-time apply - which needed a launch that nothing was going to
+// perform. The update only completed if the user noticed the app was gone and
+// opened it again by hand.
+//
+// Driven against a real sandbox: these paths write files and hand a process to
+// another process, and asserting on the calls rather than on a return value is
+// the point.
+
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-update-check-'));
+const PENDING = 'update-pending.json';
+const APPLY = 'update-apply.cmd';
+const STATUS = 'update-status.cmd';
+const RUNNING = 'update-running.flag';
+
+/**
+ * Stage an install, then take the quit path, recording what it spawned.
+ *
+ * The spawn is stubbed rather than performed: its whole job is to run a 90 MB
+ * installer over this machine's install. What has to be true is that it was
+ * *asked* to, and with what.
+ */
+function driveQuit({ stage = true, installerPresent = true } = {}) {
+  userDataPath = sandbox;
+  exits.length = 0;
+  quits.length = 0;
+  for (const f of [PENDING, APPLY, STATUS, RUNNING]) {
+    try { fs.rmSync(path.join(sandbox, f), { force: true }); } catch { /* not there */ }
+  }
+
+  const installer = path.join(sandbox, 'setup.exe');
+  if (installerPresent) fs.writeFileSync(installer, 'MZ fake installer');
+  else { try { fs.rmSync(installer, { force: true }); } catch { /* not there */ } }
+
+  if (stage) {
+    fs.writeFileSync(
+      path.join(sandbox, PENDING),
+      JSON.stringify({ installer, relaunch: 'C:\\Program Files\\Better Beeper\\app.exe' }),
+      'utf8',
+    );
+  }
+
+  const spawned = [];
+  const handed = updater.quitAndInstall({
+    spawnProcess: (cmd, args) => {
+      spawned.push({ cmd, args });
+      return { unref() {} };
+    },
+  });
+
+  const has = (f) => fs.existsSync(path.join(sandbox, f));
+  return {
+    handed, spawned,
+    // The live arrays, not a copy taken now: the quit is requested on a timer,
+    // so a snapshot here would always read empty and make a scheduled quit look
+    // like no quit at all. driveQuit resets them at the start of each run.
+    exits, quits,
+    applyWritten: has(APPLY), statusWritten: has(STATUS), flagWritten: has(RUNNING),
+    pendingCleared: !has(PENDING),
+    applyBody: has(APPLY) ? fs.readFileSync(path.join(sandbox, APPLY), 'utf8') : '',
+    statusBody: has(STATUS) ? fs.readFileSync(path.join(sandbox, STATUS), 'utf8') : '',
+  };
+}
+
+let quitRun = driveQuit();
+
+add('quitting with an update staged hands the install off', () => {
+  const r = quitRun;
+  return (r.handed === true && r.spawned.length === 1)
+    || ('handed=' + r.handed + ' spawned=' + r.spawned.length);
+});
+
+add('the script that does the installing is written before the quit', () => {
+  const r = quitRun;
+  return r.applyWritten === true || 'no apply script was ever written';
+});
+
+add('the status window the user was promised is written too', () => {
+  // This is the window that never appeared. It is written by launchInstall, so
+  // if the quit path did not go through launchInstall, neither was this.
+  const r = quitRun;
+  return (r.statusWritten === true && r.statusBody.includes('Better Beeper is updating'))
+    || 'the status window script was not written';
+});
+
+add('the running flag is written before the window can check for it', () => {
+  // The window closes itself if the flag is missing when it first looks, so a
+  // flag written after the window opens produces a window that flashes and goes.
+  const r = quitRun;
+  return r.flagWritten === true || 'no running flag was written';
+});
+
+add('the spawned command is the apply script on disk', () => {
+  const r = quitRun;
+  const call = r.spawned[0];
+  if (!call) return 'nothing was spawned';
+  return (call.cmd === 'cmd.exe' && call.args[call.args.length - 1] === path.join(sandbox, APPLY))
+    || ('spawned ' + call.cmd + ' ' + JSON.stringify(call.args));
+});
+
+add('the apply script ends by starting the app again', () => {
+  const r = quitRun;
+  return r.applyBody.includes('start "" /B') || 'the relaunch line is missing';
+});
+
+add('the staged marker is consumed so it cannot install twice', () => {
+  const r = quitRun;
+  return r.pendingCleared === true || 'the marker survived and would install again on next launch';
+});
+
+add('quitting for an install exits, rather than only being asked to', () => {
+  // app.exit(0) rather than app.quit(): the installer needs this executable
+  // released, so a graceful quit that can be cancelled is the wrong verb.
+  const r = quitRun;
+  return (r.quits.length === 0) || 'it quit gracefully instead of exiting';
+});
+
+// These two are async because the quit is *scheduled*, not immediate: an
+// ordinary app.quit() is asked for on a 150ms timer so the IPC reply reaches
+// the renderer first. Reading the record synchronously would see nothing and
+// report a quit that was never requested.
+addExec('quitting with nothing staged is an ordinary quit', async () => {
+  const r = driveQuit({ stage: false });
+  await new Promise((res) => setTimeout(res, 300));
+  const clean = r.handed === false && r.spawned.length === 0 && !r.applyWritten && r.quits.length === 1;
+  return clean
+    || ('handed=' + r.handed + ' spawned=' + r.spawned.length + ' apply=' + r.applyWritten + ' quits=' + r.quits.length);
+});
+
+addExec('an installer that has gone does not stop the app from quitting', async () => {
+  const r = driveQuit({ installerPresent: false });
+  await new Promise((res) => setTimeout(res, 300));
+  return (r.handed === false && r.quits.length === 1)
+    || ('handed=' + r.handed + ' quits=' + r.quits.length);
+});
+
+add('the quit handler goes through the updater, not a bare app.quit', () => {
+  // The exact line that was wrong: a plain setTimeout(app.quit) in ipc.js, which
+  // could never start an install no matter what updater.js did.
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'ipc.js'), 'utf8');
+  const handler = /ipcMain\.handle\('updater:quit'[\s\S]*?\n {2}\}\)\);/.exec(src);
+  if (!handler) return 'the updater:quit handler was not found';
+  return handler[0].includes('updater.quitAndInstall()')
+    || 'the handler does not hand off: ' + handler[0].replace(/\s+/g, ' ').slice(0, 120);
+});
+
+// The sandbox is torn down in report(), after the async checks above have run.
+// Doing it here would reset userData to the repo root before they executed, and
+// they would have written their scripts into the working tree instead.
+
 // ---- report ----------------------------------------------------------------
 
 async function report() {
@@ -610,6 +807,12 @@ async function report() {
     }
     cases.push([name, ok, detail]);
   }
+
+  // Only now: the quit checks above wrote into this sandbox, and the async ones
+  // had not run until the loop above finished. Left behind, the next run would
+  // find a marker staged by the last one.
+  userDataPath = ROOT;
+  try { fs.rmSync(sandbox, { recursive: true, force: true }); } catch { /* best effort */ }
 
   let failed = 0;
   for (const [name, ok, detail] of cases) {

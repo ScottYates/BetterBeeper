@@ -13,9 +13,16 @@
  *   2. renderer prompts, and on accept streams the asset to disk, reporting
  *      progress as it goes
  *   3. the file is stashed in userData with a marker naming the exe to relaunch
- *   4. the app quits
- *   5. on next launch the marker is found *before* anything else runs, the
- *      installer is executed silently and detached, and this process exits
+ *   4. the quit that follows hands the install to a detached cmd and exits
+ *   5. that script opens the status window, runs the installer silently, and
+ *      starts the app again once it has finished
+ *
+ * Step 4 has to launch the script rather than simply quit, because step 3 only
+ * writes a marker and a marker is consumed on the next launch. Quitting on its
+ * own therefore ends the update: the app closes and nothing reopens it, and the
+ * user has to open it by hand for the install to happen at all. The launch-time
+ * apply below still exists, for a machine that was shut down rather than quit
+ * between staging and installing - both go through launchInstall().
  *
  * Step 5 is the part worth being careful about. It is a plain NSIS build, so
  * `/S` is a silent reinstall. It must be detached and unref'd, because the
@@ -361,14 +368,25 @@ function installScript(installer, exe, { settleSeconds = 3, statusFile = null, r
   // Delayed expansion, so the code read is the installer's and not whatever the
   // shell happened to hold when the line was parsed. Needs /v:on to be on.
   const record = statusFile ? `echo !errorlevel!>"${statusFile}"\r\n` : '';
-  // Opened with `start`, which requests its own console no matter how this
-  // process was spawned - that is the reliable way to put a window on screen
-  // from a detached, windowless parent. /v:on because the status window builds
-  // its bar by appending in a loop. Guarded on the file existing so the check
-  // suite, which writes this script on its own without the status companion,
-  // cannot flash a console at the person running the tests.
+  // Opens a console window for the status script, which requests its own console
+  // regardless of how this process was spawned - that is the reliable way to put
+  // a window on screen from a detached, windowless parent.
+  //
+  // The path is given to `start` directly rather than through `cmd.exe /c`. The
+  // /c form needs the path quoted a second time for cmd, and cmd never unwraps
+  // it: `cmd /c ""C:\...\status.cmd""` fails outright with "The syntax of the
+  // command is incorrect", so the window silently never opened. That line had
+  // only ever been checked as text, for two releases.
+  //
+  // /v:on is gone because it was never needed: the status script turns delayed
+  // expansion on for itself with setlocal, so the bar and the tick counter work
+  // without the command line asking for it.
+  //
+  // Guarded on the file existing so the check suite, which writes this script on
+  // its own without the status companion, cannot flash a console at whoever is
+  // running the tests.
   const showStatus = statusScript
-    ? `if exist "${statusScript}" start "Better Beeper Update" cmd.exe /v:on /c ""${statusScript}""\r\n`
+    ? `if exist "${statusScript}" start "Better Beeper Update" "${statusScript}"\r\n`
     : '';
   // Cleared after the installer exits, which is the signal the status window
   // waits on to close itself.
@@ -487,28 +505,29 @@ function readInstallResult() {
 let previousInstall = null;
 
 /**
- * Run a pending install, then exit.
+ * Write the scripts and hand the install to a detached cmd.
  *
- * Called from main.js before the window exists. The install is handed to a
- * detached cmd.exe running a script we wrote, and this process exits
- * immediately: the installer needs to replace a running executable, so waiting
- * for it here would deadlock against ourselves.
+ * The one place either entry point goes through. There used to be exactly one
+ * entry point - the next launch - and the quit after a staged download was not
+ * wired to it, so the app closed and nothing came back. Two callers reaching
+ * for one function is the fix; two copies of this function is the bug that
+ * produced it.
+ *
+ * Returns true when something was actually launched.
+ *
+ * `spawnProcess` is a seam for the check. This function's whole job is to hand
+ * 90 MB of installer to another process, which is exactly the thing a test
+ * must not really do; and a stubbed boundary that records the call is enough,
+ * because what is being verified is *that it was launched and with what*.
  */
-function applyPendingUpdate() {
-  // Before anything overwrites it: this is the outcome of the *previous* run.
-  previousInstall = readInstallResult();
-
-  const pending = readPending();
-  if (!pending) return false;
-  clearPending();
-
-  const installer = pending.installer;
+function launchInstall(pending, { spawnProcess = spawn } = {}) {
+  const installer = pending && pending.installer;
   if (!installer || !fs.existsSync(installer)) return false;
 
   const statusFile = path.join(app.getPath('userData'), INSTALL_RESULT_FILE);
   const runningFlag = path.join(app.getPath('userData'), RUNNING_FLAG_FILE);
   const statusPath = path.join(app.getPath('userData'), STATUS_SCRIPT_FILE);
-  const relaunch = pending.relaunch || process.execPath;
+  const relaunch = (pending && pending.relaunch) || process.execPath;
 
   let scriptPath;
   try {
@@ -528,7 +547,7 @@ function applyPendingUpdate() {
   }
 
   try {
-    const child = spawn('cmd.exe', ['/v:on', '/c', scriptPath], {
+    const child = spawnProcess('cmd.exe', ['/v:on', '/c', scriptPath], {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
@@ -541,8 +560,67 @@ function applyPendingUpdate() {
     return false;
   }
 
+  return true;
+}
+
+/**
+ * Run a pending install, then exit.
+ *
+ * Called from main.js before the window exists. The install is handed to a
+ * detached cmd.exe running a script we wrote, and this process exits
+ * immediately: the installer needs to replace a running executable, so waiting
+ * for it here would deadlock against ourselves.
+ */
+function applyPendingUpdate() {
+  // Before anything overwrites it: this is the outcome of the *previous* run.
+  previousInstall = readInstallResult();
+
+  const pending = readPending();
+  if (!pending) return false;
+
+  if (!launchInstall(pending)) {
+    // The installer has gone, or the scripts could not be written. Drop the
+    // marker so a stale one cannot fire on every launch from here on, and start
+    // normally rather than refusing to open.
+    clearPending();
+    return false;
+  }
+
+  clearPending();
   setTimeout(() => app.exit(0), 300);
   return true;
+}
+
+/**
+ * Quit, having first started the install if one is staged.
+ *
+ * This is the half that was missing. Staging only writes a marker, and a marker
+ * is consumed on the *next* launch - so a plain quit closed the app and left
+ * nothing scheduled to reopen it. The user saw a promise that the app "will
+ * close and reopen by itself", and then had to notice it was gone and open it
+ * again by hand for anything to happen at all. The status window never appeared
+ * either, because the script that opens it was never written until that manual
+ * relaunch.
+ *
+ * So the quit starts the install first, through the same launchInstall() the
+ * next launch would have used. It is safe to do this while still running: the
+ * script sleeps before invoking the installer, and this process exits
+ * immediately afterwards, so the executable is free by the time the installer
+ * needs to replace it.
+ *
+ * Returns true when the install was handed off; false when there was nothing
+ * staged, which is an ordinary quit.
+ */
+function quitAndInstall({ spawnProcess = spawn } = {}) {
+  const pending = readPending();
+  if (pending && launchInstall(pending, { spawnProcess })) {
+    clearPending();
+    setTimeout(() => app.exit(0), 300);
+    return true;
+  }
+
+  setTimeout(() => app.quit(), 150);
+  return false;
 }
 
 /**
@@ -572,5 +650,6 @@ module.exports = {
   downloadAsset,
   stageUpdate,
   applyPendingUpdate,
+  quitAndInstall,
   pendingStatus,
 };
