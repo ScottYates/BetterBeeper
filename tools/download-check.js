@@ -104,6 +104,13 @@ async function pureCases() {
     (D.videoSaveTitle({}) === 'Save video' && D.videoSaveLabel({}) === 'Save video')
       || 'got: ' + names([{ title: D.videoSaveTitle({}) }, { label: D.videoSaveLabel({}) }]));
 
+  // The button's whole content is a down arrow, so its accessible name is the
+  // only thing that says what pressing it does. A bare filename announces as
+  // "clip.mp4, button" and leaves the action unstated.
+  check('a named video still says what its button does', () =>
+    (D.videoSaveLabel({ fileName: 'clip.mp4' }) === 'Save clip.mp4')
+      || 'announced as: ' + D.videoSaveLabel({ fileName: 'clip.mp4' }));
+
   return cases;
 }
 

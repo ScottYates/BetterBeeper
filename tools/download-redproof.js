@@ -108,9 +108,16 @@ const MUTATIONS = [
   {
     what: 'the video button says nothing when the file has no name',
     file: 'download',
-    from: "  const name = attachment?.fileName || attachment?.name || 'video';\n  return `Save ${name}`;",
+    from: '  return `Save ${videoSaveName(attachment)}`;',
     to: '  return attachment?.fileName ? \'Save\' : \'\';',
     expect: 'a video with no filename still says what the button does',
+  },
+  {
+    what: 'the accessible name is the bare filename again',
+    file: 'download',
+    from: 'export function videoSaveLabel(attachment) {\n  return videoSaveTitle(attachment);\n}',
+    to: 'export function videoSaveLabel(attachment) {\n  return attachment?.fileName || attachment?.name || \'Save video\';\n}',
+    expect: 'a named video still says what its button does',
   },
   {
     what: 'downloading a message saves nothing',

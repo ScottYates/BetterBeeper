@@ -55,6 +55,11 @@ export function downloadMenuItems(message) {
   return [{ kind: 'all', label: downloadLabel(count), count }];
 }
 
+/** The filename to show for a video, or a generic word when it has none. */
+function videoSaveName(attachment) {
+  return attachment?.fileName || attachment?.name || 'video';
+}
+
 /**
  * The title for the small save button drawn over a video.
  *
@@ -63,11 +68,17 @@ export function downloadMenuItems(message) {
  * which is the full message menu and therefore several clicks away.
  */
 export function videoSaveTitle(attachment) {
-  const name = attachment?.fileName || attachment?.name || 'video';
-  return `Save ${name}`;
+  return `Save ${videoSaveName(attachment)}`;
 }
 
-/** The accessible name for the same button, when there is no filename. */
+/**
+ * The accessible name for the same button.
+ *
+ * The same string as the title, deliberately. It used to be the bare filename,
+ * which left a screen reader announcing "clip.mp4, button" - the name of a file
+ * and no word about what pressing it does. The button's whole content is a
+ * down arrow, so this text is the only thing that says what it is for.
+ */
 export function videoSaveLabel(attachment) {
-  return attachment?.fileName || attachment?.name || 'Save video';
+  return videoSaveTitle(attachment);
 }
