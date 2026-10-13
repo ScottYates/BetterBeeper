@@ -18,6 +18,19 @@ asar: true
 compression: normal
 removePackageScripts: true
 
+# The update handoff helper, which takes the install from here once this process
+# is gone. It is a WinExe, so it has no console and no window can flash during an
+# update. Shipped outside the asar because it has to be launched as a real file
+# on disk, not read out of the archive.
+#
+# Build it first with:
+#   dotnet publish tools/update-helper -c Release -o build/update-helper
+extraResources:
+  - from: build/update-helper
+    to: update-helper
+    filter:
+      - "**/*"
+
 win:
   target:
     - target: nsis

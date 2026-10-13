@@ -33,3 +33,10 @@ Thumbs.db
 
 # Copied in by tools/download-shot.js to render a real video; not part of the repo
 /tools/.shot-video.mp4
+
+# Built by `npm run build:helper` from tools/update-helper. Regenerated, never
+# committed: it is a 60 MB binary and it is built by the same pipeline that
+# packages the installer.
+/build/update-helper/
+/tools/update-helper/bin/
+/tools/update-helper/obj/

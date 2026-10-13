@@ -7,29 +7,36 @@
  * freshly built setup.exe over the running copy from the command line. That
  * script can close the app because it is a separate process doing it. The app
  * cannot: this code runs *inside* the process whose files the installer is
- * about to replace. So the install is split across the restart:
+ * about to replace. So the install is split across the process boundary, and
+ * the other side of it is a small WinForms program (tools/update-helper):
  *
  *   1. main process asks GitHub for the newest release
  *   2. renderer prompts, and on accept streams the asset to disk, reporting
  *      progress as it goes
  *   3. the file is stashed in userData with a marker naming the exe to relaunch
- *   4. the quit that follows hands the install to a detached cmd and exits
- *   5. that script opens the status window, runs the installer silently, and
- *      starts the app again once it has finished
+ *   4. the quit that follows hands the install to the helper and exits
+ *   5. the helper shows a window, waits for this process to be gone and its
+ *      files to be free, runs the installer silently, records the result, and
+ *      starts the app again
  *
- * Step 4 has to launch the script rather than simply quit, because step 3 only
- * writes a marker and a marker is consumed on the next launch. Quitting on its
- * own therefore ends the update: the app closes and nothing reopens it, and the
- * user has to open it by hand for the install to happen at all. The launch-time
- * apply below still exists, for a machine that was shut down rather than quit
- * between staging and installing - both go through launchInstall().
+ * The helper is a program rather than a batch file, and that is the whole
+ * reason it exists in this language. It is built as a WinExe, so Windows never
+ * allocates a console for it: no window can flash at any point in an update,
+ * because there is no console anywhere in the path. A batch file can only be
+ * handed a console and told what to draw in it.
  *
- * Step 5 is the part worth being careful about. It is a plain NSIS build, so
- * `/S` is a silent reinstall. It must be detached and unref'd, because the
- * parent is about to exit and a child still holding the event loop open
- * prevents that. It must not be awaited either: the installer cannot replace
- * the running executable, so waiting for it here would deadlock against our
- * own still-running process.
+ * Step 4 has to hand over rather than simply quit, because step 3 only writes a
+ * marker and a marker is consumed on the next launch. Quitting on its own
+ * therefore ends the update: the app closes and nothing reopens it, and the user
+ * has to open it by hand for the install to happen at all. The launch-time apply
+ * below still exists, for a machine that was shut down rather than quit between
+ * staging and installing - both go through launchInstall().
+ *
+ * The helper is detached and unref'd, because this process is about to exit and
+ * a child still holding the event loop open prevents that. It must not be
+ * awaited either: the installer cannot replace the running executable, so
+ * waiting here would deadlock against our own still-running process. The helper
+ * resolves that by waiting for us first.
  *
  * Nothing is verified beyond what GitHub itself served, and the SHA-256 check
  * in install-update.js is deliberately *not* reproduced here. That script can
@@ -54,31 +61,38 @@ const USER_AGENT = 'BetterBeeper-updater';
 /** The marker file dropped in userData; consumed by applyPendingUpdate(). */
 const PENDING_FILE = 'update-pending.json';
 
-/** How the last install went, written by the detached cmd after it exits. */
+/** How the last install went, written by the handoff helper when it finishes. */
 const INSTALL_RESULT_FILE = 'update-result.txt';
 
-/** The batch file the detached cmd actually runs. Kept on disk, not in argv. */
-const APPLY_SCRIPT_FILE = 'update-apply.cmd';
-
 /**
- * The window the user sees while the installer runs.
+ * The program that takes the install from here.
  *
- * A silent NSIS install replaces the whole install folder, so for the minute it
- * takes the app is simply gone: no window, no process, and an install directory
- * that is briefly empty. Every part of that reads as a crash. The status window
- * is batch only, deliberately: a separate visible console opened with `start`,
- * which works regardless of how the parent process was spawned.
+ * A small WinForms app (tools/update-helper) rather than a batch file, and the
+ * difference is not a matter of taste. It is built as a WinExe, so it links
+ * against the Windows GUI subsystem and Windows never allocates a console for
+ * it: there is no black rectangle, because there is no console to flash. A
+ * batch file has no such option - it can only be given a console and told to
+ * draw something in it, which is precisely the thing being removed.
+ *
+ * It owns the whole handoff: waiting for this process to go, running the
+ * installer, recording the result, and starting the app again.
  */
-const STATUS_SCRIPT_FILE = 'update-status.cmd';
-
-/**
- * Exists only while an install is in flight. The status window polls it and
- * closes itself when it goes, which is what stops an orphaned window sitting
- * on screen after a failed update.
- */
-const RUNNING_FLAG_FILE = 'update-running.flag';
+const HELPER_EXE = 'BetterBeeper.UpdateHelper.exe';
 
 const DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
+
+/**
+ * Where the helper lives.
+ *
+ * extraResources puts it beside the asar in a packaged build. Unpacked - a dev
+ * run, or the check suite - it is read from the repository's build directory,
+ * which is where `dotnet publish` writes it.
+ */
+function helperPath() {
+  const packaged = path.join(process.resourcesPath || '', 'update-helper', HELPER_EXE);
+  if (app.isPackaged) return packaged;
+  return path.join(app.getAppPath(), 'build', 'update-helper', HELPER_EXE);
+}
 
 /**
  * Compare two dotted versions.
@@ -340,143 +354,7 @@ function stageUpdate(installerPath) {
   return { staged: true, relaunch: exe };
 }
 
-/**
- * The batch file that finishes an install once this process is gone.
- *
- * A silent NSIS install cannot replace the executable while the app is running,
- * and unpacking 90 MB takes several seconds. So the relaunch has to come *after*
- * the installer exits - not on a timer. Starting the app one second after
- * spawning the installer put the old binary straight back onto the files the
- * installer was replacing, which locks them, makes the install fail or land
- * half-applied, and hands the user the same version back with nothing to show
- * for it.
- *
- * This is a *file* rather than a one-liner for a reason that is not obvious:
- * passing a command containing quotes as a single `cmd /c` argument does not
- * survive the trip. Node escapes the inner quotes for the Windows command line,
- * and cmd.exe's own parsing then treats the backslashes as part of the path, so
- * the installer never runs and a `start` reports a path it cannot find. A file
- * has no quoting layer between here and the shell at all.
- *
- * The steps are deliberately not chained with `&&`: if the installer fails the
- * app should still come back, rather than leaving the user with nothing running
- * and no way back in.
- */
-function installScript(installer, exe, { settleSeconds = 3, statusFile = null, runningFlag = null, statusScript = null } = {}) {
-  // `ping` is a sleep that works in a windowed session with no console.
-  const settle = settleSeconds > 0 ? `ping -n ${settleSeconds} 127.0.0.1 >NUL\r\n` : '';
-  // Delayed expansion, so the code read is the installer's and not whatever the
-  // shell happened to hold when the line was parsed. Needs /v:on to be on.
-  const record = statusFile ? `echo !errorlevel!>"${statusFile}"\r\n` : '';
-  // Opens a console window for the status script, which requests its own console
-  // regardless of how this process was spawned - that is the reliable way to put
-  // a window on screen from a detached, windowless parent.
-  //
-  // The path is given to `start` directly rather than through `cmd.exe /c`. The
-  // /c form needs the path quoted a second time for cmd, and cmd never unwraps
-  // it: `cmd /c ""C:\...\status.cmd""` fails outright with "The syntax of the
-  // command is incorrect", so the window silently never opened. That line had
-  // only ever been checked as text, for two releases.
-  //
-  // /v:on is gone because it was never needed: the status script turns delayed
-  // expansion on for itself with setlocal, so the bar and the tick counter work
-  // without the command line asking for it.
-  //
-  // Guarded on the file existing so the check suite, which writes this script on
-  // its own without the status companion, cannot flash a console at whoever is
-  // running the tests.
-  const showStatus = statusScript
-    ? `if exist "${statusScript}" start "Better Beeper Update" "${statusScript}"\r\n`
-    : '';
-  // Cleared after the installer exits, which is the signal the status window
-  // waits on to close itself.
-  const clearFlag = runningFlag ? `del "${runningFlag}" >NUL 2>&1\r\n` : '';
-  return [
-    '@echo off',
-    showStatus,
-    settle,
-    // `call`, not a bare invocation: running one batch file from another without
-    // it transfers control and the caller never resumes, so the relaunch below
-    // would be silently skipped. It is also correct for an .exe installer,
-    // which is what this actually runs against in production.
-    `call "${installer}" /S`,
-    record,
-    clearFlag,
-    // /B: relaunch without opening a console window. The app is a GUI binary
-    // so it never needed one, but a plain `start` opens one for anything it
-    // launches, and the first version of this flashed an empty cmd window at the
-    // user every time it ran.
-    `start "" /B "${exe}"`,
-    '',
-  ].join('\r\n');
-}
 
-/**
- * The window shown while the installer runs.
- *
- * Batch only and no dependencies, because this is the one thing standing
- * between the user and an unexplained disappearance. It polls the running flag
- * and closes itself when the install finishes, with a bounded loop so a failed
- * update cannot strand a window on screen.
- */
-function statusWindowScript(flag, { pollSeconds = 2, maxTicks = 300 } = {}) {
-  // Sized to the text and nothing more: 60 columns by 16 rows is exactly the
-  // widest line plus the prompt. `mode` needs a real console, which is what
-  // `start` gives it.
-  //
-  // The bar is deliberately indeterminate and says so. NSIS running with /S
-  // reports no progress, so a bar that filled up would be inventing a number
-  // the app does not have. It sweeps instead, and the tick count is the honest
-  // part: it goes up, which is what tells the user nothing is wedged.
-  //
-  // Note the +1 on the ping. `-n` is a count of pings, not a duration, so
-  // `ping -n 1` returns immediately and the loop spins as fast as the disk
-  // allows. That is not a theoretical concern: it burned through maxTicks and
-  // closed the window in milliseconds, which is exactly the bug this window
-  // exists to prevent.
-  return [
-    '@echo off',
-    'mode con: cols=60 lines=16',
-    'title Better Beeper Update',
-    'setlocal EnableDelayedExpansion',
-    'set "TRACK=...................."',
-    'set /a __ticks=0',
-    'set /a __phase=0',
-    ':wait',
-    `if not exist "${flag}" goto done`,
-    'set /a __ticks+=1',
-    `if !__ticks! GEQ ${maxTicks} goto done`,
-    'set /a __phase+=1',
-    'if !__phase! GEQ 21 set /a __phase=1',
-    'set "BAR="',
-    'for /L %%i in (1,1,%__phase%) do set "BAR=!BAR!#"',
-    `ping -n ${pollSeconds + 1} 127.0.0.1 >NUL`,
-    'cls',
-    'echo   Better Beeper is updating',
-    'echo.',
-    'echo   Installing now. The installer is about 90 MB, so this can',
-    'echo   take a minute. Better Beeper is closed while this happens,',
-    'echo   which is why the app disappears for a moment.',
-    'echo.',
-    'echo   ========================================================',
-    'echo     DO NOT CLOSE THIS WINDOW',
-    'echo.',
-    'echo     Closing it stops the update and leaves Better Beeper',
-    'echo     half installed. It closes itself when it is done.',
-    'echo   ========================================================',
-    'echo.',
-    'echo   [!BAR!]  !__ticks!',
-    'goto wait',
-    ':done',
-    'cls',
-    'echo   Update finished.',
-    'echo.',
-    'echo   Better Beeper is starting now. This window closes itself',
-    'echo   in a moment.',
-    'ping -n 4 127.0.0.1 >NUL',
-    '',
-  ].join('\r\n');
-}
 
 /** Read and clear how the last install went.
  *
@@ -505,7 +383,7 @@ function readInstallResult() {
 let previousInstall = null;
 
 /**
- * Write the scripts and hand the install to a detached cmd.
+ * Hand the install to the handoff helper and let it take it from there.
  *
  * The one place either entry point goes through. There used to be exactly one
  * entry point - the next launch - and the quit after a staged download was not
@@ -513,48 +391,43 @@ let previousInstall = null;
  * for one function is the fix; two copies of this function is the bug that
  * produced it.
  *
+ * Everything after this point is the helper's: the window, the wait for this
+ * process to go, the installer, the relaunch. There is no script written here
+ * and nothing to go wrong in a shell.
+ *
  * Returns true when something was actually launched.
  *
  * `spawnProcess` is a seam for the check. This function's whole job is to hand
  * 90 MB of installer to another process, which is exactly the thing a test
  * must not really do; and a stubbed boundary that records the call is enough,
- * because what is being verified is *that it was launched and with what*.
+ * because what is being verified is *that it was launched, and with what*.
  */
-function launchInstall(pending, { spawnProcess = spawn } = {}) {
+function launchInstall(pending, { spawnProcess = spawn, helper = helperPath(), parentPid = process.pid } = {}) {
   const installer = pending && pending.installer;
   if (!installer || !fs.existsSync(installer)) return false;
+  if (!fs.existsSync(helper)) return false;
 
-  const statusFile = path.join(app.getPath('userData'), INSTALL_RESULT_FILE);
-  const runningFlag = path.join(app.getPath('userData'), RUNNING_FLAG_FILE);
-  const statusPath = path.join(app.getPath('userData'), STATUS_SCRIPT_FILE);
   const relaunch = (pending && pending.relaunch) || process.execPath;
+  const result = path.join(app.getPath('userData'), INSTALL_RESULT_FILE);
 
-  let scriptPath;
-  try {
-    scriptPath = path.join(app.getPath('userData'), APPLY_SCRIPT_FILE);
-    fs.writeFileSync(statusPath, statusWindowScript(runningFlag), 'utf8');
-    fs.writeFileSync(
-      scriptPath,
-      installScript(installer, relaunch, { statusFile, runningFlag, statusScript: statusPath }),
-      'utf8',
-    );
-    // Written before the installer starts, not by the script: the status window
-    // is opened from inside that script, and a window that appears before the
-    // flag exists would check once, see nothing, and close itself immediately.
-    fs.writeFileSync(runningFlag, String(Date.now()), 'utf8');
-  } catch {
-    return false;
-  }
+  const args = [
+    '--installer', installer,
+    '--relaunch', relaunch,
+    '--result', result,
+    '--pid', String(parentPid),
+  ];
 
   try {
-    const child = spawnProcess('cmd.exe', ['/v:on', '/c', scriptPath], {
+    const child = spawnProcess(helper, args, {
       detached: true,
       stdio: 'ignore',
+      // Nothing to hide. The helper has no console to hide, and asking the
+      // shell to be hidden here is what used to mean "a console may appear".
       windowsHide: true,
     });
     child.unref();
   } catch {
-    // Could not start the installer. There is nothing useful to do from inside
+    // Could not start the install. There is nothing useful to do from inside
     // the process that was supposed to be replaced, and throwing here would
     // block the app from starting at all.
     return false;
@@ -566,22 +439,23 @@ function launchInstall(pending, { spawnProcess = spawn } = {}) {
 /**
  * Run a pending install, then exit.
  *
- * Called from main.js before the window exists. The install is handed to a
- * detached cmd.exe running a script we wrote, and this process exits
- * immediately: the installer needs to replace a running executable, so waiting
- * for it here would deadlock against ourselves.
+ * Called from main.js before the window exists. The install is handed to the
+ * detached helper and this process exits immediately: the installer needs to
+ * replace a running executable, so waiting for it here would deadlock against
+ * ourselves. The helper waits for this process to actually be gone before it
+ * starts, which is what makes quitting first safe.
  */
-function applyPendingUpdate() {
+function applyPendingUpdate(deps) {
   // Before anything overwrites it: this is the outcome of the *previous* run.
   previousInstall = readInstallResult();
 
   const pending = readPending();
   if (!pending) return false;
 
-  if (!launchInstall(pending)) {
-    // The installer has gone, or the scripts could not be written. Drop the
-    // marker so a stale one cannot fire on every launch from here on, and start
-    // normally rather than refusing to open.
+  if (!launchInstall(pending, deps)) {
+    // The installer or the helper has gone. Drop the marker so a stale one
+    // cannot fire on every launch from here on, and start normally rather than
+    // refusing to open.
     clearPending();
     return false;
   }
@@ -592,7 +466,7 @@ function applyPendingUpdate() {
 }
 
 /**
- * Quit, having first started the install if one is staged.
+ * Quit, having first handed the install over if one is staged.
  *
  * This is the half that was missing. Staging only writes a marker, and a marker
  * is consumed on the *next* launch - so a plain quit closed the app and left
@@ -602,18 +476,17 @@ function applyPendingUpdate() {
  * either, because the script that opens it was never written until that manual
  * relaunch.
  *
- * So the quit starts the install first, through the same launchInstall() the
+ * So the quit hands the install over first, through the same launchInstall() the
  * next launch would have used. It is safe to do this while still running: the
- * script sleeps before invoking the installer, and this process exits
- * immediately afterwards, so the executable is free by the time the installer
- * needs to replace it.
+ * helper waits for this process to be gone, and for its files to be free, before
+ * it invokes the installer.
  *
  * Returns true when the install was handed off; false when there was nothing
  * staged, which is an ordinary quit.
  */
-function quitAndInstall({ spawnProcess = spawn } = {}) {
+function quitAndInstall(deps) {
   const pending = readPending();
-  if (pending && launchInstall(pending, { spawnProcess })) {
+  if (pending && launchInstall(pending, deps)) {
     clearPending();
     setTimeout(() => app.exit(0), 300);
     return true;
@@ -644,12 +517,12 @@ module.exports = {
   compareVersions,
   pickInstallerAsset,
   isNewerRelease,
-  installScript,
-  statusWindowScript,
   checkForUpdate,
   downloadAsset,
   stageUpdate,
   applyPendingUpdate,
   quitAndInstall,
   pendingStatus,
+  helperPath,
+  HELPER_EXE,
 };

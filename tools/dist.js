@@ -51,6 +51,45 @@ if (!fs.existsSync(builderCli)) {
   process.exit(1);
 }
 
+/**
+ * The update handoff helper, built before packaging.
+ *
+ * It is a separate build because it is a separate program, and it has to exist
+ * before electron-builder runs: extraResources copies a real directory, so a
+ * missing one produces a build that installs happily and then cannot update
+ * itself. That failure would only show up later, on a machine, during an update.
+ *
+ * Skipped with --skip-helper for the rare case of building on a machine with no
+ * .NET SDK, at the cost of a build that cannot update.
+ */
+function buildHelper() {
+  const out = path.join(ROOT, 'build', 'update-helper');
+  if (process.argv.includes('--skip-helper')) {
+    console.log('--skip-helper: packaging without the update handoff.');
+    return;
+  }
+  console.log('\nbuilding the update helper...');
+  try {
+    run('dotnet', ['publish', 'tools/update-helper', '-c', 'Release', '-o', 'build/update-helper', '--nologo']);
+  } catch {
+    console.error(
+      '\nthe update helper did not build.\n'
+      + '  The .NET SDK is required: winget install Microsoft.DotNet.SDK.8\n'
+      + '  A build without it installs, but cannot update itself.\n'
+      + '  Pass --skip-helper only if that is what you want.\n',
+    );
+    process.exit(1);
+  }
+
+  const exe = path.join(out, 'BetterBeeper.UpdateHelper.exe');
+  if (!fs.existsSync(exe)) {
+    console.error(`\nthe helper built but produced no ${path.basename(exe)}\n`);
+    process.exit(1);
+  }
+  console.log(`helper    : ${exe}`);
+}
+
+buildHelper();
 console.log(`building into ${out}...`);
 // --publish=never is not optional. npm sets lifecycle_event=release when this is
 // reached through `npm run release`, and electron-builder reads that as "go and

@@ -43,6 +43,8 @@ const quits = [];
 const appStub = {
   getVersion: () => '1.3.3',
   getPath: (name) => (name === 'userData' ? userDataPath : ROOT),
+  getAppPath: () => ROOT,
+  isPackaged: false,
   exit: (code) => exits.push(code),
   quit: () => quits.push(true),
   get isQuitting() { return false; },
@@ -61,7 +63,7 @@ Module._load = function patched(request, parent, isMain) {
 };
 
 const updater = require(updaterPath);
-const { compareVersions, pickInstallerAsset, isNewerRelease, installScript, statusWindowScript } = updater;
+const { compareVersions, pickInstallerAsset, isNewerRelease } = updater;
 Module._load = realLoad;
 
 const cases = [];
@@ -78,6 +80,12 @@ const add = (name, fn) => {
   }
   cases.push([name, ok, detail]);
 };
+
+// Checks that have to await something - a scheduled quit, a timer - cannot run
+// synchronously at the point they are written, so they are collected and run
+// together at the end.
+const execChecks = [];
+const addExec = (name, fn) => execChecks.push([name, fn]);
 
 // ---- version comparison ----------------------------------------------------
 
@@ -210,11 +218,20 @@ add('the picked asset carries a download url', () => {
 
 add('the module exports the functions the check drives', () => {
   for (const name of ['compareVersions', 'pickInstallerAsset', 'isNewerRelease',
-    'checkForUpdate', 'downloadAsset', 'stageUpdate', 'applyPendingUpdate', 'pendingStatus',
-    'installScript', 'statusWindowScript']) {
+    'checkForUpdate', 'downloadAsset', 'stageUpdate', 'applyPendingUpdate',
+    'quitAndInstall', 'pendingStatus', 'helperPath']) {
     if (typeof updater[name] !== 'function') return 'missing ' + name;
   }
   return true;
+});
+
+add('the batch helpers are gone, not merely unused', () => {
+  // installScript() and statusWindowScript() built the cmd files that had to be
+  // quoted into existence. They are removed rather than left behind: dead code
+  // with passing checks is worse than no code, because the next person reads the
+  // checks and believes the batch path is still live.
+  const gone = ['installScript', 'statusWindowScript'].filter((n) => typeof updater[n] === 'function');
+  return gone.length === 0 || ('still exported: ' + gone.join(', '));
 });
 
 // ---- the API surface updater.js actually uses ------------------------------
@@ -319,320 +336,113 @@ add('the renderer does not double-report one download failure', () => {
   return true;
 });
 
-// ---- telling the user what is happening -------------------------------------
+// ---- the handoff helper, and the absence of any shell ------------------------
 //
-// A silent NSIS install empties the whole install folder for about a minute.
-// The app is gone, there is no process, and launching it again in that window
-// does nothing. Reported from a real run: the folder looked empty, and the
-// replacement started outside the console it had been launched from. All of
-// that is correct behaviour and all of it reads as a crash, so the update says
-// what it is doing and puts a window up while it does it.
+// A silent NSIS install empties the whole install folder for about a minute: the
+// app is gone, there is no process, and launching it again in that window does
+// nothing. Every part of that is correct and all of it reads as a crash, so the
+// update has to say what it is doing - in a window that is not a console.
+//
+// That window used to be a batch file opened with `start`, which is why the
+// status "window" was a black rectangle with a progress bar drawn in ASCII in
+// it. Two releases shipped with it, and it never once appeared: the line that
+// opened it was `start "..." cmd.exe /v:on /c ""<path>""`, which cmd rejects
+// outright with "The syntax of the command is incorrect", and the check beside
+// it asserted that exact string.
+//
+// The fix is not better quoting. It is that the handoff is now a program
+// (tools/update-helper) built as a WinExe, so Windows never allocates a console
+// for it at all. These checks are about that being true of the source, the
+// packaging, and - where it has been built - the binary itself.
 
-add('the apply script opens a status window while it installs', () => {
-  const script = installScript('C:\\setup.exe', 'C:\\app.exe', {
-    statusScript: 'C:\\user data\\update-status.cmd',
-  });
-  // `start`, not a bare invocation: it requests its own console regardless of
-  // how the parent was spawned, which is what makes it work from a detached,
-  // windowless cmd.
-  return /start "Better Beeper Update" "C:\\user data\\update-status\.cmd"/.test(script)
-    || ('the apply script opens no window: ' + JSON.stringify(script));
+const HELPER_PROJECT = path.join(ROOT, 'tools', 'update-helper');
+const HELPER_BUILD = path.join(ROOT, 'build', 'update-helper');
+
+add('the handoff is a program, and it is a WinExe', () => {
+  // The single line that makes a console impossible: the GUI subsystem has no
+  // console to allocate, so there is nothing to flash, hide or mis-quote.
+  const csproj = fs.readFileSync(path.join(HELPER_PROJECT, 'UpdateHelper.csproj'), 'utf8');
+  return /<OutputType>WinExe<\/OutputType>/.test(csproj)
+    || 'the helper is not a WinExe, so it can still be given a console';
 });
 
-add('the status window line is one cmd can actually parse', () => {
-  // The line this replaced was:
-  //   start "Better Beeper Update" cmd.exe /v:on /c ""<path>""
-  // which fails with "The syntax of the command is incorrect" - cmd does not
-  // unwrap the second layer of quotes around a /c argument. The window never
-  // opened, and two releases of string-matching checks said the line was fine
-  // because they were matching the text rather than running it.
-  //
-  // This cannot be settled by running the suite, because settling it means
-  // opening a window, which is the thing the status window is for. So the check
-  // is about the shape that is known to parse: the path handed straight to
-  // `start`, with no nested cmd and no doubled quotes.
-  const script = installScript('C:\\setup.exe', 'C:\\app.exe', {
-    statusScript: 'C:\\user data\\update-status.cmd',
-  });
-  const line = script.split(/\r?\n/).find((l) => l.includes('Better Beeper Update')) || '';
-  if (/cmd\.exe|\/c\b/.test(line)) {
-    return ('the status window still goes through cmd /c: ' + line);
-  }
-  if (line.includes('""')) return ('the path is double-quoted: ' + line);
-  return true;
+add('the helper waits for the app to go before installing', () => {
+  // The app is the thing being replaced, so installing while it is alive locks
+  // its files and lands a half-applied update.
+  const src = fs.readFileSync(path.join(HELPER_PROJECT, 'Program.cs'), 'utf8');
+  return (src.includes('WaitForProcessExit') && src.includes('WaitForFileFree')
+      && src.indexOf('WaitForFileFree') < src.indexOf('Process.Start'))
+    || 'the helper starts the installer before the app has released its files';
 });
 
-add('the status window is not opened when its script is missing', () => {
-  // The check suite writes the apply script on its own, with no status
-  // companion. Unguarded, running the suite would flash a console at whoever
-  // is running it, which is the exact thing it is meant to prevent.
-  const script = installScript('C:\\setup.exe', 'C:\\app.exe', {});
-  return !/start "Better Beeper Update"/.test(script)
-    || 'opens a status window even with nothing to show';
+add('the helper starts the app again afterwards', () => {
+  // The *call*, not the method. `src.includes('StartRelaunch')` is satisfied by
+  // the definition alone, so commenting out the only call site leaves the check
+  // green while the app never comes back - which is the exact bug that started
+  // this, one layer up.
+  const src = fs.readFileSync(path.join(HELPER_PROJECT, 'Program.cs'), 'utf8');
+  return /StartRelaunch\(options\.RelaunchPath\)/.test(src)
+    || 'the helper defines StartRelaunch but nothing ever calls it';
 });
 
-add('the status window closes itself when the install finishes', () => {
-  // Polls for the flag and falls through to the closing branch. Without this
-  // the window outlives the update and sits on screen explaining nothing.
-  const script = statusWindowScript('C:\\flag');
-  const wait = script.indexOf(':wait');
-  const done = script.indexOf(':done');
-  if (wait < 0 || done < wait) return 'the status window has no wait loop';
-  return script.includes('if not exist "C:\\flag" goto done')
-    || ('the status window does not poll for the flag: ' + JSON.stringify(script));
+add('the helper records how the install went', () => {
+  // The process that could not install itself is gone; the next launch is the
+  // only other chance to say what happened. Again the call, not the definition.
+  const src = fs.readFileSync(path.join(HELPER_PROJECT, 'Program.cs'), 'utf8');
+  return /WriteResult\(options, state\.ExitCode, state\.Detail\)/.test(src)
+    || 'the helper defines WriteResult but the outcome is never written';
 });
 
-add('the status window warns against closing it', () => {
-  // Closing the window kills the installer mid flight, which leaves Better
-  // Beeper half installed. That is worse than doing nothing, so it has to be
-  // said plainly, and it has to be on screen for the whole wait rather than
-  // printed once and scrolled away by the progress bar's redraw.
-  const script = statusWindowScript('C:\\flag');
-  if (!/DO NOT CLOSE THIS WINDOW/.test(script)) return 'nothing warns against closing the window';
-  const at = script.indexOf('DO NOT CLOSE THIS WINDOW');
-  const loopStart = script.indexOf(':wait');
-  const loopEnd = script.indexOf('goto wait');
-  return at > loopStart && at < loopEnd
-    || 'the warning is not redrawn on every pass, so it scrolls away';
-});
-
-add('every set in the status window is quoted on both sides', () => {
-  // A missing closing quote does not throw. cmd happily defines a variable
-  // whose name includes the quote character, the next line redefines it
-  // properly, and the visible behaviour looks fine. One shipped here as
-  // `set "BAR=` and the bar still swept 1 to 20, which is the worst kind of
-  // typo: invisible until something else depends on it.
-  const script = statusWindowScript('C:\\flag');
-  for (const line of script.split(/\r?\n/)) {
-    const t = line.trim();
-    if (!/^set "/.test(t)) continue;
-    const quotes = t.split('"').length - 1;
-    if (quotes % 2 !== 0) return 'unterminated quote: ' + t;
-  }
-  return true;
-});
-
-add('the status window cannot sit on screen forever', () => {
-  // Bounded, so an install that dies mid-flight still closes the window rather
-  // than leaving it up with nothing to report.
-  //
-  // The `!`s are load-bearing and this check insists on them. A bare `if
-  // __ticks GEQ 300` looks identical in the source but never fires, because cmd
-  // does not resolve a bare word in an if condition: it compared the literal
-  // strings, always false, and the loop ran forever. The previous version of
-  // this check matched that broken line and passed it happily. Measured: a 26
-  // tick bound let the loop run to 58 and never stopped.
-  const script = statusWindowScript('C:\\flag');
-  if (/if __ticks GEQ/.test(script)) return 'the bound compares a bare word, so the loop never ends';
-  return /if !__ticks! GEQ \d+ goto done/.test(script)
-    || 'the poll loop has no bound';
-});
-
-add('the running flag exists before the script that opens the window', () => {
-  // The window is opened from inside the apply script, so a flag written by
-  // that same script would land after the window had already checked for it and
-  // closed itself. It has to be written from here, before the spawn.
-  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'updater.js'), 'utf8');
-  return /writeFileSync\(runningFlag/.test(src)
-    || 'the flag is not written before the apply script is spawned';
-});
-
-add('the renderer explains the restart, and stays up long enough to read it', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'src', 'renderer', 'js', 'updates.js'), 'utf8');
-  if (!/Installing now/.test(src)) return 'nothing explains where the app went';
-  const m = src.match(/setTimeout\(r,\s*(\d+)\)/);
-  const linger = m ? Number(m[1]) : 0;
-  // It was 700ms, which is about how long it takes to notice something.
-  return linger >= 2000 || (`the message is shown for only ${linger}ms`);
-});
-
-// ---- the install command ---------------------------------------------------
-
-/**
- * These run the script the app really hands to cmd.exe, against a stub
- * installer that stands in for the 90 MB one.
- *
- * The ordering is the whole point of the fix, and it cannot be checked by
- * reading the text: the previous bug was a perfectly well-formed command that
- * simply restarted the app while the installer was still running. So the stub
- * writes a timestamp when it starts and when it finishes, the relaunch target
- * writes a third, and the assertion is that the three happened in that order.
- *
- * It is also run the way the app runs it - as a script file, not as a `/c`
- * argument. Passing this as a single argv element does not work: Node escapes
- * the inner quotes for the Windows command line and cmd then reads the
- * backslashes as part of the path.
- */
-const { spawnSync } = require('node:child_process');
-
-const stampDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-update-cmd-'));
-const orderLog = path.join(stampDir, 'order.log');
-
-/** The order the steps actually happened in. Appends, so it survives races. */
-function readOrder() {
-  try {
-    return fs.readFileSync(orderLog, 'utf8').split(/\r?\n/).filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-const stubLauncher = path.join(stampDir, 'stub app.cmd');
-fs.writeFileSync(
-  stubLauncher,
-  ['@echo off', 'echo relaunched>>"' + orderLog + '"', ''].join('\r\n'),
-  'utf8',
-);
-
-/** An installer that takes about a second, so a relaunch on a timer lands inside it. */
-function writeStub(name, { sleepSeconds = 2, code = 0 } = {}) {
-  const file = path.join(stampDir, name);
-  fs.writeFileSync(
-    file,
-    [
-      '@echo off',
-      `echo installer-start>>"${orderLog}"`,
-      `ping -n ${sleepSeconds} 127.0.0.1 >NUL`,
-      `echo installer-end>>"${orderLog}"`,
-      `exit /b ${code}`,
-      '',
-    ].join('\r\n'),
-    'utf8',
-  );
-  return file;
-}
-
-const slowInstaller = writeStub('slow installer.cmd');
-const okInstaller = writeStub('ok installer.cmd', { sleepSeconds: 1 });
-const badInstaller = writeStub('bad installer.cmd', { sleepSeconds: 1, code: 3 });
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Write the script and run it exactly as applyPendingUpdate does, then report
- * the order the three steps ran in.
- *
- * `start` is asynchronous by design - the script must not block on the app it
- * is launching - so the relaunch line can land a moment after cmd.exe returns.
- * Hence the poll rather than a straight read.
- */
-async function runInstall(installer, { statusFile } = {}) {
-  for (const f of fs.readdirSync(stampDir)) {
-    if (f === 'order.log' || f === 'status.txt' || f === 'apply.cmd') {
-      fs.rmSync(path.join(stampDir, f), { force: true });
-    }
-  }
-  const scriptPath = path.join(stampDir, 'apply.cmd');
-  const script = installScript(installer, stubLauncher, { settleSeconds: 1, statusFile });
-
-  // Refuse to run a script whose relaunch would open a console window. These
-  // checks run against whatever the code currently says, so a regression here
-  // must fail on the string check alone - never by popping a window at the user
-  // to prove it.
-  if (!/start "" \/B "/.test(script)) {
-    throw new Error('refusing to run: the relaunch would open a console window');
-  }
-
-  fs.writeFileSync(scriptPath, script, 'utf8');
-  // windowsHide matters here: this runs several cmd.exe sessions, and without
-  // it each one flashes a console window at the user for the sake of a test.
-  const run = spawnSync('cmd.exe', ['/v:on', '/c', scriptPath], {
-    timeout: 60000,
-    encoding: 'utf8',
-    windowsHide: true,
-  });
-
-  let order = readOrder();
-  for (let i = 0; i < 40 && !order.includes('relaunched'); i += 1) {
-    await sleep(100);
-    order = readOrder();
-  }
-
-  let status = null;
-  try {
-    status = fs.readFileSync(stamp('status'), 'utf8').trim();
-  } catch {
-    /* never written */
-  }
-  return { order, status, stderr: (run.stderr || '').trim() };
-}
-
-const stamp = (name) => path.join(stampDir, `${name}.txt`);
-
-// The execution checks are async, so they are collected and run below.
-
-const execChecks = [];
-const addExec = (name, fn) => execChecks.push([name, fn]);
-
-addExec('the installer actually runs', async () => {
-  const r = await runInstall(slowInstaller);
-  return r.order.includes('installer-start')
-    || `the installer never ran: ${r.stderr || JSON.stringify(r.order)}`;
-});
-
-addExec('the app is restarted only after the installer has finished', async () => {
-  const r = await runInstall(slowInstaller);
-  const start = r.order.indexOf('installer-start');
-  const end = r.order.indexOf('installer-end');
-  const relaunch = r.order.indexOf('relaunched');
-  if (start < 0 || end < 0) return `the installer did not finish: ${JSON.stringify(r.order)}`;
-  if (relaunch < 0) return 'the app was never restarted';
-  return relaunch > end
-    || `relaunched before the installer finished: ${JSON.stringify(r.order)}`;
-});
-
-addExec('a successful install is recorded as zero', async () => {
-  const r = await runInstall(okInstaller, { statusFile: stamp('status') });
-  return r.status === '0' || (`recorded ${JSON.stringify(r.status)} ${r.stderr}`);
-});
-
-addExec('a failed install is recorded, not swallowed', async () => {
-  const r = await runInstall(badInstaller, { statusFile: stamp('status') });
-  return r.status === '3' || (`recorded ${JSON.stringify(r.status)} ${r.stderr}`);
-});
-
-addExec('the app still comes back when the installer fails', async () => {
-  const r = await runInstall(badInstaller);
-  return r.order.includes('relaunched')
-    || `the app was left not running: ${JSON.stringify(r.order)}`;
-});
-
-add('a path with spaces survives intact', () => {
-  const script = installScript('C:\\Some Path\\setup.exe', 'C:\\App Dir\\Better Beeper.exe');
-  return script.includes('call "C:\\Some Path\\setup.exe" /S')
-    && script.includes('start "" /B "C:\\App Dir\\Better Beeper.exe"')
-    || ('got ' + JSON.stringify(script));
-});
-
-add('the relaunch does not open a console window', () => {
-  // `start` without /B flashes an empty cmd window at the user on every run.
-  const script = installScript('C:\\setup.exe', 'C:\\app.exe');
-  return /start "" \/B "/.test(script)
-    || ('the relaunch opens a window: ' + JSON.stringify(script));
-});
-
-add('the script waits before installing, for this process to go', () => {
-  const script = installScript('x.exe', 'y.exe', { settleSeconds: 4 });
-  const settleAt = script.indexOf('ping -n 4');
-  const installAt = script.indexOf('/S');
-  return settleAt >= 0 && installAt > settleAt || ('got ' + JSON.stringify(script));
-});
-
-add('the installer is called, not just invoked', () => {
-  // Without `call`, a nested batch file takes over and the relaunch never runs.
-  const script = installScript('C:\\setup.exe', 'C:\\app.exe');
-  return script.includes('call "C:\\setup.exe" /S')
-    || ('the installer is invoked without call: ' + JSON.stringify(script));
-});
-
-add('the script is passed as a file, never as a quoted /c argument', () => {
-  // This is the trap that made the first attempt of this fix fail outright:
-  // argv escaping mangles the quotes and cmd then cannot find the path.
+add('the updater hands the install to the helper, not to a shell', () => {
   const src = fs.readFileSync(updaterPath, 'utf8');
-  return !/spawn\(\s*'cmd\.exe'\s*,\s*\[[^\]]*installScript\(/.test(src)
-    || 'applyPendingUpdate passes the command through argv';
+  return !/cmd\.exe|\/c\b|\.cmd'/.test(src.replace(/\/\*[\s\S]*?\*\//g, ''))
+    || 'updater.js still reaches for a command interpreter';
 });
 
+add('the updater writes no script at all', () => {
+  // Nothing to quote, nothing to mis-parse, nothing left behind on disk after a
+  // failed update.
+  const src = fs.readFileSync(updaterPath, 'utf8');
+  const body = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  return !/update-apply\.cmd|update-status\.cmd|installScript|statusWindowScript/.test(body)
+    || 'the batch machinery is still in updater.js';
+});
+
+add('the helper is passed the four things it needs', () => {
+  const src = fs.readFileSync(updaterPath, 'utf8');
+  return ['--installer', '--relaunch', '--result', '--pid'].every((flag) => src.includes(flag))
+    || 'the helper is not told what to install, where to write, or what to restart';
+});
+
+add('the helper ships with the app, outside the asar', () => {
+  // It has to exist as a real file to be launched. extraResources puts it next
+  // to the asar; inside the archive it would be a path to something unpacked
+  // that is not there.
+  //
+  // Matched as the actual mapping rather than the words "extraResources" and
+  // "update-helper": the explanatory comment above the rule names both, so a
+  // bare pair of substring tests is satisfied by the comment alone.
+  const yml = fs.readFileSync(path.join(ROOT, 'electron-builder.yml'), 'utf8');
+  return (/- from: build\/update-helper/.test(yml) && /^\s*to: update-helper\s*$/m.test(yml))
+    || 'the helper is not mapped into extraResources, so a packaged build cannot update';
+});
+
+add('the built helper, if there is one, has no console subsystem', () => {
+  // Read out of the PE header rather than trusted from the csproj, because the
+  // csproj is the intention and the header is the artifact. This is the whole
+  // claim of this feature, and it is checkable without opening a window.
+  const exe = path.join(HELPER_BUILD, updater.HELPER_EXE);
+  if (!fs.existsSync(exe)) return 'not built yet: run npm run build:helper';
+
+  const head = fs.readFileSync(exe);
+  if (head.readUInt16LE(0) !== 0x5a4d) return 'that is not a PE file';
+  const pe = head.readInt32LE(0x3c);
+  const subsystem = head.readUInt16LE(pe + 0x5c);
+  // IMAGE_SUBSYSTEM_WINDOWS_GUI. 1 would be console, which is the bug.
+  return (subsystem === 2
+    ? true
+    : 'the built helper is subsystem ' + subsystem + ' (console), so a window can appear');
+});
 // ---- the quit has to start the install --------------------------------------
 //
 // The bug this is for, and it was found by using the app rather than by reading
@@ -652,28 +462,28 @@ add('the script is passed as a file, never as a quoted /c argument', () => {
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-update-check-'));
 const PENDING = 'update-pending.json';
-const APPLY = 'update-apply.cmd';
-const STATUS = 'update-status.cmd';
-const RUNNING = 'update-running.flag';
+const HELPER = path.join(sandbox, 'BetterBeeper.UpdateHelper.exe');
 
 /**
  * Stage an install, then take the quit path, recording what it spawned.
  *
- * The spawn is stubbed rather than performed: its whole job is to run a 90 MB
- * installer over this machine's install. What has to be true is that it was
- * *asked* to, and with what.
+ * The spawn is stubbed rather than performed: its whole job is to install over
+ * this machine. What has to be true is that the helper was *asked* to, and with
+ * what - and the helper itself is stubbed into existence as a file, because
+ * launchInstall refuses to run when it is missing and that refusal is a real
+ * behaviour worth being able to reach.
  */
-function driveQuit({ stage = true, installerPresent = true } = {}) {
+function driveQuit({ stage = true, installerPresent = true, helperPresent = true } = {}) {
   userDataPath = sandbox;
   exits.length = 0;
   quits.length = 0;
-  for (const f of [PENDING, APPLY, STATUS, RUNNING]) {
-    try { fs.rmSync(path.join(sandbox, f), { force: true }); } catch { /* not there */ }
+  for (const f of [PENDING, HELPER, path.join(sandbox, 'setup.exe')]) {
+    try { fs.rmSync(f, { force: true }); } catch { /* not there */ }
   }
 
   const installer = path.join(sandbox, 'setup.exe');
   if (installerPresent) fs.writeFileSync(installer, 'MZ fake installer');
-  else { try { fs.rmSync(installer, { force: true }); } catch { /* not there */ } }
+  if (helperPresent) fs.writeFileSync(HELPER, 'MZ fake helper');
 
   if (stage) {
     fs.writeFileSync(
@@ -685,23 +495,26 @@ function driveQuit({ stage = true, installerPresent = true } = {}) {
 
   const spawned = [];
   const handed = updater.quitAndInstall({
+    helper: HELPER,
+    parentPid: 4242,
     spawnProcess: (cmd, args) => {
       spawned.push({ cmd, args });
       return { unref() {} };
     },
   });
 
-  const has = (f) => fs.existsSync(path.join(sandbox, f));
+  const argOf = (flag) => {
+    const call = spawned[0];
+    if (!call) return undefined;
+    const i = call.args.indexOf(flag);
+    return i === -1 ? undefined : call.args[i + 1];
+  };
+
   return {
-    handed, spawned,
-    // The live arrays, not a copy taken now: the quit is requested on a timer,
-    // so a snapshot here would always read empty and make a scheduled quit look
-    // like no quit at all. driveQuit resets them at the start of each run.
-    exits, quits,
-    applyWritten: has(APPLY), statusWritten: has(STATUS), flagWritten: has(RUNNING),
-    pendingCleared: !has(PENDING),
-    applyBody: has(APPLY) ? fs.readFileSync(path.join(sandbox, APPLY), 'utf8') : '',
-    statusBody: has(STATUS) ? fs.readFileSync(path.join(sandbox, STATUS), 'utf8') : '',
+    handed, spawned, exits, quits,
+    helperSpawned: spawned.length ? path.basename(spawned[0].cmd) : '',
+    argOf,
+    pendingCleared: !fs.existsSync(path.join(sandbox, PENDING)),
   };
 }
 
@@ -713,37 +526,46 @@ add('quitting with an update staged hands the install off', () => {
     || ('handed=' + r.handed + ' spawned=' + r.spawned.length);
 });
 
-add('the script that does the installing is written before the quit', () => {
+add('what is spawned is the helper, not a shell', () => {
+  // The entire point of the rewrite. `cmd.exe` here would mean a console can be
+  // allocated, and a console is the thing being removed.
   const r = quitRun;
-  return r.applyWritten === true || 'no apply script was ever written';
+  return r.helperSpawned === updater.HELPER_EXE
+    || ('spawned: ' + r.helperSpawned);
 });
 
-add('the status window the user was promised is written too', () => {
-  // This is the window that never appeared. It is written by launchInstall, so
-  // if the quit path did not go through launchInstall, neither was this.
+add('the helper is told which installer to run', () => {
   const r = quitRun;
-  return (r.statusWritten === true && r.statusBody.includes('Better Beeper is updating'))
-    || 'the status window script was not written';
+  const got = r.argOf('--installer');
+  return (got && got.endsWith('setup.exe')) || ('--installer was ' + got);
 });
 
-add('the running flag is written before the window can check for it', () => {
-  // The window closes itself if the flag is missing when it first looks, so a
-  // flag written after the window opens produces a window that flashes and goes.
+add('the helper is told which app to restart', () => {
   const r = quitRun;
-  return r.flagWritten === true || 'no running flag was written';
+  return r.argOf('--relaunch') === 'C:\\Program Files\\Better Beeper\\app.exe'
+    || ('--relaunch was ' + r.argOf('--relaunch'));
 });
 
-add('the spawned command is the apply script on disk', () => {
+add('the helper is told where to record the outcome', () => {
+  // The process that could not install itself is gone; this is the only way the
+  // next launch learns what happened.
   const r = quitRun;
-  const call = r.spawned[0];
-  if (!call) return 'nothing was spawned';
-  return (call.cmd === 'cmd.exe' && call.args[call.args.length - 1] === path.join(sandbox, APPLY))
-    || ('spawned ' + call.cmd + ' ' + JSON.stringify(call.args));
+  const got = r.argOf('--result');
+  return (got && got.endsWith('update-result.txt')) || ('--result was ' + got);
 });
 
-add('the apply script ends by starting the app again', () => {
+add('the helper is told which process to wait for', () => {
+  // Without this it waits only for the executable to be unlocked, and Electron's
+  // renderer children can still be holding it.
   const r = quitRun;
-  return r.applyBody.includes('start "" /B') || 'the relaunch line is missing';
+  return r.argOf('--pid') === '4242' || ('--pid was ' + r.argOf('--pid'));
+});
+
+add('no script is left on disk for the handoff', () => {
+  // Nothing to quote, nothing to mis-parse, and nothing to clean up if the
+  // update is abandoned half way.
+  const left = fs.readdirSync(sandbox).filter((f) => f.endsWith('.cmd') || f.endsWith('.flag'));
+  return left.length === 0 || ('left behind: ' + left.join(', '));
 });
 
 add('the staged marker is consumed so it cannot install twice', () => {
@@ -755,7 +577,7 @@ add('quitting for an install exits, rather than only being asked to', () => {
   // app.exit(0) rather than app.quit(): the installer needs this executable
   // released, so a graceful quit that can be cancelled is the wrong verb.
   const r = quitRun;
-  return (r.quits.length === 0) || 'it quit gracefully instead of exiting';
+  return r.quits.length === 0 || 'it quit gracefully instead of exiting';
 });
 
 // These two are async because the quit is *scheduled*, not immediate: an
@@ -765,9 +587,9 @@ add('quitting for an install exits, rather than only being asked to', () => {
 addExec('quitting with nothing staged is an ordinary quit', async () => {
   const r = driveQuit({ stage: false });
   await new Promise((res) => setTimeout(res, 300));
-  const clean = r.handed === false && r.spawned.length === 0 && !r.applyWritten && r.quits.length === 1;
+  const clean = r.handed === false && r.spawned.length === 0 && r.quits.length === 1;
   return clean
-    || ('handed=' + r.handed + ' spawned=' + r.spawned.length + ' apply=' + r.applyWritten + ' quits=' + r.quits.length);
+    || ('handed=' + r.handed + ' spawned=' + r.spawned.length + ' quits=' + r.quits.length);
 });
 
 addExec('an installer that has gone does not stop the app from quitting', async () => {
@@ -775,6 +597,15 @@ addExec('an installer that has gone does not stop the app from quitting', async 
   await new Promise((res) => setTimeout(res, 300));
   return (r.handed === false && r.quits.length === 1)
     || ('handed=' + r.handed + ' quits=' + r.quits.length);
+});
+
+addExec('a helper that has gone does not stop the app from quitting', async () => {
+  // A packaged build that somehow lost its helper must not leave the app
+  // unable to close, and must not claim to have installed anything.
+  const r = driveQuit({ helperPresent: false });
+  await new Promise((res) => setTimeout(res, 300));
+  return (r.handed === false && r.spawned.length === 0 && r.quits.length === 1)
+    || ('handed=' + r.handed + ' spawned=' + r.spawned.length + ' quits=' + r.quits.length);
 });
 
 add('the quit handler goes through the updater, not a bare app.quit', () => {
@@ -786,7 +617,6 @@ add('the quit handler goes through the updater, not a bare app.quit', () => {
   return handler[0].includes('updater.quitAndInstall()')
     || 'the handler does not hand off: ' + handler[0].replace(/\s+/g, ' ').slice(0, 120);
 });
-
 // The sandbox is torn down in report(), after the async checks above have run.
 // Doing it here would reset userData to the repo root before they executed, and
 // they would have written their scripts into the working tree instead.

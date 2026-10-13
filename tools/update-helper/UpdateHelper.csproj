@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The update handoff, as a real program rather than a batch file.
+
+    OutputType is WinExe, and that single word is the whole point. WinExe links
+    against the Windows GUI subsystem instead of the console subsystem, so
+    Windows never allocates a console for this process. There is no black
+    rectangle to flash, because there is no console to flash - not a hidden one,
+    not a momentary one. The batch approach could only ever offer "a console
+    window that appears and is meant to stay up", which is exactly what this
+    removes.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>BetterBeeper.UpdateHelper</AssemblyName>
+    <RootNamespace>BetterBeeper.UpdateHelper</RootNamespace>
+
+    <!-- Self-contained: an updater that silently fails to launch on a machine
+         without the .NET runtime installed is the worst possible failure mode,
+         and the one machine that must never be left unable to update is the one
+         that cannot run the thing doing the updating. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+
+    <!-- Trimmed down to what a fixed English string form needs. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,264 @@
+// The update handoff: everything that has to happen once Better Beeper has gone.
+//
+// The app cannot do this itself. A silent NSIS install replaces the whole
+// install folder, so the executable running the install is the executable being
+// overwritten. The work is therefore split around a process boundary, and this
+// program is the other side of it:
+//
+//   1. put a window up straight away, so the app vanishing is not a mystery
+//   2. wait for Better Beeper to actually be gone, not merely asked to leave
+//   3. run the installer silently and wait for it
+//   4. record how it went, for the next launch to report
+//   5. start Better Beeper again
+//
+// It is a WinExe, so it has no console at all and no window can flash. There is
+// deliberately no batch fallback: a fallback that needs cmd.exe is the thing
+// being removed, and a silent fallback is worse than none.
+//
+// The work is blocking and slow, so it runs on a worker while the UI thread
+// pumps messages. The two halves meet at ProgressState, which the window reads
+// on a timer rather than through Invoke - see StatusForm.cs for why.
+
+using System.Diagnostics;
+
+namespace BetterBeeper.UpdateHelper;
+
+internal static class Program
+{
+    // Long enough for a 90 MB install on a slow disk, and bounded so a wedged
+    // process gives up on its own rather than sitting there forever with no way
+    // to dismiss the window.
+    private const int InstallTimeoutSeconds = 15 * 60;
+
+    // How long to wait for the app to release its own files. If this expires we
+    // try anyway: a failed install is reported to the user on the next launch,
+    // which beats this window never closing.
+    private const int ReleaseTimeoutSeconds = 120;
+
+    [STAThread]
+    private static int Main(string[] args)
+    {
+        Options options;
+        try
+        {
+            options = Options.Parse(args);
+        }
+        catch (Exception ex)
+        {
+            // Nothing to show it on - the form may not even be constructible.
+            // Still recorded, because the next launch is the only other chance
+            // to say what went wrong.
+            WriteResult(null, -1, ex.Message);
+            return 2;
+        }
+
+        var state = new ProgressState();
+        var work = Task.Run(() => Run(state, options));
+
+        using var form = new StatusForm(state);
+        form.Pump();
+
+        // The form only closes once the work is done, so this returns promptly.
+        work.GetAwaiter().GetResult();
+        return state.ExitCode == 0 ? 0 : 1;
+    }
+
+    private static void Run(ProgressState state, Options options)
+    {
+        try
+        {
+            state.ExitCode = Install(state, options);
+            state.Ok = state.ExitCode == 0;
+        }
+        catch (Exception ex)
+        {
+            state.ExitCode = -1;
+            state.Ok = false;
+            state.Detail = ex.Message;
+        }
+
+        // Relaunch before the window goes: the install has just replaced the
+        // binary, so there is a moment where the user was told it was starting
+        // and nothing has happened yet. The window's linger covers that.
+        if (state.Ok && options.RelaunchPath is not null)
+        {
+            StartRelaunch(options.RelaunchPath);
+        }
+
+        WriteResult(options, state.ExitCode, state.Detail);
+        Volatile.Write(ref state.Done, true);
+    }
+
+    private static int Install(ProgressState state, Options options)
+    {
+        if (!File.Exists(options.InstallerPath))
+        {
+            throw new FileNotFoundException(
+                "The installer is no longer where it was saved.", options.InstallerPath);
+        }
+
+        state.Status = "Waiting for Better Beeper to close...";
+
+        // Two waits, because they answer different questions. The process id
+        // going away only means the main process left; Electron runs renderer
+        // and GPU children that can hold the executable open for a moment
+        // afterwards. The exclusive open is the one that matters - it is what
+        // the installer is about to ask for, and asking for it early turns a
+        // silent partial install into a clean one.
+        WaitForProcessExit(options.ParentPid);
+        WaitForFileFree(options.RelaunchPath);
+
+        state.Status = "Installing...";
+        var started = DateTime.UtcNow;
+
+        using var installer = Process.Start(new ProcessStartInfo
+        {
+            FileName = options.InstallerPath,
+            Arguments = "/S",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        }) ?? throw new InvalidOperationException("The installer could not be started.");
+
+        if (!installer.WaitForExit(InstallTimeoutSeconds * 1000))
+        {
+            try { installer.Kill(entireProcessTree: true); } catch { /* already gone */ }
+            throw new TimeoutException(
+                $"The installer did not finish within {InstallTimeoutSeconds / 60} minutes.");
+        }
+
+        var seconds = (int)(DateTime.UtcNow - started).TotalSeconds;
+        state.Status = $"Finished in {seconds}s. Starting Better Beeper...";
+        return installer.ExitCode;
+    }
+
+    private static void WaitForProcessExit(int? pid, int timeoutSeconds = 30)
+    {
+        if (pid is null or <= 0) return;
+        try
+        {
+            using var parent = Process.GetProcessById(pid.Value);
+            parent.WaitForExit(timeoutSeconds * 1000);
+        }
+        catch (ArgumentException)
+        {
+            // Already gone, which is the state we were waiting for.
+        }
+    }
+
+    /// <summary>Blocks until nothing holds the target executable open for writing.</summary>
+    private static void WaitForFileFree(string? path, int timeoutSeconds = ReleaseTimeoutSeconds)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+
+        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                using var handle = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                return;
+            }
+            catch (IOException)
+            {
+                // Still held: Electron children are still shutting down.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Held by something we are not permitted to introspect.
+            }
+
+            Thread.Sleep(250);
+        }
+    }
+
+    private static void StartRelaunch(string exe)
+    {
+        try
+        {
+            // UseShellExecute so it starts the way a user double-clicking it
+            // would - the working directory and environment are the app's, not
+            // this helper's.
+            Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            // Reported as a non-zero result, which the next launch shows. A
+            // successful install that could not relaunch must not be silent.
+            throw new InvalidOperationException("Better Beeper could not be started again.", ex);
+        }
+    }
+
+    /// <summary>Writes the outcome where the next launch will look for it.</summary>
+    private static void WriteResult(Options? options, int code, string? error)
+    {
+        if (options?.ResultPath is null) return;
+        try
+        {
+            var text = error is null
+                ? code.ToString()
+                : $"{code}\t{error.Replace("\t", " ").Replace("\r", " ").Replace("\n", " ")}";
+            File.WriteAllText(options.ResultPath, text);
+        }
+        catch (Exception)
+        {
+            // A missing result file reads as "nothing went wrong", which is the
+            // safe direction: the install itself is what matters.
+        }
+    }
+}
+
+/// <summary>
+/// Shared between the worker and the window.
+///
+/// Fields are written with Volatile and read on the window's timer rather than
+/// marshalled with Invoke. The alternative has a real failure mode: the work can
+/// finish before Application.Run has started pumping, and an Invoke at that
+/// moment waits for a loop that has not begun. A timer reading a field cannot
+/// get into that state at all, and the values here are one line of status text.
+/// </summary>
+internal sealed class ProgressState
+{
+    public string Status = "Starting...";
+    public string? Detail;
+    public int ExitCode;
+    public bool Ok;
+    public bool Done;
+}
+
+/// <summary>Command line, parsed strictly: a wrong argument must not silently mean "none".</summary>
+internal sealed record Options(string InstallerPath, string? RelaunchPath, string? ResultPath, int? ParentPid)
+{
+    public static Options Parse(string[] args)
+    {
+        string? installer = null;
+        string? relaunch = null;
+        string? result = null;
+        int? pid = null;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--installer" when i + 1 < args.Length:
+                    installer = args[++i];
+                    break;
+                case "--relaunch" when i + 1 < args.Length:
+                    relaunch = args[++i];
+                    break;
+                case "--result" when i + 1 < args.Length:
+                    result = args[++i];
+                    break;
+                case "--pid" when i + 1 < args.Length:
+                    if (int.TryParse(args[++i], out var parsed)) pid = parsed;
+                    break;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(installer))
+        {
+            throw new ArgumentException("--installer is required.");
+        }
+
+        return new Options(installer, relaunch, result, pid);
+    }
+}

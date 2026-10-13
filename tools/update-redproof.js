@@ -1,15 +1,17 @@
 /**
- * Red proof for the quit-hands-off-to-the-install checks in check:update.
+ * Red proof for the update handoff checks in check:update.
  *
- * The bug this was written for: staging a download wrote a marker, the marker
- * was consumed on the next launch, and the quit in between did nothing except
- * quit. The app closed and stayed closed, and the status window never appeared
- * because the script that opens it is written by the launch-time apply.
+ * Two bugs are in here, and both survived a green suite:
  *
- * Two halves, and both are mutated here. Reverting only ipc.js leaves every
- * behavioural check green, because they drive quitAndInstall() directly - so the
- * wiring is guarded by a source assertion on the handler itself, and that
- * assertion has to be proven too or it is decoration.
+ *   - the quit after a staged download only quit, so the app closed and nothing
+ *     reopened it. Staging writes a marker and a marker is consumed on the next
+ *     launch; nothing performed that launch.
+ *   - the status window was a batch file opened with `start "... cmd /c ""...""`,
+ *     which cmd rejects outright. A check asserted that exact string, so the
+ *     window was certified without ever being opened.
+ *
+ * The second is now a WinExe helper with no console at all, so several of these
+ * mutations put the batch path back to prove the checks notice.
  *
  * Every file is restored in a finally, verified by content hash.
  *
@@ -24,6 +26,9 @@ const ROOT = path.join(__dirname, '..');
 const FILES = {
   ipc: path.join(ROOT, 'src', 'main', 'ipc.js'),
   updater: path.join(ROOT, 'src', 'main', 'updater.js'),
+  csproj: path.join(ROOT, 'tools', 'update-helper', 'UpdateHelper.csproj'),
+  helper: path.join(ROOT, 'tools', 'update-helper', 'Program.cs'),
+  yml: path.join(ROOT, 'electron-builder.yml'),
 };
 
 const hash = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -49,65 +54,86 @@ const MUTATIONS = [
   {
     what: 'quitAndInstall never starts the install',
     file: 'updater',
-    from: '  if (pending && launchInstall(pending, { spawnProcess })) {',
-    to: '  if (false && launchInstall(pending, { spawnProcess })) {',
+    from: '  if (pending && launchInstall(pending, deps)) {',
+    to: '  if (false && launchInstall(pending, deps)) {',
     expect: 'quitting with an update staged hands the install off',
   },
   {
-    what: 'the status window script is not written',
+    what: 'the handoff is spawned through cmd again',
     file: 'updater',
-    from: '    fs.writeFileSync(statusPath, statusWindowScript(runningFlag), \'utf8\');',
-    to: '',
-    expect: 'the status window the user was promised is written too',
+    from: '    const child = spawnProcess(helper, args, {',
+    to: "    const child = spawnProcess('cmd.exe', ['/c', helper, ...args], {",
+    expect: 'what is spawned is the helper, not a shell',
   },
   {
-    what: 'the running flag is not written',
+    what: 'the helper is not told which process to wait for',
     file: 'updater',
-    from: '    fs.writeFileSync(runningFlag, String(Date.now()), \'utf8\');',
+    from: "    '--pid', String(parentPid),\n",
     to: '',
-    expect: 'the running flag is written before the window can check for it',
+    expect: 'the helper is told which process to wait for',
+  },
+  {
+    what: 'the helper is not told where to record the outcome',
+    file: 'updater',
+    from: "    '--result', result,\n",
+    to: '',
+    expect: 'the helper is told where to record the outcome',
   },
   {
     what: 'the staged marker is never consumed',
     file: 'updater',
-    from: '  const pending = readPending();\n  if (pending && launchInstall(pending, { spawnProcess })) {\n    clearPending();',
-    to: '  const pending = readPending();\n  if (pending && launchInstall(pending, { spawnProcess })) {',
+    from: '  if (pending && launchInstall(pending, deps)) {\n    clearPending();',
+    to: '  if (pending && launchInstall(pending, deps)) {',
     expect: 'the staged marker is consumed so it cannot install twice',
   },
   {
-    what: 'the apply script is spawned by something other than the script on disk',
+    what: 'quitting with nothing staged still hands over',
     file: 'updater',
-    from: "    const child = spawnProcess('cmd.exe', ['/v:on', '/c', scriptPath], {",
-    to: "    const child = spawnProcess('cmd.exe', ['/v:on', '/c', 'update.cmd'], {",
-    expect: 'the spawned command is the apply script on disk',
-  },
-  {
-    what: 'a missing installer is launched anyway',
-    file: 'updater',
-    from: '  if (!installer || !fs.existsSync(installer)) return false;',
-    to: '  if (!installer) return false;',
-    expect: 'an installer that has gone does not stop the app from quitting',
-  },
-  {
-    what: 'quitting with nothing staged still writes an install script',
-    file: 'updater',
-    from: '  const pending = readPending();\n  if (pending && launchInstall(pending, { spawnProcess })) {',
-    to: '  const pending = readPending() || { installer: process.execPath, relaunch: process.execPath };\n  if (pending && launchInstall(pending, { spawnProcess })) {',
+    from: '  const pending = readPending();\n  if (pending && launchInstall(pending, deps)) {',
+    to: '  const pending = readPending() || { installer: process.execPath, relaunch: process.execPath };\n  if (pending && launchInstall(pending, deps)) {',
     expect: 'quitting with nothing staged is an ordinary quit',
   },
   {
-    what: 'the status window goes back through cmd /c with doubled quotes',
-    file: 'updater',
-    from: '`if exist "${statusScript}" start "Better Beeper Update" "${statusScript}"\\r\\n`',
-    to: '`if exist "${statusScript}" start "Better Beeper Update" cmd.exe /v:on /c ""${statusScript}""\\r\\n`',
-    expect: 'the status window line is one cmd can actually parse',
+    what: 'the helper is built as a console app',
+    file: 'csproj',
+    from: '<OutputType>WinExe</OutputType>',
+    to: '<OutputType>Exe</OutputType>',
+    expect: 'the handoff is a program, and it is a WinExe',
   },
   {
-    what: 'the status window is never opened at all',
+    what: 'the helper installs before the app has released its files',
+    file: 'helper',
+    from: '        WaitForProcessExit(options.ParentPid);\n        WaitForFileFree(options.RelaunchPath);',
+    to: '        WaitForProcessExit(options.ParentPid);',
+    expect: 'the helper waits for the app to go before installing',
+  },
+  {
+    what: 'the helper never restarts the app',
+    file: 'helper',
+    from: '        if (state.Ok && options.RelaunchPath is not null)\n        {\n            StartRelaunch(options.RelaunchPath);\n        }\n',
+    to: '',
+    expect: 'the helper starts the app again afterwards',
+  },
+  {
+    what: 'the helper stops recording the outcome',
+    file: 'helper',
+    from: '        WriteResult(options, state.ExitCode, state.Detail);\n',
+    to: '',
+    expect: 'the helper records how the install went',
+  },
+  {
+    what: 'the helper is not shipped with the app',
+    file: 'yml',
+    from: 'extraResources:\n  - from: build/update-helper\n    to: update-helper\n    filter:\n      - "**/*"',
+    to: 'extraResources: []',
+    expect: 'the helper ships with the app, outside the asar',
+  },
+  {
+    what: 'the batch machinery is put back',
     file: 'updater',
-    from: '  const showStatus = statusScript\n    ? `if exist "${statusScript}" start "Better Beeper Update" "${statusScript}"\\r\\n`\n    : \'\';',
-    to: '  const showStatus = \'\';',
-    expect: 'the apply script opens a status window while it installs',
+    from: 'function launchInstall(pending,',
+    to: 'function installScript() { return "@echo off"; }\r\n\r\nfunction launchInstall(pending,',
+    expect: 'the updater writes no script at all',
   },
 ];
 
