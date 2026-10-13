@@ -10,32 +10,39 @@
     not a momentary one. The batch approach could only ever offer "a console
     window that appears and is meant to stay up", which is exactly what this
     removes.
+
+    net48 rather than a modern runtime, and it is not a compromise:
+
+      - It is already on every Windows this app runs on. .NET Framework 4.8
+        ships with Windows 10 1903 and later, and Windows 11; Electron already
+        refuses to run on anything older, so this requirement is not added, it
+        is just re-stated.
+      - The helper is therefore about 5 KB instead of 63 MB, and the installer
+        goes back to roughly where it was rather than growing by half again.
+      - Nothing to install, nothing to fail silently at the one moment the app
+        is already unable to start itself.
+
+    The reference assemblies package supplies the 4.8 targeting pack, which the
+    SDK does not ship and Windows does not install by default.
   -->
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net48</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- net48 predates implicit usings, and record types on it need an
+         IsExternalInit that the framework does not ship. LangVersion keeps the
+         modern syntax; the sources stick to APIs 4.8 actually has. -->
+    <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>BetterBeeper.UpdateHelper</AssemblyName>
     <RootNamespace>BetterBeeper.UpdateHelper</RootNamespace>
-
-    <!-- Self-contained: an updater that silently fails to launch on a machine
-         without the .NET runtime installed is the worst possible failure mode,
-         and the one machine that must never be left unable to update is the one
-         that cannot run the thing doing the updating. -->
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>true</SelfContained>
-    <PublishSingleFile>true</PublishSingleFile>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
-
-    <!-- Trimmed down to what a fixed English string form needs. -->
-    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
-    <InvariantGlobalization>true</InvariantGlobalization>
     <DebugType>none</DebugType>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
 
 </Project>

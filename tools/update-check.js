@@ -427,6 +427,24 @@ add('the helper ships with the app, outside the asar', () => {
     || 'the helper is not mapped into extraResources, so a packaged build cannot update';
 });
 
+add('the handoff targets the framework Windows already ships', () => {
+  // net48, not a modern runtime. The self-contained build of this same program
+  // was 63 MB and made the installer 147 MB; this one is 13 KB and takes the
+  // installer back to roughly what it was. Nothing is lost by it - .NET
+  // Framework 4.8 is on every Windows this app runs on, because Electron already
+  // refuses anything older, so the requirement is re-stated rather than added.
+  const csproj = fs.readFileSync(path.join(HELPER_PROJECT, 'UpdateHelper.csproj'), 'utf8');
+  if (!/<TargetFramework>net48<\/TargetFramework>/.test(csproj)) {
+    return 'the helper does not target net48';
+  }
+  // Self-contained or a runtime identifier would pull the whole runtime back in,
+  // which is the exact thing this replaced.
+  if (/<SelfContained>|<RuntimeIdentifier>/.test(csproj)) {
+    return 'the helper still bundles a runtime';
+  }
+  return true;
+});
+
 add('the built helper, if there is one, has no console subsystem', () => {
   // Read out of the PE header rather than trusted from the csproj, because the
   // csproj is the intention and the header is the artifact. This is the whole

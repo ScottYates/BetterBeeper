@@ -70,7 +70,10 @@ function buildHelper() {
   }
   console.log('\nbuilding the update helper...');
   try {
-    run('dotnet', ['publish', 'tools/update-helper', '-c', 'Release', '-o', 'build/update-helper', '--nologo']);
+    // `build`, not `publish`: net48 has no publish step, and the output of a
+    // build is already the whole program. -o keeps the layout flat so
+    // extraResources has a single file to copy.
+    run('dotnet', ['build', 'tools/update-helper', '-c', 'Release', '-o', 'build/update-helper', '--nologo']);
   } catch {
     console.error(
       '\nthe update helper did not build.\n'
