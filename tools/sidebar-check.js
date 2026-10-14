@@ -186,6 +186,30 @@ async function main() {
         (byChat(third, 'a2').textContent || '').includes('Renamed')
         || ('row reads ' + JSON.stringify(byChat(third, 'a2').textContent.slice(0, 40))));
 
+      // --- the mark-all-read control ---------------------------------------
+      //
+      // Shown only when there is something to mark. A permanently visible
+      // button that cannot be pressed into doing anything is worse than no
+      // button, and an inbox that has just been cleared should stop offering to
+      // clear itself again.
+      const markAll = document.getElementById('btn-mark-all-read');
+
+      add('the mark-all-read control starts hidden with nothing unread', () =>
+        markAll.hidden === true || 'it is showing on an inbox with no unread chats');
+
+      S.upsertChat(chat('a1', { unreadCount: 4 }));
+      B.renderChats();
+
+      add('it appears once a chat is unread', () =>
+        markAll.hidden === false || 'it stayed hidden with four unread messages waiting');
+
+      S.upsertChat(chat('a1', { unreadCount: 0 }));
+      B.renderChats();
+
+      add('and goes away again once that chat is read', () =>
+        markAll.hidden === true || 'it is still offering to mark a read inbox read');
+      S.upsertChat(chat('a1'));
+
       // --- local state forces a rebuild --------------------------------------
       // A deleted preview only blanks when the history is loaded well enough to
       // know what else is there. With no messages at all the preview is left

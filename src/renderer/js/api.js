@@ -17,8 +17,14 @@ function report(context, err) {
 /**
  * Wraps an IPC call. Returns `fallback` when the call fails so views can
  * degrade gracefully instead of throwing.
+ *
+ * `silent: true` swallows the failure report and returns the fallback instead.
+ * It exists for the one caller that fires many requests for a single user
+ * action - marking every chat read can be eighty-odd writes - where a toast per
+ * failure would bury the one message that is actually worth reading. That
+ * caller counts its own outcomes and reports once at the end.
  */
-export async function call(fn, { context = 'request', fallback = null, throwOnError = false } = {}) {
+export async function call(fn, { context = 'request', fallback = null, throwOnError = false, silent = false } = {}) {
   try {
     const res = await fn();
     if (!res) return fallback;
@@ -27,9 +33,11 @@ export async function call(fn, { context = 'request', fallback = null, throwOnEr
     err.code = res.error?.code;
     err.status = res.error?.status;
     if (throwOnError) throw err;
+    if (silent) return fallback;
     return report(context, err) ?? fallback;
   } catch (err) {
     if (throwOnError) throw err;
+    if (silent) return fallback;
     return report(context, err) ?? fallback;
   }
 }

@@ -186,7 +186,19 @@ function place(list, node, index) {
 let badgeCount = null;
 
 function syncBadge() {
-  const total = totalUnread(chatList(), isArchived);
+  const chats = chatList();
+  const total = totalUnread(chats, isArchived);
+
+  // The mark-all-read control is only there when it would do something. A
+  // permanently visible button that cannot be pressed into doing anything is
+  // worse than no button at all, and "is anything unread" is true exactly when
+  // there is something to mark - across every chat, not just the current
+  // filter, because the action is not scoped to the filter.
+  const markAll = $('#btn-mark-all-read');
+  if (markAll) {
+    markAll.hidden = !chats.some((chat) => !chat.mergedIntoChatID && Number(chat.unreadCount || 0) > 0);
+  }
+
   if (total === badgeCount) return;
   badgeCount = total;
   call(() => api.setBadge(total), { context: 'app badge', fallback: null });

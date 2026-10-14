@@ -1,7 +1,7 @@
 /** App bootstrap and cross-module wiring. */
 
 import { $, el } from './util.js';
-import { api, call, onApiError } from './api.js';
+import { api, call, callOk, FAILED, onApiError } from './api.js';
 import { state, bus, upsertChat, chatList, loadPins, loadArchived, loadHiddenMessages, loadDeletedMessages } from './state.js';
 import { toast, closePopover, initTooltips, openPopover } from './ui.js';
 import {
@@ -14,6 +14,7 @@ import { openNewChat, openSettings, showToolsCatalog, applyTheme } from './modal
 import { initLayout } from './layout.js';
 import { checkForUpdatesOnLaunch } from './updates.js';
 import { newestPreviewEntry, mergeChatSummary } from './chat-preview.js';
+import { markAllTargets, inBatches } from './mark-all-read.js';
 
 let bootstrapped = false;
 
@@ -261,6 +262,62 @@ function refreshInboxOnFocus() {
 // Keyboard & menus
 // ---------------------------------------------------------------------------
 
+/**
+ * How many chats are marked read at a time.
+ *
+ * One user action becomes one write per unread chat, and one account here had
+ * 89 of those. Firing them all at the local bridge at once only moves the queue
+ * somewhere less visible, so they go a few at a time.
+ */
+const MARK_ALL_BATCH = 4;
+
+/**
+ * Mark every chat with unread messages as read.
+ *
+ * `POST /v1/chats/{chatID}/read` takes an optional message ID, and omitting it
+ * marks the whole chat. That is the only correct call here: the app has not
+ * necessarily loaded the last message of a chat it has never opened, so there
+ * would be no ID to mark through, and a read receipt is a position in the
+ * conversation rather than a flag on it.
+ */
+async function markAllChatsRead() {
+  const targets = markAllTargets(chatList());
+  if (!targets.length) return;
+
+  // Optimistic, so the inbox settles on the click rather than on the last of
+  // however many round trips this turns into.
+  for (const chat of targets) {
+    state.chats.set(chat.id, { ...state.chats.get(chat.id), unreadCount: 0 });
+  }
+  renderChats();
+
+  const results = await inBatches(targets, MARK_ALL_BATCH, (chat) => callOk(
+    () => api.chats.markRead(chat.id),
+    // Every individual call is silent; the outcome is reported once below.
+    // Eighty toasts is not a report.
+    { context: 'mark all read', silent: true },
+  ));
+
+  const failed = results.filter((result) => result === FAILED).length;
+  const marked = results.length - failed;
+  if (!failed) {
+    toast(`Marked ${marked} chat${marked === 1 ? '' : 's'} as read`, 'success', 1800);
+    return;
+  }
+
+  toast(
+    marked
+      ? `Marked ${marked} read, ${failed} failed`
+      : `Could not mark ${failed} chat${failed === 1 ? '' : 's'} read`,
+    'error',
+    5000,
+  );
+  // A chat whose write failed still claims to be read on screen, which is a lie
+  // the user would have to notice themselves. Put the truth back.
+  lastInboxRefresh = 0;
+  refreshInboxOnFocus();
+}
+
 function closeActiveChat() {
   if (!state.activeChatID) return;
   closeThread();
@@ -364,6 +421,7 @@ async function boot() {
 
   $('#btn-new-chat').addEventListener('click', () => openNewChat());
   $('#btn-settings').addEventListener('click', () => openSettings());
+  $('#btn-mark-all-read').addEventListener('click', () => markAllChatsRead());
 
   // Beeper keeps search hidden until the magnifier is clicked.
   $('#btn-focus-search').addEventListener('click', () => {
