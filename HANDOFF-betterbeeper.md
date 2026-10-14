@@ -129,8 +129,11 @@ Measured against live Beeper Desktop 4.3.160 / Client API v5.0.0:
 Read receipts are the contrast that proves the API can carry this class of data:
 `Message.seen` carries per-reader timestamps. Typing simply has no equivalent.
 
-A feature request has been drafted for Beeper and is **not yet posted**. Send it
-to the community room linked from the Desktop API docs, or `help@beeper.com`.
+A feature request was drafted for Beeper and **sent** on 2026-10-14, to the
+community room linked from the Desktop API docs. It cites the measured gap above,
+the read-receipt contrast, and three concrete shapes for a fix. Do not re-send it.
+If Beeper ships a typing event, `beeper-ws.js` already re-emits unknown frame
+types, so the transport would need very little work.
 
 ### The chat list did not follow the last message in an open chat
 
@@ -227,8 +230,12 @@ Always pair a new assertion with a case that proves the assertion can fail.
 1. **1.18.7 has not been cut.** `check:released` is red for exactly this reason.
    `npm run release` can now build the helper here, so the machine is ready. It
    will derive the version from the commits since v1.18.6.
-2. **The typing feature request has not been posted.** The draft is in the
-   session history.
+2. **The updater asks GitHub for a Release, not for a commit.** It calls
+   `releases/latest` and compares that tag against `app.getVersion()`, which is
+   what is installed. So it correctly says "up to date" at 1.18.6 even with five
+   commits on main: a commit is not a release and there is nothing for it to
+   offer. `check:released` is what catches that gap, which is why it is the one
+   red suite.
 3. **TLS warnings.** A log showed `handshake failed ... net_error -202`
    (`ERR_CERT_ALT_NAME_INVALID`). The update prompt did appear, so the GitHub API
    call worked. Probably a different endpoint or an intercepting proxy.
