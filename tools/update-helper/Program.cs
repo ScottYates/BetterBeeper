@@ -20,6 +20,20 @@
 // on a timer rather than through Invoke - see StatusForm.cs for why.
 //
 // Usings are explicit because this targets net48, which predates them.
+//
+// Built by the .NET Framework compiler that ships with Windows, so the sources
+// stay inside C# 5. That rules out two things this file used to carry, both
+// removed for the reason already stated on Options below: a feature that buys
+// nothing at runtime is not worth needing a newer compiler for.
+//
+//   - Nullable reference annotations (`string`). Compile-time only; they are
+//     erased before any IL exists. The C# 5 compiler does not merely ignore
+//     them, it rejects them - it parses `string` as `Nullable<string>`, which
+//     needs a value type, and fails with CS0453.
+//   - `case ... when` guards in the switch below, which are C# 7.
+//
+// If you are here adding a modern feature, expect CS0453 or a syntax error,
+// and expect it to be this constraint rather than a broken build.
 
 using System;
 using System.Diagnostics;
@@ -88,7 +102,7 @@ namespace BetterBeeper.UpdateHelper
             // Relaunch before the window goes: the install has just replaced the
             // binary, so there is a moment where the user was told it was starting
             // and nothing has happened yet. The window's linger covers that.
-            if (state.Ok && options.RelaunchPath is not null)
+            if (state.Ok && options.RelaunchPath != null)
             {
                 StartRelaunch(options.RelaunchPath);
             }
@@ -171,7 +185,7 @@ namespace BetterBeeper.UpdateHelper
         }
 
         /// <summary>Blocks until nothing holds the target executable open for writing.</summary>
-        private static void WaitForFileFree(string? path, int timeoutSeconds = ReleaseTimeoutSeconds)
+        private static void WaitForFileFree(string path, int timeoutSeconds = ReleaseTimeoutSeconds)
         {
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
 
@@ -216,7 +230,7 @@ namespace BetterBeeper.UpdateHelper
         }
 
         /// <summary>Writes the outcome where the next launch will look for it.</summary>
-        private static void WriteResult(Options? options, int code, string? error)
+        private static void WriteResult(Options options, int code, string error)
         {
             if (options == null || options.ResultPath == null) return;
             try
@@ -246,7 +260,7 @@ namespace BetterBeeper.UpdateHelper
     internal sealed class ProgressState
     {
         public string Status = "Starting...";
-        public string? Detail;
+        public string Detail;
         public int ExitCode;
         public bool Ok;
         public bool Done;
@@ -262,11 +276,11 @@ namespace BetterBeeper.UpdateHelper
     internal sealed class Options
     {
         public string InstallerPath { get; private set; }
-        public string? RelaunchPath { get; private set; }
-        public string? ResultPath { get; private set; }
+        public string RelaunchPath { get; private set; }
+        public string ResultPath { get; private set; }
         public int? ParentPid { get; private set; }
 
-        private Options(string installer, string? relaunch, string? result, int? pid)
+        private Options(string installer, string relaunch, string result, int? pid)
         {
             InstallerPath = installer;
             RelaunchPath = relaunch;
@@ -276,28 +290,45 @@ namespace BetterBeeper.UpdateHelper
 
         public static Options Parse(string[] args)
         {
-            string? installer = null;
-            string? relaunch = null;
-            string? result = null;
+            string installer = null;
+            string relaunch = null;
+            string result = null;
             int? pid = null;
 
             for (var i = 0; i < args.Length; i++)
             {
-                switch (args[i])
+                // An if-chain rather than `case ... when`: that guard syntax is C# 7
+                // and the shipped compiler is C# 5. Each branch checks its own
+                // bounds before consuming the value, which is what the guard did.
+                var flag = args[i];
+
+                if (flag == "--installer" && i + 1 < args.Length)
                 {
-                    case "--installer" when i + 1 < args.Length:
-                        installer = args[++i];
-                        break;
-                    case "--relaunch" when i + 1 < args.Length:
-                        relaunch = args[++i];
-                        break;
-                    case "--result" when i + 1 < args.Length:
-                        result = args[++i];
-                        break;
-                    case "--pid" when i + 1 < args.Length:
-                        int parsed;
-                        if (int.TryParse(args[++i], out parsed)) pid = parsed;
-                        break;
+                    installer = args[++i];
+                    continue;
+                }
+
+                if (flag == "--relaunch" && i + 1 < args.Length)
+                {
+                    relaunch = args[++i];
+                    continue;
+                }
+
+                if (flag == "--result" && i + 1 < args.Length)
+                {
+                    result = args[++i];
+                    continue;
+                }
+
+                if (flag == "--pid" && i + 1 < args.Length)
+                {
+                    // ++i happens in the argument, so it is consumed whether or
+                    // not the text parses. That is the behaviour to keep: a
+                    // malformed pid must not leave the next argument to be read
+                    // again as a flag.
+                    int parsed;
+                    if (int.TryParse(args[++i], out parsed)) pid = parsed;
+                    continue;
                 }
             }
 

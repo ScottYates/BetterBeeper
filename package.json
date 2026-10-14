@@ -10,7 +10,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "build:helper": "dotnet build tools/update-helper -c Release -o build/update-helper --nologo",
+    "build:helper": "node tools/build-helper.js",
     "dist": "node tools/dist.js",
     "dist:only": "node tools/dist.js --no-install",
     "dist:scratch": "electron-builder --win --x64 --config.directories.output=release-scratch --publish=never",

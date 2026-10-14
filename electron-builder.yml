@@ -23,8 +23,16 @@ removePackageScripts: true
 # update. Shipped outside the asar because it has to be launched as a real file
 # on disk, not read out of the archive.
 #
-# Build it first with:
-#   dotnet publish tools/update-helper -c Release -o build/update-helper
+# extraResources copies a real directory. If it is missing, the installer builds
+# happily and then cannot update itself, and that only shows up later, on a
+# machine, during an update. So it is built here rather than remembered: this
+# hook covers every path into electron-builder, including tools/release.js,
+# which goes straight to the builder and never runs tools/dist.js.
+#
+# It compiles with the .NET Framework compiler that ships with Windows, so
+# there is nothing to install first.
+beforeBuild: node tools/build-helper.js
+
 extraResources:
   - from: build/update-helper
     to: update-helper

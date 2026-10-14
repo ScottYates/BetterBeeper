@@ -62,27 +62,47 @@ The two implementations collided on `.gitignore`, `electron-builder.yml`,
 `src/main/updater.js` and `tools/update-check.js`, which is why the local
 update-window commit was parked rather than merged.
 
-### The helper is not built automatically. Remember it.
+### The helper builds with no toolchain installed
 
-`electron-builder.yml` has **no `beforeBuild` hook**, and `tools/release.js` does
-not build the helper either: it goes straight to electron-builder. The only thing
-that pulls the helper in is `extraResources: from: build/update-helper`.
+This used to need the .NET SDK: `build:helper` was `dotnet build ...`, and with no
+SDK on the machine it could not run at all, which left `check:update` one case
+short and made the next release impossible to cut here.
 
-So the packaging step depends on a human having run `npm run build:helper` first,
-on a machine that has the .NET SDK. Neither is true here.
+It now compiles with the .NET Framework compiler that ships inside Windows,
+`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`, via
+`tools/build-helper.js`. Nothing needs installing on any machine.
 
-Verified: `build/update-helper` does not exist, `dotnet` is absent, and there is
-no hook. **Not verified:** whether electron-builder fails loudly on a missing
-`extraResources` source or quietly ships an installer with no helper in it. That
-distinction matters more than it looks, because a helper-less build is an app
-whose update handoff cannot work, which is the exact thing 1.18.2 through 1.18.6
-were spent fixing.
+Worth being clear about, because it is easy to assume the opposite: **the SDK
+never made the helper small.** `<TargetFramework>net48</TargetFramework>` does,
+because it links against the .NET Framework already on the machine instead of
+bundling a runtime. The 5 KB versus 63 MB choice is net48 against a modern
+runtime, not `dotnet` against `csc.exe`. The SDK was only ever build tooling on
+disk. The helper is 12.5 KB either way.
 
-Worth knowing: the superseded branch had `beforeBuild: node tools/build-update-ui.js`
-wired up automatically. This automation was lost when the .NET helper replaced
-it. Restoring it, as `beforeBuild: npm run build:helper`, would turn a silent
-packaging mistake into a loud build failure. That one line has not been applied,
-because it cannot be tested on this machine without the SDK.
+The cost is the language. That compiler is C# 5, so `Program.cs` had to drop its
+nine nullable reference annotations (compile-time only, erased before any IL
+exists), its four C# 7 `when` guards, and one C# 9 `is not null`. The top of
+`Program.cs` says so, and warns the next person that a CS0453 is this
+constraint rather than a broken build.
+
+`UpdateHelper.csproj` is no longer what builds it, but it stays: it is the
+clearest description of the program and `check:update` reads `WinExe` and
+`net48` out of it.
+
+### The helper is now built by the packaging step
+
+`electron-builder.yml` carries `beforeBuild: node tools/build-helper.js`, and
+`tools/dist.js` calls the same script. Two things came out of chasing this.
+
+`tools/release.js` and `dist:scratch` went straight to electron-builder and
+never ran `tools/dist.js`, which was the only thing that built the helper and
+the only thing that refused to package without it. `beforeBuild` covers every
+path in, including the ones that skip `dist.js`.
+
+An earlier version of this file said nothing built the helper and a release
+could silently ship without one. That was too wide. `dist.js` did guard it,
+with a good error message. The gap was narrower than described and is now
+closed rather than merely noted.
 
 ## Work done 2026-10-14
 
@@ -163,20 +183,34 @@ by `npm run check:markallread` and three cases in `check:sidebar`.
 
 ## Verification status
 
-`npm run check:all` gives **34/36 suites passed** on this tree, 2026-10-14.
-Both failures are expected and neither is a defect in the app:
+`npm run check:all` gives **35/37 suites passed** on this tree, 2026-10-14.
+The one failure is `check:released`, and it is the repo asking for a release
+rather than a defect: `main` is ahead of v1.18.6 with nothing published for
+those commits. Run `npm run release` when you want 1.18.7.
+
+It was 34/36 before the helper build changed, with `check:update` also failing.
 
 | Check | Result |
 | --- | --- |
-| `check:update` | 58/59. The one failure is the missing .NET SDK, see below. |
-| `check:released` | main is 2 commits ahead of v1.18.6 with no release. The repo asking for one, not a regression. |
+| `check:update` | 59/59, after `check:update` gained a built helper to read the PE header of |
+| `check:released` | main is ahead of v1.18.6 with no release. Expected. |
+| `tools/update-redproof.js` | 17/17 mutations caught, no holes |
 
 Individually measured the same day: `check:preview` 0 failing across 18 cases
 (new), `check:markallread` 0 failing across 18 cases (new), `check:sidebar` 58/58,
 `check:unread` 32/32, `check:layout` 13/13, `check:api` 136/136,
+`check:composer` 17/17, `check:actions` 21/21, `check:about` 6/6,
 `check:installer` passing, `check:syntax` OK on every JS file and harness,
-`check:ascii` OK. The two figures above predate mark-all-read; re-run
-`check:all` for a current full number.
+`check:ascii` OK.
+
+`tools/update-redproof.js` is not in the sweep, because it mutates the working
+tree on purpose. Run it by hand after touching the updater. It mutates a real
+line out of `Program.cs`, `StatusForm.cs`, the csproj or `electron-builder.yml`,
+and asserts the matching `check:update` case notices.
+
+That is not a theoretical tool. Rewriting `is not null` as `!= null` broke one
+of its seventeen mutations, because it matches source text by literal string, and
+nothing else noticed: `check:update` was green throughout. Run it by hand.
 
 `check:preview` is new and worth knowing about: it carries a **control case** that
 reproduces the old behaviour, and disabling the fix makes it fail. That control
@@ -190,16 +224,9 @@ Always pair a new assertion with a case that proves the assertion can fail.
 
 ## Still outstanding
 
-1. **The .NET SDK is not installed on this machine.** `dotnet` is absent from
-   PATH and neither `%ProgramFiles%\dotnet\dotnet.exe` nor the x86 one exists.
-   Consequences, all expected rather than bugs:
-   - `npm run check:update` fails exactly one case, "the built helper, if there is
-     one, has no console subsystem", with detail "not built yet: run npm run
-     build:helper". It reads `build/update-helper/`, which never gets produced.
-   - `npm run release` cannot produce a correct package here, because nothing
-     builds the helper for it. See the section above; this is the blocker on
-     1.18.7.
-   Installing the SDK is system software and needs explicit approval.
+1. **1.18.7 has not been cut.** `check:released` is red for exactly this reason.
+   `npm run release` can now build the helper here, so the machine is ready. It
+   will derive the version from the commits since v1.18.6.
 2. **The typing feature request has not been posted.** The draft is in the
    session history.
 3. **TLS warnings.** A log showed `handshake failed ... net_error -202`

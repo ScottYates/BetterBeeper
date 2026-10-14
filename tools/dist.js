@@ -59,8 +59,12 @@ if (!fs.existsSync(builderCli)) {
  * missing one produces a build that installs happily and then cannot update
  * itself. That failure would only show up later, on a machine, during an update.
  *
- * Skipped with --skip-helper for the rare case of building on a machine with no
- * .NET SDK, at the cost of a build that cannot update.
+ * electron-builder's own beforeBuild hook now does this too, so this is the
+ * second guard rather than the only one. It is kept because the message here is
+ * the one a person reading a failed `npm run dist` actually sees.
+ *
+ * Skipped with --skip-helper for the rare case of building where the .NET
+ * Framework compiler cannot be found, at the cost of a build that cannot update.
  */
 function buildHelper() {
   const out = path.join(ROOT, 'build', 'update-helper');
@@ -70,14 +74,12 @@ function buildHelper() {
   }
   console.log('\nbuilding the update helper...');
   try {
-    // `build`, not `publish`: net48 has no publish step, and the output of a
-    // build is already the whole program. -o keeps the layout flat so
-    // extraResources has a single file to copy.
-    run('dotnet', ['build', 'tools/update-helper', '-c', 'Release', '-o', 'build/update-helper', '--nologo']);
+    run(process.execPath, [path.join(__dirname, 'build-helper.js')]);
   } catch {
     console.error(
       '\nthe update helper did not build.\n'
-      + '  The .NET SDK is required: winget install Microsoft.DotNet.SDK.8\n'
+      + '  It needs the .NET Framework compiler that ships with Windows, at\n'
+      + '  %WINDIR%\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe\n'
       + '  A build without it installs, but cannot update itself.\n'
       + '  Pass --skip-helper only if that is what you want.\n',
     );

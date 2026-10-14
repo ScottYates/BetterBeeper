@@ -118,7 +118,7 @@ const MUTATIONS = [
   {
     what: 'the helper never restarts the app',
     file: 'helper',
-    from: '            if (state.Ok && options.RelaunchPath is not null)\n            {\n                StartRelaunch(options.RelaunchPath);\n            }\n',
+    from: '            if (state.Ok && options.RelaunchPath != null)\n            {\n                StartRelaunch(options.RelaunchPath);\n            }\n',
     to: '',
     expect: 'the helper starts the app again afterwards',
   },
