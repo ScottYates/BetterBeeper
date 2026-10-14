@@ -350,15 +350,17 @@ select { cursor: pointer; }
    filled up would be inventing a denominator. A moving bar says "working", the
    numbers say how much, and a finished job is simply still there. */
 .jobs-panel {
-  border-top: 1px solid var(--border-soft);
-  background: var(--bg-elev-1);
+  background: transparent;
   flex: 0 0 auto;
-  max-height: 46%;
   display: flex; flex-direction: column;
 }
+/* The head is the middle item of the status row rather than a row of its own,
+   so it takes the space between "live" and the version and no more. Sizing it
+   to 100% instead would push the version off the end of the row. */
 .jobs-head {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 7px 14px; background: none; border: 0; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  flex: 1 1 auto; min-width: 0;
+  padding: 0 10px; background: none; border: 0; cursor: pointer;
   color: var(--text-faint); font-size: 11.5px; text-align: left;
 }
 .jobs-head:hover { color: var(--text-dim); }
@@ -378,7 +380,12 @@ select { cursor: pointer; }
 }
 .jobs-panel[data-state="busy"] .jobs-summary { color: var(--text-dim); }
 
-.jobs-list { overflow-y: auto; padding: 0 14px 8px; }
+/* The cap used to be on the panel, as a share of the sidebar it sat in. The
+   panel is now inside the footer, whose height is whatever the list turns out
+   to need, so a percentage here would have nothing to resolve against and the
+   list would grow unbounded. Viewport units keep the same intent: the job
+   list can take a substantial slice, but never the whole window. */
+.jobs-list { overflow-y: auto; padding: 0 14px 8px; max-height: 46vh; }
 .jobs-panel.is-collapsed .jobs-list { display: none; }
 
 .job-row {
@@ -544,10 +551,17 @@ select { cursor: pointer; }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
 
 .sidebar-footer {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 14px; border-top: 1px solid var(--border-soft);
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border-soft);
 }
-.live { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-faint); }
+/* One row: connection, then what the sync is doing, then the version. The
+   space-between that used to push live and version apart now puts the sync
+   summary in the gap between them. */
+.sidebar-status {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; padding: 8px 14px;
+}
+.live { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-faint); flex: none; }
 .live::before {
   content: ""; width: 7px; height: 7px; border-radius: 50%;
   background: var(--text-faint);

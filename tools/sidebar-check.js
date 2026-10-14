@@ -524,6 +524,50 @@ async function main() {
       progress({ chatID: 'walk1', state: 'done', pages: 4, fetched: 80, fresh: true });
       await new Promise((r) => setTimeout(r, 150));
 
+      // --- the list is only for work in flight ------------------------------
+      //
+      // Both running jobs above are finished, so there is nothing left to report.
+      // The panel used to keep the last couple of finished jobs on screen, which
+      // put a block of rows between the chat list and the status line for no
+      // reason. The summary line is always visible; the list is not.
+      // (panel and summary are the same elements captured above.)
+      add('the list is shut once nothing is running', () =>
+        panel.classList.contains('is-collapsed') || 'finished jobs are still listed');
+
+      // The control: it is the idle state specifically that closes it, not some
+      // other rule that happened to be in force at this point in the run.
+      add('the rows are still in the DOM, the list is only shut', () =>
+        document.querySelectorAll('#jobs-list .job-row').length > 0
+        || 'the list was emptied rather than hidden, so reopening would start blank');
+
+      // With the list shut, the heading is the only place a failure can still be
+      // seen, and "Chats synced" beside a chat that did not sync is the wrong
+      // thing to say.
+      progress({ chatID: 'bad2', state: 'failed', error: 'Beeper said no', fresh: true });
+      await new Promise((r) => setTimeout(r, 150));
+
+      add('a failure with nothing running is reported on the heading', () =>
+        (summary.textContent || '').includes('could not be synced')
+        || ('the heading reads ' + JSON.stringify(summary.textContent)));
+
+      add('the heading does not claim everything synced beside a failure', () =>
+        !(summary.textContent || '').startsWith('Chats synced')
+        || 'the heading still says Chats synced with a failure outstanding');
+
+      add('the list stays shut for a failure alone', () =>
+        panel.classList.contains('is-collapsed') || 'a failure with no work opened the list');
+
+      // And it comes straight back the moment there is work again.
+      progress({ chatID: 'again1', state: 'backfilling', pages: 2, fetched: 30, walked: true, fresh: true });
+      await new Promise((r) => setTimeout(r, 150));
+
+      add('the list reopens when work resumes', () =>
+        !panel.classList.contains('is-collapsed') || 'the list stayed shut with a job running');
+
+      add('the toggle reports the real state to assistive tech', () =>
+        document.getElementById('jobs-toggle').getAttribute('aria-expanded') === 'true'
+        || 'aria-expanded disagrees with what is on screen');
+
       // --- an avatar rebuilt after the first paint ---------------------------
       //
       // The thread header is rebuilt on every open, and the chat list is rebuilt

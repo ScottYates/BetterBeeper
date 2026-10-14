@@ -93,6 +93,17 @@ function worthShowing(job) {
   return Date.now() - since >= MIN_VISIBLE_MS;
 }
 
+/**
+ * Jobs that failed and are still worth telling the user about.
+ *
+ * Split out because with the list hidden whenever nothing is running (see
+ * renderJobs), this is the only thing that can put a failure in front of the
+ * user at all.
+ */
+function failedJobs() {
+  return [...jobs.values()].filter((j) => j.state === 'failed' && worthShowing(j));
+}
+
 /** Anything queued, running or backfilling. */
 function activeJobs() {
   return [...jobs.values()].filter((job) => !DONE_STATES.has(job.state));
@@ -214,18 +225,32 @@ export function renderJobs() {
   panel.dataset.state = active.length ? 'busy' : 'idle';
 
   const summary = $('#jobs-summary');
+  const failed = failedJobs();
   if (active.length) {
     const running = active.filter((j) => j.state !== 'queued').length;
     summary.textContent = running
       ? `Syncing ${running}${active.length > running ? ` of ${active.length}` : ''}`
       : `Waiting on ${plural(active.length, 'chat', 'chats')}`;
+  } else if (failed.length) {
+    // The list is shut whenever nothing is running, so this line is now the
+    // only place a failure can still reach the user. Reporting it here is also
+    // what stops the heading reading "Chats synced" beside a chat that did not.
+    summary.textContent = `${plural(failed.length, 'chat', 'chats')} could not be synced`;
   } else if (stats) {
     summary.textContent = `Chats synced · ${plural(stats.messages || 0, 'message', 'messages')}`;
   } else {
     summary.textContent = 'Chats synced';
   }
 
-  panel.classList.toggle('is-collapsed', !expanded);
+  // The list is for work in flight, not a record of work finished. It used to
+  // sit on screen holding the last couple of completed jobs, which put a block
+  // of finished rows between the chat list and the status line for no reason.
+  // Anything still in flight is worth showing; when there is none, the summary
+  // line above carries everything that is left to say.
+  const showing = expanded && active.length > 0;
+  panel.classList.toggle('is-collapsed', !showing);
+  const toggle = $('#jobs-toggle');
+  if (toggle) toggle.setAttribute('aria-expanded', String(showing));
 
   const list = $('#jobs-list');
   const shown = visible.slice(0, MAX_ROWS);
