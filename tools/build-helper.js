@@ -82,8 +82,9 @@ function main() {
     process.exit(1);
   }
 
-  // Both electron-builder's beforeBuild hook and tools/dist.js want this to run,
-  // so building twice in a row should not rebuild. --force overrides.
+  // tools/release.js and tools/dist.js both want this to run before packaging,
+  // and dist:scratch runs it through npm, so building twice in a row should not
+  // rebuild. --force overrides.
   if (!process.argv.includes('--force') && upToDate()) {
     console.log('update helper: already built and newer than its sources');
     return;

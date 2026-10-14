@@ -59,9 +59,8 @@ if (!fs.existsSync(builderCli)) {
  * missing one produces a build that installs happily and then cannot update
  * itself. That failure would only show up later, on a machine, during an update.
  *
- * electron-builder's own beforeBuild hook now does this too, so this is the
- * second guard rather than the only one. It is kept because the message here is
- * the one a person reading a failed `npm run dist` actually sees.
+ * tools/release.js builds it too, for the same reason: both scripts call
+ * electron-builder directly and neither one runs the other.
  *
  * Skipped with --skip-helper for the rare case of building where the .NET
  * Framework compiler cannot be found, at the cost of a build that cannot update.

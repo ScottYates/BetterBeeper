@@ -25,14 +25,16 @@ removePackageScripts: true
 #
 # extraResources copies a real directory. If it is missing, the installer builds
 # happily and then cannot update itself, and that only shows up later, on a
-# machine, during an update. So it is built here rather than remembered: this
-# hook covers every path into electron-builder, including tools/release.js,
-# which goes straight to the builder and never runs tools/dist.js.
+# machine, during an update. So it is built by the scripts that call
+# electron-builder - tools/release.js and tools/dist.js - rather than left to be
+# remembered.
 #
-# It compiles with the .NET Framework compiler that ships with Windows, so
-# there is nothing to install first.
-beforeBuild: node tools/build-helper.js
-
+# It is deliberately NOT an electron-builder `beforeBuild` hook. That hook is
+# about node_modules, not general pre-build work: it is resolved as a module to
+# import rather than a command to run, and a truthy return tells electron-builder
+# that node_modules is being handled outside it. Using it for this produced
+# "Cannot find module '<project>\\node tools/build-helper.js'" and failed the
+# build. A plain call from the script is unambiguous and testable.
 extraResources:
   - from: build/update-helper
     to: update-helper

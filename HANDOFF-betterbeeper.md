@@ -89,20 +89,23 @@ constraint rather than a broken build.
 clearest description of the program and `check:update` reads `WinExe` and
 `net48` out of it.
 
-### The helper is now built by the packaging step
+### The helper is built by every packaging path
 
-`electron-builder.yml` carries `beforeBuild: node tools/build-helper.js`, and
-`tools/dist.js` calls the same script. Two things came out of chasing this.
+`tools/release.js` and `tools/dist.js` both call `tools/build-helper.js` before
+electron-builder. `dist:scratch` runs it through npm first. Nothing invokes
+electron-builder without it.
 
-`tools/release.js` and `dist:scratch` went straight to electron-builder and
-never ran `tools/dist.js`, which was the only thing that built the helper and
-the only thing that refused to package without it. `beforeBuild` covers every
-path in, including the ones that skip `dist.js`.
+This was originally an electron-builder `beforeBuild` hook, which **failed the
+1.19.0 release with "Cannot find module '<project>\node tools/build-helper.js'"**.
+`beforeBuild` is not a general pre-build hook: electron-builder resolves it as a
+module to `import`, not a command to run, and a truthy return tells
+electron-builder that node_modules is being handled outside it. Calling it
+directly from the script is unambiguous, and it is testable by running a
+release, which a hook in the config was not.
 
-An earlier version of this file said nothing built the helper and a release
-could silently ship without one. That was too wide. `dist.js` did guard it,
-with a good error message. The gap was narrower than described and is now
-closed rather than merely noted.
+The version bump for 1.19.0 had already been committed and pushed when that
+happened, but no tag was created and nothing was published, so the retry found
+the same 1.19.0 rather than skipping a version.
 
 ## Work done 2026-10-14
 

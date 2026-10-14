@@ -279,8 +279,28 @@ async function main() {
   run('git', ['push', 'origin', 'main'], { stdio: 'inherit' });
   console.log(`committed and pushed the version bump: ${git(['rev-parse', '--short', 'HEAD'])}`);
 
-  // 2. Build from that commit. A scratch output directory avoids the
-  //    stale-artefact lock that bit twice on release/win-unpacked.
+  // 2. Build the update handoff, then build from that commit. A scratch output
+  //    directory avoids the stale-artefact lock that bit twice on
+  //    release/win-unpacked.
+  //
+  //    The helper is built here rather than through an electron-builder hook.
+  //    `beforeBuild` is not a general pre-build hook: it is resolved as a module
+  //    to import, and its return value tells electron-builder whether node_modules
+  //    is being handled outside it. Pointing it at a command produced "Cannot find
+  //    module '<project>\node tools/build-helper.js'" and failed the release.
+  //    A plain call here is unambiguous, and this release is what proves it.
+  console.log('\nbuilding the update helper...');
+  try {
+    run(process.execPath, [path.join(__dirname, 'build-helper.js')]);
+  } catch {
+    fail(
+      'the update helper did not build.\n'
+      + '  It needs the .NET Framework compiler that ships with Windows, at\n'
+      + '  %WINDIR%\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe\n'
+      + '  A build without it installs, but cannot update itself.',
+    );
+  }
+
   const outDir = `release-v${nextVersion}`;
   const builderCli = path.join(ROOT, 'node_modules', 'electron-builder', 'cli.js');
   if (!fs.existsSync(builderCli)) fail(`electron-builder is not installed (${builderCli} missing)`);
