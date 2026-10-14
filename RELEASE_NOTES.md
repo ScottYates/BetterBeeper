@@ -1,11 +1,11 @@
-Better Beeper 1.18.6
+Better Beeper 1.19.0
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.18.6-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.19.0-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,6 +17,11 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
-- fix: the update window can be moved, and stops insisting on being on top (`d0ec943`)
+- docs: the typing request went out, and how the updater decides (`c61bd8c`)
+- build: the update helper needs no toolchain installed (`af7795a`)
+- docs: the working handoff, brought up to date (`d82d6f9`)
+- feat: mark every chat as read from the sidebar (`89d15a6`)
+- fix: the sync summary joins the status line, and its list only opens for work (`3a9b49b`)
+- fix: the inbox row did not follow the last message in an open chat (`481db73`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.
