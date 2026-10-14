@@ -13,6 +13,7 @@ import { initJobs } from './jobs.js';
 import { openNewChat, openSettings, showToolsCatalog, applyTheme } from './modals.js';
 import { initLayout } from './layout.js';
 import { checkForUpdatesOnLaunch } from './updates.js';
+import { newestPreviewEntry, mergeChatSummary } from './chat-preview.js';
 
 let bootstrapped = false;
 
@@ -193,7 +194,7 @@ function wireEvents() {
     switch (frame?.type) {
       case 'message.upserted': {
         applyMessageEvent(frame);
-        refreshChatSummary(frame.chatID);
+        refreshChatSummary(frame.chatID, newestPreviewEntry(frame));
         break;
       }
       case 'message.deleted': {
@@ -211,12 +212,19 @@ function wireEvents() {
   });
 }
 
-async function refreshChatSummary(chatID) {
+/**
+ * Re-read one chat after something changed in it.
+ *
+ * The preview is the newest message from the frame that triggered this, and it
+ * is not optional in practice. See chat-preview.js for the measurement behind
+ * why getChat cannot be trusted to bring one.
+ */
+async function refreshChatSummary(chatID, previewEntry) {
   if (!chatID) return;
   const fresh = await call(() => api.chats.get(chatID), { context: 'chat refresh', fallback: null });
   if (!fresh) return;
-  const existing = state.chats.get(chatID);
-  upsertChat({ ...existing, ...fresh });
+  const merged = mergeChatSummary(state.chats.get(chatID), fresh, previewEntry, chatID);
+  upsertChat(merged);
   if (state.activeChatID === chatID) {
     bus.emit('chat:updated', fresh);
   }
