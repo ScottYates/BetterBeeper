@@ -37,7 +37,7 @@
     "check:composer": "electron tools/composer-check.js",
     "check:bump": "node tools/bump-check.js",
     "check:live": "node tools/live-send.js",
-    "release": "node tools/release.js",
+    "release": "node tools/release.js --skip-install",
     "pack": "electron-builder --dir",
     "check:paste": "electron tools/paste-check.js",
     "check:paste-live": "node tools/paste-live.js",

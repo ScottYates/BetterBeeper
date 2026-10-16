@@ -22,12 +22,19 @@
  *
  * Usage:  node tools/release.js [--dry-run] [--skip-install] [--bump=patch|minor|major]
  *
- * --skip-install publishes without replacing the installed copy. That exists for
- * testing the update path itself: an app can only ever be offered a release that
- * is strictly newer than the one it is running, so to exercise the download you
- * need a published tag with the local install left behind on purpose. Publishing
- * 1.17.2 while 1.17.1 is installed is otherwise impossible, because the default
- * step 3 overwrites 1.17.1 with 1.17.2 and there is then nothing to be offered.
+ * --skip-install publishes without replacing the installed copy. `npm run
+ * release` passes it, which is the project's default as of 1.19.2: Scott
+ * installs updates by hand so the in-app update path gets exercised on a real
+ * account, and a release that silently overwrites the installed copy makes that
+ * impossible. An app can only ever be offered a release that is strictly newer
+ * than the one it is running, so to exercise the download you need a published
+ * tag with the local install left behind on purpose. Publishing 1.17.2 while
+ * 1.17.1 is installed is otherwise impossible, because an install would
+ * overwrite 1.17.1 with 1.17.2 and there would then be nothing to be offered.
+ *
+ * Running this file directly, without npm, still installs. The flag lives on the
+ * npm script rather than on the default so that installing stays available at
+ * all, but it is not the path to use.
  */
 const { execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
