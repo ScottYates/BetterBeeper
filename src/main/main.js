@@ -19,6 +19,7 @@ const ipc = require('./ipc');
 const { shouldNotify, notificationBody } = require('./notify');
 const flash = require('./flash');
 const updater = require('./updater');
+const { wireSpellContextMenu } = require('./context-menu');
 const mediaPath = require('./media-path');
 
 const isDev = process.argv.includes('--dev');
@@ -462,6 +463,13 @@ function createWindow() {
   mainWindow.webContents.on('did-finish-load', () => {
     applyTextScale(services?.settings?.read().textScale);
   });
+
+  // Spell-check suggestions on a right-click over a misspelled word, plus the
+  // usual text actions in the composer. Electron shows no context menu by
+  // default, so without this the squiggles in the thread are decoration: there
+  // is nothing to right-click them for. It declines anything that is not
+  // text-related, so it never appears on top of the thread's own image popover.
+  wireSpellContextMenu(mainWindow.webContents);
 
   // Remember the size and position across runs.
   mainWindow.on('resize', persistBounds);
