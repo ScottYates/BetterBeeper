@@ -208,9 +208,29 @@ async function main() {
   // ---- the renderer decides the number -------------------------------------
 
   const sidebarSrc = fs.readFileSync(sidebarPath, 'utf8');
-  add('the chat list is what the badge counts', () =>
-    /totalUnread\(chatList\(\), isArchived\)/.test(sidebarSrc)
-    || 'syncBadge does not count chatList() with the archive rule the sidebar uses');
+
+  // syncBadge's body, and nothing else in the file. What is asserted below is
+  // how two lines inside it fit together, so matching the declarations
+  // anywhere in sidebar.js would pass on a call that lives in some other
+  // function. The end is the first brace in column 0; every block nested in
+  // here is indented, so that is the function's own closing brace.
+  const syncBadgeSrc = (sidebarSrc.match(/function syncBadge\(\)\s*\{([\s\S]*?)\n\}/) || [])[1] || '';
+
+  // The list the badge counts is whichever local holds chatList(), whatever it
+  // is called. syncBadge binds that to a local because the mark-all-read
+  // button needs the same list, and this check used to pin the literal
+  // `totalUnread(chatList(), isArchived)` - so that refactor turned it red
+  // while the behaviour stayed correct. The name is an implementation
+  // detail; the wiring between the two lines is the invariant.
+  const badgeListVar = (syncBadgeSrc.match(/const (\w+) = chatList\(\)/) || [])[1];
+
+  add('the chat list is what the badge counts', () => {
+    if (!syncBadgeSrc) return 'could not find syncBadge in sidebar.js';
+    if (!badgeListVar) return 'syncBadge never calls chatList()';
+    // The same variable, and the same archive rule the sidebar filter uses.
+    return new RegExp(`totalUnread\\(\\s*${badgeListVar}\\s*,\\s*isArchived\\s*\\)`).test(syncBadgeSrc)
+      || `syncBadge does not count ${badgeListVar} with the archive rule the sidebar uses`;
+  });
   add('there is one copy of the counting rule', () => {
     const mainSrc = fs.readFileSync(badgePath, 'utf8');
     if (/\btotalUnread\b/.test(mainSrc)) return 'the main process still has its own totalUnread';
