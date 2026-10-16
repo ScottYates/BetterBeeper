@@ -276,7 +276,27 @@ export async function openChat(chatID, { focusMessageID: focusId } = {}) {
   renderChats();
 
   const listEl = $('#message-list');
-  listEl.append(el('div', { class: 'search-loading', text: 'Loading messages…' }));
+
+  // Draw what this window already has, before asking the store for it again.
+  //
+  // The store read below is local rather than a network call, so it is normally
+  // quick. It is still an IPC round trip into the main process, and that
+  // process is the one running the background syncs. Clicking back into a chat
+  // while a sync was in flight queued this behind the sync work, so the thread
+  // sat on "Loading messages..." showing none of a conversation it had in
+  // memory the whole time - which reads as the messages having been deleted,
+  // and is worse than a wait because the wait never ends on its own.
+  //
+  // hasMore is module state that survives a chat switch, so it is cleared
+  // first. This chat's scroll-back is whatever the store says below; until
+  // then the header belongs to no chat rather than to the last one.
+  hasMore = false;
+  const cached = renderableMessages(chatID);
+  if (cached.length) {
+    renderAll();
+  } else {
+    listEl.append(el('div', { class: 'search-loading', text: 'Loading messages…' }));
+  }
 
   // Read from the local store, not from Beeper. This returns before any
   // network call finishes, so a chat opens instantly and still opens when
@@ -286,13 +306,23 @@ export async function openChat(chatID, { focusMessageID: focusId } = {}) {
     fallback: { messages: [], complete: false, failed: true },
   });
 
-  clear(listEl);
-  renderedNodes.clear();
+  // The store is authoritative and the page wins - but only after tearing down
+  // what is on screen when there is nothing of the user's to lose. Clearing a
+  // thread that is already showing messages is the bug being fixed here.
+  if (!cached.length) {
+    clear(listEl);
+    renderedNodes.clear();
+  }
 
   if (page?.failed) {
-    listEl.append(
-      el('div', { class: 'empty-note', text: 'Could not load messages. Beeper may still be indexing this chat.' }),
-    );
+    // A store read that failed is not a reason to throw away messages the
+    // user was already looking at. With nothing cached there is nothing to
+    // fall back to, so the note is the whole story.
+    if (!cached.length) {
+      listEl.append(
+        el('div', { class: 'empty-note', text: 'Could not load messages. Beeper may still be indexing this chat.' }),
+      );
+    }
     return;
   }
 

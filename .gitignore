@@ -27,9 +27,11 @@ Thumbs.db
 /docs/*
 !/docs/network-glyphs.png
 
-# Generated from index.html by check:historyrender and check:sidebar on every run
+# Generated from index.html by check:historyrender, check:sidebar and
+# check:threadopen on every run
 /tools/.history-render-harness.html
 /tools/.sidebar-check-harness.html
+/tools/.thread-open-harness.html
 
 # Copied in by tools/download-shot.js to render a real video; not part of the repo
 /tools/.shot-video.mp4
