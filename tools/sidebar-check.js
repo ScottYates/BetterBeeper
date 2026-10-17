@@ -285,6 +285,13 @@ async function main() {
         /10 messages/.test(summary.textContent || '')
         || ('summary reads ' + JSON.stringify(summary.textContent)));
 
+      // The word itself, separately from the count. The count assertion above
+      // passes on any wording at all, so the heading could have gone back to
+      // any phrase that also mentions messages and this file would be green.
+      add('the idle heading reads Synced', () =>
+        /^Synced\b/.test(summary.textContent || '')
+        || ('summary reads ' + JSON.stringify(summary.textContent)));
+
       progress({ chatID: 'a1', state: 'backfilling', pages: 12, fetched: 240 });
       await new Promise((r) => setTimeout(r, 120));
 
@@ -565,8 +572,8 @@ async function main() {
         || 'the list was emptied rather than hidden, so reopening would start blank');
 
       // With the list shut, the heading is the only place a failure can still be
-      // seen, and "Chats synced" beside a chat that did not sync is the wrong
-      // thing to say.
+      // seen, and "Synced" beside a chat that did not sync is the wrong thing
+      // to say.
       progress({ chatID: 'bad2', state: 'failed', error: 'Beeper said no', fresh: true });
       await new Promise((r) => setTimeout(r, 150));
 
@@ -574,9 +581,12 @@ async function main() {
         (summary.textContent || '').includes('could not be synced')
         || ('the heading reads ' + JSON.stringify(summary.textContent)));
 
+      // Pinned to the word the heading actually says. Renaming it and leaving
+      // this alone would have turned a real rule into a check that can only
+      // pass: nothing starts with a string the heading no longer contains.
       add('the heading does not claim everything synced beside a failure', () =>
-        !(summary.textContent || '').startsWith('Chats synced')
-        || 'the heading still says Chats synced with a failure outstanding');
+        !(summary.textContent || '').startsWith('Synced')
+        || 'the heading still says Synced with a failure outstanding');
 
       add('the list stays shut for a failure alone', () =>
         panel.classList.contains('is-collapsed') || 'a failure with no work opened the list');

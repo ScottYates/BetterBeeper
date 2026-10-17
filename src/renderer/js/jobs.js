@@ -234,12 +234,12 @@ export function renderJobs() {
   } else if (failed.length) {
     // The list is shut whenever nothing is running, so this line is now the
     // only place a failure can still reach the user. Reporting it here is also
-    // what stops the heading reading "Chats synced" beside a chat that did not.
+    // what stops the heading reading "Synced" beside a chat that did not.
     summary.textContent = `${plural(failed.length, 'chat', 'chats')} could not be synced`;
   } else if (stats) {
-    summary.textContent = `Chats synced · ${plural(stats.messages || 0, 'message', 'messages')}`;
+    summary.textContent = `Synced · ${plural(stats.messages || 0, 'message', 'messages')}`;
   } else {
-    summary.textContent = 'Chats synced';
+    summary.textContent = 'Synced';
   }
 
   // The list is for work in flight, not a record of work finished. It used to

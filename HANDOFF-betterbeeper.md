@@ -157,14 +157,22 @@ and hidden entries. Logic lives in `src/renderer/js/chat-preview.js`; guarded by
 
 ### The sync summary joined the status line
 
-"Chats synced" is now the middle item of the status row, between `live` and the
+"Synced" is now the middle item of the status row, between `live` and the
 version, instead of a panel of its own above the footer. Its list no longer
 lingers: it opens only for work in flight. It used to hold the last couple of
 finished jobs between the chat list and the status line.
 
+The heading is the word "Synced", with the stored message count after it when
+there is one. It was "Chats synced" until Scott shortened it, and the count
+assertion in check:sidebar passes on any wording that mentions messages, so
+there is a separate check for the word itself. That one matters more than it
+looks: the failure check asks the heading NOT to read "Synced" while a sync has
+failed, and pinning that to the old wording would have made it a check that can
+only pass.
+
 A failed sync is the exception. With the list shut, the summary line is the only
 place it can still be seen, so the heading reads what could not be synced instead
-of "Chats synced" beside a chat that did not.
+of "Synced" beside a chat that did not.
 
 ### Mark all chats as read
 
