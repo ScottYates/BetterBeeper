@@ -35,25 +35,50 @@ else errorBox.hidden = false;
 
 img.addEventListener('error', () => { errorBox.hidden = false; });
 
-// scale is relative to "fit"; the initial fit is measured once the image loads.
+// scale is relative to the fitted size, which is applied to the element itself
+// once the image loads. See setFittedSize for why that is not done in CSS.
 const view = { scale: 1, x: 0, y: 0 };
-let fit = 1;
 let dragging = null;
 let moved = 0;
 
 function apply() {
-  img.style.transform = `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.scale * fit})`;
-  zoomLabel.textContent = `${Math.round(view.scale * fit * 100)}%`;
+  img.style.transform = `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.scale})`;
+  zoomLabel.textContent = `${Math.round(view.scale * 100)}%`;
   stage.classList.toggle('is-zoomed', view.scale > 1.01);
 }
 
-function measureFit() {
+/**
+ * Size the element to the image, fitted to the window.
+ *
+ * This used to be the stylesheet's job - `max-width: 100%` and `max-height:
+ * 100%` - with the transform scaling the result down again. Both were wrong,
+ * for the same reason and one worse than the other.
+ *
+ * The stage is a grid, and a grid item larger than its track is NOT centred by
+ * `place-items: center`: the track is auto-sized to the content and starts at
+ * the top of the container, so the overflow all goes downwards. `max-height:
+ * 100%` then has nothing definite to resolve against and behaves as `none`.
+ * The image laid out at 986x3287 in a 986x637 stage - clamped in width, not in
+ * height - so the grid put it at y=0 rather than centred, and the scale that
+ * followed shrank it about its own centre 1643px below the window. Measured:
+ * painted at 157x524, y=1381, entirely off the bottom of a 637px stage.
+ *
+ * That was reported as "the preview does not centre the image or fit it".
+ * Width was clamped twice and height not at all, so the picture came out at
+ * 82% of the size it should have been as well as in the wrong place.
+ *
+ * So the fitted size is set here, as real width and height, and the transform
+ * is left with only zoom and pan to do. The element is then never larger than
+ * the stage, which is the case the grid does centre.
+ */
+function setFittedSize() {
   const rect = stage.getBoundingClientRect();
-  // The image's own natural size, capped to whatever room the window gives it.
   const w = img.naturalWidth || rect.width;
   const h = img.naturalHeight || rect.height;
-  if (!w || !h) return 1;
-  return Math.min(rect.width / w, rect.height / h, 1);
+  if (!w || !h) return;
+  const k = Math.min(rect.width / w, rect.height / h, 1);
+  img.style.width = `${Math.round(w * k)}px`;
+  img.style.height = `${Math.round(h * k)}px`;
 }
 
 /**
@@ -161,12 +186,14 @@ window.addEventListener('keydown', (event) => {
 });
 
 // Refit when the window itself is resized, so the image never ends up cropped.
+// The zoom is kept and the fitted base moves under it; the viewer window is
+// not resizable by hand, so this only fires when the display changes.
 window.addEventListener('resize', () => {
-  fit = measureFit();
+  setFittedSize();
   apply();
 });
 
 img.addEventListener('load', () => {
-  fit = measureFit();
+  setFittedSize();
   reset();
 });

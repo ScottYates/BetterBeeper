@@ -28,10 +28,14 @@ html, body {
 .viewer-stage.is-dragging { cursor: grabbing; }
 
 .viewer-img {
-  max-width: 100%;
-  max-height: 100%;
   display: block;
-  /* Sized to fit the window, then scaled and panned with the transform. */
+  /* The fitted size is set on the element by setFittedSize in viewer.js, and
+     the transform carries only zoom and pan. See the comment there for why
+     max-width/max-height cannot do this job: a grid item larger than its track
+     is not centred, and max-height: 100% does not resolve against an
+     auto-sized track, so the image ended up below the window rather than in
+     it. The one rule that matters here is that the stage centres what it is
+     given - which it does, for anything that fits. */
   transform-origin: center center;
   will-change: transform;
   border-radius: 4px;
