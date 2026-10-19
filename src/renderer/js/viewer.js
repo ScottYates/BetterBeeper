@@ -104,8 +104,18 @@ function setScale(next, anchorX, anchorY) {
   if (clamped === view.scale) return;
 
   const rect = stage.getBoundingClientRect();
-  const cx = anchorX ?? rect.width / 2;
-  const cy = anchorY ?? rect.height / 2;
+  // The anchor arrives as a position in the stage. The image is laid out
+  // centred and only ever painted from there, so its untransformed centre is
+  // the centre of the stage, and the pan below is an offset measured from that
+  // same centre. Feeding it a stage position without taking off half the
+  // window mixes the two, and the error is not small.
+  //
+  // It read as a zoom around the pointer and was not one: the image drifted by
+  // -(ratio - 1) * half the stage on every step, which is the same amount
+  // wherever the pointer was. Measured -231px across and -149px down for a
+  // single wheel notch, from two completely different points on the picture.
+  const cx = anchorX === undefined ? 0 : anchorX - rect.width / 2;
+  const cy = anchorY === undefined ? 0 : anchorY - rect.height / 2;
   const ratio = clamped / view.scale;
   // Keep the point under the pointer (or the centre) pinned while scaling.
   view.x = cx - (cx - view.x) * ratio;

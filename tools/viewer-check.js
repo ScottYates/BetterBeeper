@@ -87,6 +87,48 @@ const harness = `
       || ('off centre by ' + Math.round(dx) + 'px across and ' + Math.round(dy) + 'px down');
   });
 
+  // Zooming has to hold the point under the pointer still, and nothing else
+  // here asked. Every wheel event above was dispatched from the centre of the
+  // stage, and the pan checks read the image's own position rather than
+  // watching one point stay where it was - so an anchor that was off by the
+  // half-size of the window would still have passed all of them.
+  const zoomAt = async (fx, fy, deltaY) => {
+    const before = img.getBoundingClientRect();
+    const p = {
+      x: before.left + fx * before.width,
+      y: before.top + fy * before.height,
+    };
+    stage.dispatchEvent(new WheelEvent('wheel', {
+      deltaY: deltaY, clientX: p.x, clientY: p.y, bubbles: true, cancelable: true,
+    }));
+    await wait(60);
+    const after = img.getBoundingClientRect();
+    const drift = {
+      x: (after.left + fx * after.width) - p.x,
+      y: (after.top + fy * after.height) - p.y,
+    };
+    document.getElementById('zoom-fit').click();
+    await wait(60);
+    return drift;
+  };
+
+  const middle = await zoomAt(0.5, 0.5, -240);
+  add('zooming holds the point under the pointer still', () =>
+    (Math.abs(middle.x) < 2 && Math.abs(middle.y) < 2)
+    || ('that point drifted ' + Math.round(middle.x) + 'px across and ' + Math.round(middle.y) + 'px down on one step'));
+
+  const quarter = await zoomAt(0.25, 0.25, -240);
+  add('and it holds a point well away from the middle too', () =>
+    (Math.abs(quarter.x) < 2 && Math.abs(quarter.y) < 2)
+    || ('that point drifted ' + Math.round(quarter.x) + 'px across and ' + Math.round(quarter.y) + 'px down'));
+
+  // The other direction. Same anchor, ratio below one instead of above it, so
+  // this is where a sign that only ever worked one way up would show.
+  const out = await zoomAt(0.5, 0.5, 240);
+  add('and zooming back out holds it still too', () =>
+    (Math.abs(out.x) < 2 && Math.abs(out.y) < 2)
+    || ('that point drifted ' + Math.round(out.x) + 'px across and ' + Math.round(out.y) + 'px down'));
+
   const zoomIn = async (times) => {
     const s = stage.getBoundingClientRect();
     for (let i = 0; i < times; i++) {
