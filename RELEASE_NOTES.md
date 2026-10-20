@@ -1,11 +1,11 @@
-Better Beeper 1.19.7
+Better Beeper 1.19.8
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.19.7-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.19.8-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,8 +17,7 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
-- docs: correct the verification numbers to the committed tree (`1bc56df`)
-- docs: refresh the handoff for the entity fix and v1.19.6 (`0e7ee7a`)
-- fix: text that arrives HTML-escaped is shown as it was written (`02d7d80`)
+- docs: point the handoff at v1.19.8 before it is cut (`645c07b`)
+- docs: refresh the handoff for the v1.19.7 release (`f7eb1a3`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.
