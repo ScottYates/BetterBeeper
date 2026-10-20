@@ -246,17 +246,20 @@ reference all render resolved.
 
 ## Verification status
 
-`npm run check:all` gives **40/40 suites passed** on this tree, 2026-10-20.
+`npm run check:all` gives **39/40 suites passed** on this tree, 2026-10-20.
 
-It was 39 suites before `check:entity` was added, and 35/37 on 2026-10-14: the
-one failure then was `check:released`, and it was the repo asking for a release
-rather than a defect, because `main` was ahead of v1.18.6 with nothing
-published for those commits.
+The one failure is `check:released`, and it is the repo asking for a release
+rather than a defect: `main` is ahead of v1.19.6, so the commits on top of that
+tag have no published release. It was green on the tree before this file's
+commits, and it goes green again the moment a release is cut. Everything else
+passes.
+
+It was 39 suites before `check:entity` was added, and 35/37 on 2026-10-14.
 
 | Check | Result |
 | --- | --- |
 | `check:update` | 59/59, after `check:update` gained a built helper to read the PE header of |
-| `check:released` | green, `main` is at v1.19.6 and that release is published |
+| `check:released` | red while `main` is ahead of the last tag, green once the release is cut |
 | `tools/update-redproof.js` | 17/17 mutations caught, no holes |
 
 Individually measured: `check:entity` 0 failing across 31 cases (new),
