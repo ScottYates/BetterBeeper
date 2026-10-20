@@ -1,7 +1,7 @@
 # BetterBeeper working handoff
 
 Last updated 2026-10-20, after the entity-decoding fix was released as
-v1.19.7.
+v1.19.7 and the handoff refresh behind it as v1.19.8.
 
 The version before this one described a v1.18.6-era tree. The one before that
 described a v1.17.0-era tree, claimed the GitHub CLI was not authenticated, and
@@ -26,6 +26,8 @@ one person's machine.
 Branch `main`, pushed and in sync with origin. This file is committed, so the
 tree is clean.
 
+The last few commits, with the `Release 1.19.8` commit sitting on top of them:
+
 ```
 eb4f13f  Release 1.19.7
 1bc56df  docs: correct the verification numbers to the committed tree
@@ -34,11 +36,16 @@ eb4f13f  Release 1.19.7
 1d2e6df  Release 1.19.6
 ```
 
-Release is **v1.19.7**, tagged on `eb4f13f`, which is the commit that carries
-the version. `package.json` says 1.19.7. The **installed app still reports
+Release is **v1.19.8**. The tag sits on the `Release 1.19.8` commit, which is
+the commit that carries the version, so `main` is not left ahead of its own
+tag. `package.json` says 1.19.8. The **installed app still reports
 `ProductVersion 1.19.6.0`**, on purpose: releases are published without
 installing, so the in-app update path has a newer release to offer and gets
-exercised on a real account. Install 1.19.7 from the app when you want it.
+exercised on a real account. Install it from the app when you want it.
+
+v1.19.7 carried the entity fix. v1.19.8 is the same code plus this file, cut
+because the repo's rule is a release after every push and `check:released`
+fails whenever `main` is ahead of the newest tag.
 
 `tools/release.js` owns the version field and derives the bump from commit
 subjects since the last tag, so do not hand-edit it.
@@ -249,34 +256,37 @@ when the HTML branch is given a decoder as well.
 Verified against the live account afterwards: the 10 live texts that carry a
 reference all render resolved.
 
-### Released as v1.19.7
+### Released as v1.19.7, and v1.19.8 for the handoff behind it
 
 `npm run release`, which publishes without installing so the in-app update path
-keeps something newer to offer. The tag `v1.19.7` sits on `eb4f13f`, the commit
-that carries the version, so `main` is not left ahead of its own tag.
+keeps something newer to offer. The tag sits on the commit that carries the
+version, so `main` is not left ahead of its own tag.
 
 The published asset was fetched back and hashed against the file that was built,
-because a CLI reporting success is not evidence that 90 MB arrived intact:
-`DEB02382026406DF4B17BD6D7B7CF9CD4BDB5ED566C5D0570AC8CCC02B4FE931`,
+because a CLI reporting success is not evidence that 90 MB arrived intact. For
+v1.19.7: `DEB02382026406DF4B17BD6D7B7CF9CD4BDB5ED566C5D0570AC8CCC02B4FE931`,
 95,349,139 bytes, matching the local build exactly.
+
+v1.19.8 is the same code plus the handoff refresh, cut for the reason above:
+`check:released` fails whenever `main` is ahead of the newest tag, so a push
+that only updates this file still needs a release behind it.
 
 ## Verification status
 
-`npm run check:all` gives **40/40 suites passed** on the v1.19.7 release commit
-`eb4f13f`, 2026-10-20. It was 39 suites before `check:entity` was added, and
-35/37 on 2026-10-14.
+`npm run check:all` gives **40/40 suites passed** on a release commit,
+2026-10-20. It was 39 suites before `check:entity` was added, and 35/37 on
+2026-10-14.
 
 `check:released` is the one that moves with the git state. It fails whenever
 `main` is ahead of the newest tag, because a push with no release behind it is
-exactly what it exists to catch. It was green on `eb4f13f` and went red again
-with the commit that refreshed this file. That is the rule working, not a
-defect: the fix is on `main`, a release exists for it, and the documentation
-for it landed after the release.
+exactly what it exists to catch. So it is green on a release commit and red on
+the commit after one, until the next release catches it up. That is the rule
+working, not a defect, and it is why a docs-only push still gets a release.
 
 | Check | Result |
 | --- | --- |
 | `check:update` | 59/59, after `check:update` gained a built helper to read the PE header of |
-| `check:released` | green on the release commit, red while `main` is ahead of the last tag |
+| `check:released` | green on a release commit, red while `main` is ahead of the last tag |
 | `tools/update-redproof.js` | 17/17 mutations caught, no holes |
 
 Individually measured: `check:entity` 0 failing across 31 cases (new),
