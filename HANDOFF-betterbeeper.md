@@ -1,11 +1,12 @@
 # BetterBeeper working handoff
 
-Last updated 2026-10-14, after mark-all-read and the two renderer fixes landed on
-top of v1.18.6.
+Last updated 2026-10-20, after the entity-decoding fix landed on top of
+v1.19.6.
 
-The version before this one described a v1.17.0-era tree, claimed the GitHub CLI
-was not authenticated, and described an update helper that is no longer on
-`main`. Do not trust any of it without re-checking.
+The version before this one described a v1.18.6-era tree. The one before that
+described a v1.17.0-era tree, claimed the GitHub CLI was not authenticated, and
+described an update helper that is no longer on `main`. Do not trust any of it
+without re-checking.
 
 ## Where everything is
 
@@ -26,14 +27,15 @@ Branch `main`, pushed and in sync with origin. This file is committed, so the
 tree is clean.
 
 ```
-89d15a6  feat: mark every chat as read from the sidebar
-3a9b49b  fix: the sync summary joins the status line, and its list only opens for work
-481db73  fix: the inbox row did not follow the last message in an open chat
-783d2ad  Release 1.18.6
+02d7d80  fix: text that arrives HTML-escaped is shown as it was written
+1d2e6df  Release 1.19.6
+ec24ddc  fix: the scroll wheel zoomed past the pointer instead of around it
+b5e0e38  Release 1.19.5
+767f870  fix: the image viewer did not centre the picture, or fit it
 ```
 
-Release is **v1.18.6**. `package.json` says 1.18.6, and the installed app reports
-`ProductVersion 1.18.6.0`. `tools/release.js` owns the version field and derives
+Release is **v1.19.6**. `package.json` says 1.19.6, and the installed app reports
+`ProductVersion 1.19.6.0`. `tools/release.js` owns the version field and derives
 the bump from commit subjects since the last tag, so do not hand-edit it.
 
 Local branches, none of them needed any more:
@@ -195,23 +197,71 @@ failed writes produces one toast per chat and the one message worth reading is
 buried. Selection and pacing live in `src/renderer/js/mark-all-read.js`, guarded
 by `npm run check:markallread` and three cases in `check:sidebar`.
 
+## Work done 2026-10-20
+
+### Text that arrives HTML-escaped is now shown as it was written
+
+Reported as "handle web encoded characters in display please, things like
+`&amp;` and the like".
+
+Some bridges hand Beeper text that has been HTML-escaped, so the API returns
+`&amp;` and `&quot;` where the sender wrote an ampersand and a quote. Measured
+against live data before changing anything: **359 messages, 8 of them carrying
+a reference, and not one literal `&` outside a reference.** So the escaping is
+Beeper's, not the sender typing. Only two reference names appear in the wild:
+`quot` and `amp`.
+
+The message body already handled it, by accident of how it is built: the HTML
+branch of `renderRichText` parses with DOMParser, and DOMParser resolves
+character references while it parses. The plain-text branch did not, and it
+escaped the text again on the way out, so a bubble showed `&amp;` where the
+sender wrote `&`. Everything that puts text into the DOM as a string had the
+same problem: the sidebar preview, the chat title, the draft, the reply quote,
+the reply preview, the editor and the copy action.
+
+**Decoding belongs at the display boundary, not at ingestion.** Decoding on the
+way into the store looks tidier and is wrong: the HTML branch resolves
+references itself, so a stored-and-decoded message gets resolved twice and
+`&amp;amp;` becomes `&`. Decoding where the text is drawn also keeps the value
+that goes back to Beeper equal to what the sender typed.
+
+`src/renderer/js/entities.js` holds the decoder and the clip, and touches no
+DOM. That is what lets `share.js` use it without giving up on being loadable on
+its own, and what lets the decoder be checked under plain node.
+
+`clipText` exists because a preview that ends in `&am` shows the reader the
+very thing the decoder is meant to hide. A cut inside a reference keeps the
+whole reference; a cut anywhere else is left alone, because dropping the
+fragment would throw away text the sender actually typed.
+
+`npm run check:entity` is new: 31 cases over the decoder, the clip, the chat
+title and the sidebar preview, each with a control case pinning the old
+behaviour. The render cases went into `check:rich`, because that is where the
+DOM branch already lives. Both fail on the old code, 12 and 3 cases
+respectively, and the one case guarding against decoding twice fails on its own
+when the HTML branch is given a decoder as well.
+
+Verified against the live account afterwards: the 10 live texts that carry a
+reference all render resolved.
+
 ## Verification status
 
-`npm run check:all` gives **35/37 suites passed** on this tree, 2026-10-14.
-The one failure is `check:released`, and it is the repo asking for a release
-rather than a defect: `main` is ahead of v1.18.6 with nothing published for
-those commits. Run `npm run release` when you want 1.18.7.
+`npm run check:all` gives **40/40 suites passed** on this tree, 2026-10-20.
 
-It was 34/36 before the helper build changed, with `check:update` also failing.
+It was 39 suites before `check:entity` was added, and 35/37 on 2026-10-14: the
+one failure then was `check:released`, and it was the repo asking for a release
+rather than a defect, because `main` was ahead of v1.18.6 with nothing
+published for those commits.
 
 | Check | Result |
 | --- | --- |
 | `check:update` | 59/59, after `check:update` gained a built helper to read the PE header of |
-| `check:released` | main is ahead of v1.18.6 with no release. Expected. |
+| `check:released` | green, `main` is at v1.19.6 and that release is published |
 | `tools/update-redproof.js` | 17/17 mutations caught, no holes |
 
-Individually measured the same day: `check:preview` 0 failing across 18 cases
-(new), `check:markallread` 0 failing across 18 cases (new), `check:sidebar` 58/58,
+Individually measured: `check:entity` 0 failing across 31 cases (new),
+`check:rich` 27/27, `check:preview` 0 failing across 18 cases,
+`check:markallread` 0 failing across 18 cases, `check:sidebar` 58/58,
 `check:unread` 32/32, `check:layout` 13/13, `check:api` 136/136,
 `check:composer` 17/17, `check:actions` 21/21, `check:about` 6/6,
 `check:installer` passing, `check:syntax` OK on every JS file and harness,
@@ -238,25 +288,23 @@ Always pair a new assertion with a case that proves the assertion can fail.
 
 ## Still outstanding
 
-1. **1.18.7 has not been cut.** `check:released` is red for exactly this reason.
-   `npm run release` can now build the helper here, so the machine is ready. It
-   will derive the version from the commits since v1.18.6.
-2. **The updater asks GitHub for a Release, not for a commit.** It calls
-   `releases/latest` and compares that tag against `app.getVersion()`, which is
-   what is installed. So it correctly says "up to date" at 1.18.6 even with five
-   commits on main: a commit is not a release and there is nothing for it to
-   offer. `check:released` is what catches that gap, which is why it is the one
-   red suite.
-3. **TLS warnings.** A log showed `handshake failed ... net_error -202`
+1. **TLS warnings.** A log showed `handshake failed ... net_error -202`
    (`ERR_CERT_ALT_NAME_INVALID`). The update prompt did appear, so the GitHub API
    call worked. Probably a different endpoint or an intercepting proxy.
    Unresolved.
-4. **Empty command windows** appeared after one interrupted update. Most likely
+2. **Empty command windows** appeared after one interrupted update. Most likely
    orphaned consoles. Never proven.
-5. **This file is now tracked**, which cuts both ways. Its git state section goes
+3. **This file is now tracked**, which cuts both ways. Its git state section goes
    stale silently, which is exactly how two earlier versions of it misled the
    reader. Refresh it as part of finishing a task rather than when someone
    notices it is wrong.
+
+Not outstanding any more, but still true and easy to trip over: the updater
+asks GitHub for a **Release**, not for a commit. It calls `releases/latest` and
+compares that tag against `app.getVersion()`, which is what is installed. So it
+says "up to date" while there are commits on main that were never released: a
+commit is not a release and there is nothing for it to offer. `check:released`
+is what catches that gap.
 
 ## Environment gotchas that cost time
 
