@@ -13,6 +13,7 @@ import {
   debounce,
   escapeHtml,
 } from './util.js';
+import { decodeEntities, clipText } from './entities.js';
 import { api, call, callOk, FAILED } from './api.js';
 import { mediaKind } from './media-kind.js';
 import {
@@ -26,6 +27,7 @@ import {
   removeMessage,
   isNoteToSelf,
   networkNameFor,
+  chatTitle,
   isPinned,
   setPinned,
   pinMap,
@@ -379,7 +381,7 @@ function renderHeader() {
   const chat = currentChat;
   if (!chat) return;
 
-  $('#thread-name').textContent = chat.title || 'Untitled chat';
+  $('#thread-name').textContent = chatTitle(chat) || 'Untitled chat';
   $('#thread-sub').textContent = chatSubtitle(chat);
 
   const avatarWrap = $('#thread-avatar');
@@ -387,7 +389,7 @@ function renderHeader() {
   const fresh = el(
     'div',
     { class: 'avatar-wrap' },
-    avatarNode(chat, chat.title, 'lg'),
+    avatarNode(chat, chatTitle(chat), 'lg'),
     networkBadge(chat, { size: 12 }),
   );
   avatarWrap.replaceWith(fresh);
@@ -1158,14 +1160,13 @@ function replyQuoteNode(message) {
   const original = (state.messages.get(message.chatID) || []).find(
     (m) => m.id === message.linkedMessageID,
   );
-  const text = original
-    ? original.text || original.type || ''
-    : 'Original message';
+  const raw = original ? original.text || original.type || '' : '';
+  const text = raw ? decodeEntities(raw) : 'Original message';
   const who = original?.senderName || '';
   return el('div', {
     class: 'reply-quote',
-    text: who ? `${who}: ${String(text).slice(0, 90)}` : String(text).slice(0, 90),
-    title: String(text).slice(0, 300),
+    text: who ? `${who}: ${clipText(text, 90)}` : clipText(text, 90),
+    title: clipText(text, 300),
   });
 }
 
@@ -1367,11 +1368,15 @@ function imageElement(attachment) {
 
 function editingNode(message) {
   const input = el('textarea', { rows: '2', style: { width: '100%' } });
-  input.value = message.text || '';
+  // The editor shows the text as it reads, so it compares against the same
+  // thing: otherwise opening a message and saving it untouched would look
+  // like an edit and post the decoded text back.
+  const original = decodeEntities(message.text || '');
+  input.value = original;
   const save = async () => {
     const text = input.value.trim();
     state.editing = null;
-    if (text && text !== message.text) {
+    if (text && text !== original) {
       await call(() => api.messages.edit(message.chatID, message.id, text), { context: 'edit message' });
       upsertMessage(message.chatID, { ...message, text, editedTimestamp: new Date().toISOString() });
       toast('Message edited', 'success', 1500);
@@ -1414,7 +1419,7 @@ export function messageMenuItems(anchor, message) {
   return [
     { label: 'Reply', onSelect: () => setReplyTo(message) },
     { label: 'React', onSelect: () => openEmojiPicker(anchor, (e) => toggleReaction(message, e)) },
-    { label: 'Copy text', onSelect: () => copyText(message.text || '') },
+    { label: 'Copy text', onSelect: () => copyText(decodeEntities(message.text || '')) },
     canShare(message)
       ? { label: 'Share with...', onSelect: () => openSharePicker(message, currentChat) }
       : null,
@@ -1677,7 +1682,7 @@ function updateReplyPreview() {
     return;
   }
   box.hidden = false;
-  $('#reply-preview-text').textContent = `Replying to: ${String(state.replyTo.text).slice(0, 120)}`;
+  $('#reply-preview-text').textContent = `Replying to: ${clipText(decodeEntities(state.replyTo.text), 120)}`;
 }
 
 async function pickAttachments() {

@@ -23,7 +23,7 @@
 
 import { $, el } from './util.js';
 import { api, call } from './api.js';
-import { state, bus } from './state.js';
+import { state, bus, chatTitle } from './state.js';
 
 /** Jobs worth a row of their own. The rest are counted, not listed. */
 const MAX_ROWS = 6;
@@ -147,7 +147,7 @@ const STATE_WORDS = {
 };
 
 function chatName(chatID) {
-  return state.chats.get(chatID)?.title || 'Chat';
+  return chatTitle(state.chats.get(chatID)) || 'Chat';
 }
 
 function plural(n, one, many) {

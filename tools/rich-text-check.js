@@ -31,7 +31,7 @@ async function main() {
   const src = pathToFileURL(utilPath).href;
   const harness = `
     (async () => {
-      const { renderRichText } = await import(${JSON.stringify(src)});
+      const { renderRichText, escapeHtml } = await import(${JSON.stringify(src)});
 
       // Parse a rendered fragment so assertions can talk about structure
       // rather than about exact markup.
@@ -177,6 +177,66 @@ async function main() {
         const root = parse(renderRichText('<p><a href="javascript:alert(1)">click</a></p>'));
         const a = root.querySelector('a');
         return !!a && !a.hasAttribute('href') || 'javascript href survived';
+      });
+
+      // --- character references -------------------------------------------
+      // Text that arrives HTML-escaped has to be shown as the sender wrote
+      // it. The HTML branch parses with DOMParser, which resolves references
+      // on its own, so the plain branch is the one that has to do it. Doing
+      // it in both would resolve them twice.
+
+      add('a plain message resolves its references', () => {
+        const root = parse(renderRichText('Tom &amp; Jerry said &quot;hi&quot;'));
+        const text = root.textContent;
+        return text === 'Tom & Jerry said "hi"' || ('text: ' + JSON.stringify(text));
+      });
+
+      add('a plain message keeps text that is not a reference', () => {
+        const root = parse(renderRichText('AT&T and R&D'));
+        const text = root.textContent;
+        return text === 'AT&T and R&D' || ('text: ' + JSON.stringify(text));
+      });
+
+      add('an html message resolves its references once', () => {
+        const root = parse(renderRichText('<p>Tom &amp; Jerry</p>'));
+        const text = root.textContent;
+        return text === 'Tom & Jerry' || ('text: ' + JSON.stringify(text));
+      });
+
+      add('a doubly encoded reference is resolved once, not twice', () => {
+        const root = parse(renderRichText('&amp;amp;'));
+        const text = root.textContent;
+        return text === '&amp;' || ('text: ' + JSON.stringify(text));
+      });
+
+      add('an html message resolves a doubly encoded reference once too', () => {
+        const root = parse(renderRichText('<p>&amp;amp;</p>'));
+        const text = root.textContent;
+        return text === '&amp;' || ('text: ' + JSON.stringify(text));
+      });
+
+      add('an escaped tag in plain text stays text', () => {
+        // Resolving the reference must not turn escaped markup into markup.
+        const root = parse(renderRichText('&lt;script&gt;alert(1)&lt;/script&gt;'));
+        const scripts = root.querySelectorAll('script').length;
+        return (!scripts && root.textContent === '<script>alert(1)</script>')
+          || ('text: ' + JSON.stringify(root.textContent) + ' scripts: ' + scripts);
+      });
+
+      add('a preview limit does not cut a reference in half', () => {
+        const root = parse(renderRichText('Tom &amp;amp; Jerry', 9));
+        const text = root.textContent;
+        return text === 'Tom &amp;' || ('text: ' + JSON.stringify(text));
+      });
+
+      add('CONTROL: the old plain-text path escaped the reference a second time', () => {
+        // What the bubble used to show: the escaped markup handed to innerHTML,
+        // which renders as the raw reference. If this ever fails, the control
+        // is no longer pinning the old behaviour.
+        const html = escapeHtml('Tom &amp; Jerry');
+        const text = parse(html).textContent;
+        return (html === 'Tom &amp;amp; Jerry' && text === 'Tom &amp; Jerry')
+          || ('html: ' + html + ' text: ' + JSON.stringify(text));
       });
 
       // Report from the page, decide the exit code in Node: the renderer has

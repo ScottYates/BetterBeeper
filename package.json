@@ -24,6 +24,7 @@
     "check:download": "electron tools/download-check.js",
     "check:focusread": "electron tools/focusread-check.js",
     "check:rich": "electron tools/rich-text-check.js",
+    "check:entity": "node tools/entity-check.mjs",
     "check:pin": "electron tools/pin-check.js",
     "check:archive": "electron tools/archive-check.js",
     "check:layout": "electron tools/layout-check.js",

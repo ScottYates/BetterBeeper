@@ -2,7 +2,7 @@
 
 import { $, el, clear, debounce, escapeHtml, initials, hueFor, fullTime, renderRichText } from './util.js';
 import { api, call } from './api.js';
-import { state, bus, chatList, upsertChat, deletedList, clearDeletedMessages } from './state.js';
+import { state, bus, chatList, chatTitle, upsertChat, deletedList, clearDeletedMessages } from './state.js';
 import { openModal, closeModal, toast } from './ui.js';
 import { avatarNode } from './sidebar.js';
 import {
@@ -914,12 +914,12 @@ export async function openMessageSearch(query) {
             bus.emit('chat:open', message.chatID, { focusMessageID: message.id });
           },
         },
-        avatarNode(chat, chat?.title || '?', 'sm'),
+        avatarNode(chat, chatTitle(chat) || '?', 'sm'),
         el(
           'div',
           { class: 'result-item-body' },
-          el('div', { class: 'result-item-sub', text: `${chat?.title || 'Chat'} · ${message.senderName || ''} · ${fullTime(message.timestamp)}` }),
-          el('div', { class: 'result-item-title', html: renderRichText(String(message.text || '').slice(0, 160)) }),
+          el('div', { class: 'result-item-sub', text: `${chatTitle(chat) || 'Chat'} · ${message.senderName || ''} · ${fullTime(message.timestamp)}` }),
+          el('div', { class: 'result-item-title', html: renderRichText(message.text || '', 160) }),
         ),
       ),
     );

@@ -1,5 +1,7 @@
 /** Minimal shared state + event bus for the renderer. */
 
+import { decodeEntities } from './entities.js';
+
 class Emitter {
   #handlers = new Map();
 
@@ -86,9 +88,21 @@ export function isNoteToSelf(chat) {
 /** Short display label Beeper uses for the pinned note chat. */
 export function noteLabel(chat) {
   if (!chat) return 'Note';
-  const title = String(chat.title || '').trim();
+  const title = chatTitle(chat).trim();
   if (/^signal note to self$/i.test(title)) return 'Note to self';
   return title.replace(/^note to self$/i, 'Note') || 'Note';
+}
+
+/**
+ * The chat title as the reader should see it.
+ *
+ * Titles arrive from the same bridges as message text, so they can arrive
+ * HTML-escaped as well. Every place that draws a title goes through here, so
+ * the one fix covers the sidebar, the thread header, the job list and the
+ * pickers.
+ */
+export function chatTitle(chat) {
+  return decodeEntities(String(chat?.title || ''));
 }
 
 /** Network identity for the small badge drawn on each avatar. */
@@ -554,7 +568,7 @@ export function setMessageDeleted(messageID, deleted) {
 /** One message rendered as a preview line. */
 function previewLineFor(message) {
   if (message.isDeleted) return 'Message deleted';
-  if (message.text) return message.text;
+  if (message.text) return decodeEntities(message.text);
   if (message.attachments?.length) return `📎 ${message.attachments[0].fileName || 'Attachment'}`;
   if (message.type && message.type !== 'TEXT') return message.type.toLowerCase();
   return '';

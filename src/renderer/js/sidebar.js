@@ -1,12 +1,14 @@
 /** Sidebar: network badges, chat list, filters, and unified search. */
 
 import { $, el, clear, listTime, initials, hueFor, debounce, renderRichText, escapeHtml } from './util.js';
+import { decodeEntities } from './entities.js';
 import { api, call } from './api.js';
 import {
   state,
   bus,
   chatList,
   chatPreviewText,
+  chatTitle,
   upsertChat,
   isNoteToSelf,
   noteLabel,
@@ -330,7 +332,7 @@ function noteItem(chat) {
     el(
       'div',
       { class: 'avatar-wrap' },
-      avatarNode(chat, chat.title, '', { lightbox: false }),
+      avatarNode(chat, chatTitle(chat), '', { lightbox: false }),
       networkBadge(chat),
     ),
     el(
@@ -424,7 +426,7 @@ function chatItem(chat) {
     el(
       'div',
       { class: 'avatar-wrap' },
-      avatarNode(chat, chat.title),
+      avatarNode(chat, chatTitle(chat)),
       networkBadge(chat),
     ),
     el(
@@ -433,7 +435,7 @@ function chatItem(chat) {
       el(
         'div',
         { class: 'chat-item-top' },
-        el('div', { class: 'chat-item-title', text: chat.title || 'Untitled chat' }),
+        el('div', { class: 'chat-item-title', text: chatTitle(chat) || 'Untitled chat' }),
         el('div', { class: 'chat-item-time', text: listTime(chat.lastActivity) }),
       ),
       el(
@@ -442,7 +444,7 @@ function chatItem(chat) {
         flags.length ? el('div', { class: 'chat-flags', text: flags.join(' ') }) : null,
         el('div', {
           class: 'chat-item-preview',
-          text: chat.draft?.text ? `Draft: ${chat.draft.text}` : preview,
+          text: chat.draft?.text ? `Draft: ${decodeEntities(chat.draft.text)}` : preview,
         }),
         unreadBadge(chat),
       ),

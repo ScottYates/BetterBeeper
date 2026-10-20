@@ -2,9 +2,10 @@
  * Sharing a message with someone else.
  *
  * The decisions, kept apart from the picking and the sending so they can be
- * checked without a window, a network, or a Beeper account. Nothing here
- * imports anything: the rules are the part worth testing, and they are only
- * worth testing if they can be loaded on their own.
+ * checked without a window, a network, or a Beeper account. The only thing
+ * imported here is the character-reference decoder, which touches no DOM, so
+ * the rules are still the part worth testing, and they are still worth
+ * testing because they can be loaded on their own.
  *
  * Two of these rules exist because of what the network actually does:
  *
@@ -13,6 +14,8 @@
  *   - Sending into a read-only chat fails, so those chats are not offered.
  *     A dead end in a picker is worse than a short list with a reason.
  */
+
+import { decodeEntities } from './entities.js';
 
 /** How many chats to offer before the user has typed anything. */
 export const CHAT_LIMIT = 20;
@@ -146,7 +149,7 @@ export function shareableChats(chats, { sourceChatID = '', query = '', limit = C
       if (!chat || chat.id === sourceChatID) return false;
       if (chat.mergedIntoChatID) return false;
       if (!needle) return true;
-      return matches(chat.title, needle);
+      return matches(decodeEntities(chat.title), needle);
     })
     .sort((a, b) => lastActivityOf(b) - lastActivityOf(a));
 
@@ -182,7 +185,7 @@ export function partitionShareable(list) {
 
 /** What the recipient's chat will be called, the way the sidebar calls it. */
 export function chatDisplayName(chat) {
-  const title = String(chat?.title || '').trim();
+  const title = decodeEntities(String(chat?.title || '')).trim();
   return title || 'Untitled chat';
 }
 

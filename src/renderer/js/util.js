@@ -1,5 +1,7 @@
 /** Tiny DOM + formatting helpers shared across the renderer. */
 
+import { decodeEntities, clipText } from './entities.js';
+
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -36,6 +38,12 @@ export function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+// ---------------------------------------------------------------------------
+// Character references
+// ---------------------------------------------------------------------------
+// The decoder itself lives in entities.js, which touches no DOM, so it can be
+// loaded and checked on its own.
 
 // ---------------------------------------------------------------------------
 // Time
@@ -120,17 +128,23 @@ export function relative(value) {
  * first. The sanitizer is DOM-based and drops every element and attribute that
  * is not explicitly permitted, so message content can never inject markup,
  * scripts, or remote resources.
+ *
+ * `limit` trims the text to a preview length. It is applied after the plain
+ * branch has resolved its character references, so the limit counts what the
+ * reader sees.
  */
-export function renderRichText(text) {
+export function renderRichText(text, limit) {
   const source = String(text ?? '');
   if (!source) return '';
 
   if (/<[a-z!/][\s\S]*>/i.test(source)) {
-    return renderHtmlMessage(source);
+    // DOMParser resolves character references as it parses, so this branch
+    // must not resolve them a second time.
+    return renderHtmlMessage(clipText(source, limit));
   }
 
   // Plain text / Markdown: fenced code blocks first, then inline formatting.
-  return source
+  return clipText(decodeEntities(source), limit)
     .split(/```/)
     .map((block, i) => {
       if (i % 2 === 1) {
