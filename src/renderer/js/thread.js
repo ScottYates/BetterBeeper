@@ -50,7 +50,7 @@ import {
   saveAttachments,
 } from './ui.js';
 import { setArchived } from './chat-actions.js';
-import { openSharePicker } from './modals.js';
+import { openSharePicker, openParticipants } from './modals.js';
 import { canShare } from './share.js';
 import {
   downloadableAttachments,
@@ -211,6 +211,12 @@ export function initThread() {
   $('#btn-pin').addEventListener('click', togglePin);
   $('#btn-archive').addEventListener('click', archiveActive);
   $('#btn-unread').addEventListener('click', markActiveUnread);
+
+  // Everyone in the conversation. A group's title is Beeper's own summary and
+  // it hides people behind an ellipsis, so this is where the full list is.
+  $('#btn-members')?.addEventListener('click', () => {
+    if (currentChat) openParticipants(currentChat);
+  });
 
   // Track "is the user at the bottom" synchronously, so a re-render that
   // happens mid-scroll cannot yank the view back down. Only the history

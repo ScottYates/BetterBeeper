@@ -17,6 +17,7 @@ import {
 } from './share.js';
 import { setJobStats } from './jobs.js';
 import { checkNow } from './updates.js';
+import { participantList } from './participants.js';
 
 /**
  * Text-size presets, as [zoom factor, label]. 1 is the size the UI was designed
@@ -97,6 +98,66 @@ function historyStatRow() {
 // ---------------------------------------------------------------------------
 // New chat
 // ---------------------------------------------------------------------------
+
+/**
+ * Everyone in a conversation.
+ *
+ * A group's title is Beeper's own summary and it hides people behind an
+ * ellipsis - "Eric, Hallie, Mike & 2 others" names three of five and says
+ * nothing about the other two. The app is handed every one of them and shows
+ * none of them, so this is where they are.
+ *
+ * The order and the naming live in participants.js so they can be checked
+ * rather than read.
+ */
+export function openParticipants(chat) {
+  const { people, hidden } = participantList(chat);
+
+  const list = el('div', { class: 'result-list' });
+  for (const person of people) {
+    list.append(
+      el(
+        'div',
+        { class: 'result-item is-static' },
+        avatarNode(person.participant, person.name, 'sm'),
+        el(
+          'div',
+          { class: 'result-item-body' },
+          el(
+            'div',
+            { class: 'result-item-title' },
+            person.name,
+            person.tags.length
+              ? el('span', { class: 'result-item-tag', text: person.tags.join(' · ') })
+              : null,
+          ),
+          person.detail ? el('div', { class: 'result-item-sub', text: person.detail }) : null,
+        ),
+      ),
+    );
+  }
+
+  const body = el(
+    'div',
+    {},
+    people.length
+      ? list
+      : el('div', { class: 'search-summary', text: 'Nobody else is in this conversation.' }),
+    hidden
+      ? el('div', {
+          class: 'search-summary',
+          text: `and ${hidden} more not shown`,
+        })
+      : null,
+  );
+
+  const who = people.length === 1 ? '1 person' : `${people.length} people`;
+  openModal({
+    title: `${chatTitle(chat) || 'Conversation'} - ${who}`,
+    body,
+    footer: [el('button', { class: 'btn', text: 'Close', onClick: closeModal })],
+  });
+}
 
 export function openNewChat() {
   const results = el('div', { class: 'result-list' });

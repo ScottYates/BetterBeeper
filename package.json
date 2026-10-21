@@ -46,6 +46,7 @@
     "check:preview": "node tools/chat-preview-check.mjs",
     "check:markallread": "node tools/mark-all-read-check.mjs",
     "check:refreshchats": "node tools/refresh-chats-check.mjs",
+    "check:participants": "node tools/participants-check.mjs",
     "check:settings": "node tools/settings-check.js",
     "check:imagecopy": "node tools/image-copy-check.js",
     "check:imagecopy-live": "node tools/image-copy-live.js",
