@@ -1,7 +1,7 @@
 # BetterBeeper working handoff
 
-Last updated 2026-10-21, as the chat list refresh button was released as
-v1.20.0.
+Last updated 2026-10-21, as the unread fix and the people list were released
+as v1.21.0, on top of the chat list refresh button released as v1.20.0.
 
 The version before this one described a v1.18.6-era tree. The one before that
 described a v1.17.0-era tree, claimed the GitHub CLI was not authenticated, and
@@ -26,27 +26,28 @@ one person's machine.
 Branch `main`, pushed and in sync with origin. This file is committed, so the
 tree is clean.
 
-The last few commits, with the `Release 1.20.0` commit sitting on top of them:
+The last few commits, with the `Release 1.21.0` commit sitting on top of them:
 
 ```
+e9fcc06  feat: show everyone in a conversation
+b02d8a5  fix: opening a chat clears its unread badge
+4b1125b  Release 1.20.0
+7380b24  docs: point the handoff at v1.20.0 before it is cut
 6f1d349  feat: refresh the chat list by hand and report what arrived
-a648ac8  Release 1.19.8
-645c07b  docs: point the handoff at v1.19.8 before it is cut
-f7eb1a3  docs: refresh the handoff for the v1.19.7 release
-eb4f13f  Release 1.19.7
 ```
 
-Release is **v1.20.0**. The tag sits on the `Release 1.20.0` commit, which is
+Release is **v1.21.0**. The tag sits on the `Release 1.21.0` commit, which is
 the commit that carries the version, so `main` is not left ahead of its own
-tag. `package.json` says 1.20.0. The **installed app still reports
+tag. `package.json` says 1.21.0. The **installed app still reports
 `ProductVersion 1.19.8.0`**, on purpose: releases are published without
 installing, so the in-app update path has a newer release to offer and gets
 exercised on a real account. Install it from the app when you want it.
 
-v1.20.0 carried the chat list refresh button. It is a minor bump, because
-`tools/release.js` derives the level from the commit subjects since the last
-tag and a `feat:` is a minor. v1.19.7 carried the entity fix and v1.19.8 was
-the same code plus the handoff behind it, cut for the reason below.
+v1.21.0 carried the unread fix and the people list. It is a minor bump,
+because `tools/release.js` derives the level from the commit subjects since
+the last tag and the `feat:` is the higher of the two. v1.20.0 carried the
+chat list refresh button, v1.19.7 the entity fix, and v1.19.8 was the same
+code plus the handoff behind it.
 
 `tools/release.js` owns the version field and derives the bump from commit
 subjects since the last tag, so do not hand-edit it.
@@ -328,11 +329,112 @@ its row came back with no duplicate. The first attempt at that test picked a
 chat from the second page and reported nothing new, which is correct - a
 refresh reads the first page only, and that chat was never going to be in it.
 
+## Work done 2026-10-21
+
+### Opening a chat clears its unread badge
+
+Reported as "when i click on a chat conversation on the left side it should
+clear the unread notifications for that chat".
+
+It did not, and it had not for a long time. Clicking an unread chat opened it,
+drew its messages, and left the badge exactly where it was. Measured against
+the live account: the client still said `unreadCount: 2`, the server still said
+`unreadCount: 2`, and the mark-read call was never even made.
+
+The gate was the newest message's `isUnread` flag, and no message this app has
+ever received carries that field. Beeper's message objects are id, chatID,
+accountID, senderID, senderName, timestamp, sortKey, type, text, isSender,
+isDeleted and mentions - measured in the local store and against
+`GET /v1/chats/{id}/messages`, which agree. A gate on a field that is never
+there never passes, so the "mark a chat as read when I open it" setting was
+dead code that happened to look alive.
+
+The gate is now the chat's unread count, which is the same number the sidebar
+badge and the app icon are drawn from, and the only unread signal the app has.
+The rule lives in `unread.js` next to the count the icon is drawn from,
+because it is the one thing that must not exist twice, and the sidebar's own
+copy now reads it from there.
+
+The whole chat is marked, with no message id. A read receipt is a position in
+the conversation, and this app does not always have the newest message to
+point at - the local store can be behind the server, and
+`GET /v1/chats/{chatID}` carries no preview at all. Omitting the id is what
+`POST /v1/chats/{chatID}/read` means by marking the whole chat, and it is the
+call the mark-all-read button already makes.
+
+Both copies of the chat have to agree afterwards. The badge and the app icon
+are drawn from `state.chats`, the thread header reads `currentChat`, and
+"mark as unread" reads that one to put the count back, so a chat that says
+"2 unread" in one place and "read" in the other is worse than either.
+
+Verified against the live account: the negative path leaves the count alone,
+and the positive path - clicking an unread chat - took the client from 1 to 0,
+took the badge off the row, and took the server from 1 to 0.
+
+### The check that passed over it
+
+`check:focusread` had a case called "opening a chat marks the unread message
+read", and it had been passing, over a feature that did not work.
+
+Two things were wrong with it, and both are the kind that hide a defect.
+
+The assertion was written as `add(name, condition ? true : 'the reason it
+failed')`, and the helper coerced the value with `!!`. A reason is a non-empty
+string, so a failed assertion was truthy and the case passed. The helper now
+compares against `true` and nothing else, and the same trap was closed in
+`check:share`, `check:api`, `check:settings` and the two live tools, which
+were safe only because every call they make happens to pass a real boolean.
+
+The fixture invented the field the app does not have. It put `isUnread` on its
+messages, so the rule was exercised against data the app never receives. The
+fixture is now the real shape, and a case asserts that it carries no unread
+flag, so a fixture that quietly grows the missing field again would fail
+rather than hide the bug a second time.
+
+There is a control case now, which is the shape the other checks in this repo
+use: it runs the old gate against the real fixture and shows that it would
+have declined this very chat. `check:focusread` is 27 cases.
+
+### Everyone in a conversation
+
+Reported as "also see if you can add an option to show all users in a
+conversation".
+
+A group's title is Beeper's own summary and it hides people behind an
+ellipsis: "Eric, Hallie, Mike & 2 others" names three of five and says nothing
+about the other two. The app is handed every one of them - the chat's
+participants carry the full list, and a total that agrees with it - and shows
+none of them.
+
+There is now a people button at the head of the thread header's action row,
+and it opens a list of everyone in the conversation. Measured on the live
+account, a group whose title names three people lists all six, and the two the
+title hid are in it.
+
+Each person is named the way a person would be: their name if Beeper has one,
+otherwise their address, otherwise their number, otherwise the raw id. The
+second line is a way of reaching them - a number or an address - and only when
+it is not the same thing as the name. A Beeper account's id is its username
+with an @ in front, so printing both is noise, and a contact whose name is its
+own number has nothing left to add. A number written two ways is one number:
+"+1 515-988-3633" and "+15159883633" are the same person, and the number is
+not printed under itself.
+
+You come first, then the admins, then everyone else, each group by name, and
+the order is the same every time, because a list that reshuffles itself
+between openings is a list nobody can learn. A person is listed once: Beeper
+can list the same account twice in a conversation that has been merged.
+
+The naming and the order live in `src/renderer/js/participants.js`, pure, so
+`npm run check:participants` can exercise them - 36 cases, with a control that
+the list shows more people than the title names.
+
 ## Verification status
 
-`npm run check:all` gives **41/41 suites passed** on the v1.20.0 release
-commit, 2026-10-21. It was 40 suites before `check:refreshchats` was added,
-39 before `check:entity`, and 35/37 on 2026-10-14.
+`npm run check:all` gives **42/42 suites passed** on the v1.21.0 release
+commit, 2026-10-21. It was 41 suites before `check:participants` was added, 40
+before `check:refreshchats`, 39 before `check:entity`, and 35/37 on
+2026-10-14.
 
 `check:released` is the one that moves with the git state. It fails whenever
 `main` is ahead of the newest tag, because a push with no release behind it is
@@ -349,7 +451,9 @@ working, not a defect, and it is why a docs-only push still gets a release.
 Individually measured: `check:entity` 0 failing across 31 cases,
 `check:rich` 27/27, `check:preview` 0 failing across 18 cases,
 `check:markallread` 0 failing across 18 cases,
-`check:refreshchats` 0 failing across 24 cases (new),
+`check:refreshchats` 0 failing across 24 cases,
+`check:focusread` 27/27,
+`check:participants` 0 failing across 36 cases (new),
 `check:sidebar` 66/66, `check:unread` 32/32, `check:layout` 13/13,
 `check:api` 136/136, `check:composer` 17/17, `check:actions` 21/21,
 `check:about` 6/6, `check:installer` passing, `check:syntax` OK on every JS
@@ -373,6 +477,17 @@ cannot participate in a spread either way).
 General lesson this keeps re-confirming: a static or text-level check will happily
 bless broken code. Three times this project a suite passed over a real defect.
 Always pair a new assertion with a case that proves the assertion can fail.
+
+The fourth one is the sharpest, because it was not a bad assertion at all. The
+assertion in `check:focusread` was correct, the helper it was handed to was
+the problem, and the fixture it ran against was a shape the app never sees.
+Three things had to be true for a dead feature to pass a green check: the rule
+gated on a field Beeper does not send, the fixture invented that field, and
+the helper coerced a failure reason into a pass. Fix any one of them and the
+bug shows. The general rule that follows: **a fixture must be the real shape,
+and a helper must not be able to turn a failure into a pass.** Compare against
+`true` and nothing else, and keep the "everything is load-bearing" case, which
+is what would have caught the unused condition.
 
 ## Still outstanding
 
