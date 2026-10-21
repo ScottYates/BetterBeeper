@@ -103,7 +103,7 @@ async function main() {
   };
 
   const cases = [];
-  const add = (name, ok, detail) => cases.push([name, Boolean(ok), detail || '']);
+  const add = (name, ok, detail) => cases.push([name, ok === true, detail || '']);
 
   const CHIPS = `(() => {
     const wrap = document.getElementById('attachment-chips');

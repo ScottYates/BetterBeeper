@@ -59,6 +59,7 @@ import {
   videoSaveTitle,
 } from './download.js';
 import { shouldMarkOnReturn } from './focus-read.js';
+import { chatIsUnread } from './unread.js';
 import { avatarNode, renderChats, networkBadge } from './sidebar.js';
 import { renderJobs } from './jobs.js';
 
@@ -676,28 +677,57 @@ async function markActiveUnread() {
   closeThread();
 }
 
+/**
+ * Mark the open chat read.
+ *
+ * The gate is the chat's unread count, because that is the number the sidebar
+ * badge and the app icon are drawn from, and because it is the only unread
+ * signal this app has.
+ *
+ * It used to be the newest message's `isUnread` flag, and that field does not
+ * exist. Measured against the live account, Beeper's message objects are id,
+ * chatID, accountID, senderID, senderName, timestamp, sortKey, type, text,
+ * isSender, isDeleted and mentions - and the local store keeps exactly those.
+ * A gate on a field that is never there never passes, so opening a chat never
+ * marked it read: the badge stayed on, and the server still counted the chat
+ * as unread afterwards.
+ *
+ * The whole chat is marked, with no message id. A read receipt is a position
+ * in the conversation, and this app does not always have the newest message
+ * to point at - the local store can be behind the server, and
+ * `GET /v1/chats/{chatID}` does not carry a preview at all. Omitting the id
+ * is what `POST /v1/chats/{chatID}/read` means by marking the whole chat, and
+ * it is the call the mark-all-read button already makes.
+ */
 async function markRead() {
   const chat = currentChat;
   if (!chat) return;
   if (state.settings.markReadOnOpen === false) return;
-  const messages = state.messages.get(chat.id) || [];
-  const last = messages[messages.length - 1];
-  if (!last?.isUnread) return;
 
-  // markRead runs on every re-render, so a message Beeper refuses to mark read
-  // (a 500 from a bridge, a deleted message) would otherwise retry forever and
+  // The sidebar draws the badge from state.chats, so that is the number this
+  // has to agree with.
+  const summary = state.chats.get(chat.id) || chat;
+  if (!chatIsUnread(summary)) return;
+
+  // markRead runs on every re-render, so a chat Beeper refuses to mark read
+  // (a 500 from a bridge, a deleted chat) would otherwise retry forever and
   // bury the thread under identical error toasts.
-  const key = `${chat.id}/${last.id}`;
+  const key = chat.id;
   const failedAt = failedMarks.get(key);
   if (failedAt && Date.now() - failedAt < MARK_RETRY_AFTER) return;
 
-  const result = await callOk(() => api.chats.markRead(chat.id, last.id), { context: 'mark read' });
+  const result = await callOk(() => api.chats.markRead(chat.id), { context: 'mark read' });
   if (result === FAILED) {
     failedMarks.set(key, Date.now());
     return;
   }
 
-  state.chats.set(chat.id, { ...state.chats.get(chat.id), unreadCount: 0 });
+  // Both copies have to agree. The badge and the app icon are drawn from
+  // state.chats, and the thread header reads currentChat - and "mark as
+  // unread" reads that one to put the count back, so a chat that says
+  // "2 unread" in one place and "read" in the other is worse than either.
+  state.chats.set(chat.id, { ...summary, unreadCount: 0 });
+  currentChat = { ...currentChat, unreadCount: 0 };
   renderChats();
 }
 
@@ -715,14 +745,12 @@ async function markRead() {
  */
 export function markReadOnReturn() {
   const chat = currentChat;
-  const messages = chat ? state.messages.get(chat.id) || [] : [];
-  const last = messages[messages.length - 1];
 
   const should = shouldMarkOnReturn({
     windowFocused: document.hasFocus(),
     windowVisible: document.visibilityState === 'visible',
     hasOpenChat: Boolean(chat),
-    lastMessageUnread: Boolean(last?.isUnread),
+    chatUnread: chatIsUnread(chat ? state.chats.get(chat.id) || chat : null),
     markReadEnabled: state.settings.markReadOnOpen !== false,
   });
   if (!should) return false;

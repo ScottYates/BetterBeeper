@@ -50,7 +50,7 @@ async function main() {
       const St = await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'src', 'renderer', 'js', 'state.js')).href)});
 
       const cases = [];
-      const add = (name, ok, detail) => cases.push([name, !!ok, detail || '']);
+      const add = (name, ok, detail) => cases.push([name, ok === true, detail || '']);
       const check = (name, fn) => {
         try {
           const r = fn();

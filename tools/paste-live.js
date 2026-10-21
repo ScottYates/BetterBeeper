@@ -125,7 +125,7 @@ async function main() {
   };
 
   const cases = [];
-  const add = (name, ok, detail) => cases.push([name, Boolean(ok), detail || '']);
+  const add = (name, ok, detail) => cases.push([name, ok === true, detail || '']);
 
   // Always test against a note-to-self chat, never a real person. The reload
   // above dropped whatever was selected, so pick the built-in Note chat back.

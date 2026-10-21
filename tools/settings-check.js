@@ -31,7 +31,7 @@ const path = require('node:path');
 const { SettingsStore, DEFAULTS } = require('../src/main/settings.js');
 
 const results = [];
-const add = (name, ok, detail) => results.push({ name, ok, detail });
+const add = (name, ok, detail) => results.push({ name, ok: ok === true, detail });
 
 function scratch() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-settings-'));

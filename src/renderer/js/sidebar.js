@@ -18,7 +18,7 @@ import {
   localStateVersion,
 } from './state.js';
 import { toast, openLightbox } from './ui.js';
-import { totalUnread } from './unread.js';
+import { totalUnread, chatIsUnread } from './unread.js';
 import { setArchived } from './chat-actions.js';
 import { networkIconMarkup, badgeBackground } from './network-icons.js';
 
@@ -285,15 +285,14 @@ function rowFlags(chat) {
 /**
  * Does this row have something the user has not read yet?
  *
- * Beeper reports it as a count, so the count is the whole test. The row class
- * and the badge both read this one predicate on purpose: styling the row from
- * a second, separately-written condition is how you end up with a tinted bold
+ * The rule lives in unread.js, next to the count the app icon is drawn from,
+ * because it is the one thing that must not exist twice. The row class and
+ * the badge both read that one predicate on purpose: styling the row from a
+ * second, separately-written condition is how you end up with a tinted bold
  * row next to a badge that says the chat is read, or the reverse. One source,
  * two consequences.
  */
-function isUnread(chat) {
-  return Number(chat?.unreadCount || 0) > 0;
-}
+const isUnread = chatIsUnread;
 
 /** The unread count pill, or nothing at all for a chat that is read. */
 function unreadBadge(chat) {

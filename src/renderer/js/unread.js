@@ -26,3 +26,29 @@ export function totalUnread(chats, isArchived = (chat) => Boolean(chat && chat.i
   }
   return total;
 }
+
+/**
+ * Is this chat unread?
+ *
+ * The count is the whole test, because the count is the only unread signal
+ * this app has. The row class in the sidebar, the badge beside it and the
+ * number on the app icon are all drawn from this one predicate on purpose:
+ * styling a row from a second, separately-written condition is how you end
+ * up with a tinted bold row next to a badge that says the chat is read, or
+ * the reverse. One source, several consequences.
+ *
+ * The count is read through Number() because it arrives from JSON and can
+ * arrive as anything, and `Number(x) > 0` also does the right thing for a
+ * chat whose count is missing, which is zero.
+ *
+ * It used to be the newest message's `isUnread` flag, which was never right:
+ * no message this app has ever seen carries that field. Measured against the
+ * live account, Beeper's message objects are id, chatID, accountID,
+ * senderID, senderName, timestamp, sortKey, type, text, isSender, isDeleted
+ * and mentions, and the local store keeps exactly those. A gate on a field
+ * that does not exist never passes, which is why opening a chat never marked
+ * it read.
+ */
+export function chatIsUnread(chat) {
+  return Number(chat?.unreadCount || 0) > 0;
+}

@@ -46,7 +46,10 @@ async function main() {
         get: (_t, ns) => new Proxy({}, {
           get: (_t2, fn) => (...args) => {
             if (ns === 'chats' && fn === 'markRead') {
-              marks.push({ chatID: args[0], messageID: args[1] });
+              // A null messageID means the whole chat was marked. The old
+              // call passed the newest message id, so this has to be able to
+              // tell the two apart.
+              marks.push({ chatID: args[0], messageID: args[1] === undefined ? null : args[1] });
               return Promise.resolve({ ok: true, data: {} });
             }
             if (ns === 'chats' && fn === 'get') return Promise.resolve({ ok: true, data: CHAT });
@@ -62,7 +65,13 @@ async function main() {
       const St = await import(${JSON.stringify(stateURL)});
 
       const cases = [];
-      const add = (name, ok, detail) => cases.push([name, !!ok, detail || '']);
+      // Strict on purpose. A case that fails has to say so: an assertion that
+      // returns a detail string as its value would otherwise be truthy, and
+      // the whole case would pass while proving nothing. That is not a
+      // hypothetical - it is how this file passed over a real defect for
+      // months, so the helper compares against true and nothing else.
+      const add = (name, ok, detail) =>
+        cases.push([name, ok === true, ok === true ? '' : String(detail || ok)]);
       const check = (name, fn) => {
         try {
           const r = fn();
@@ -72,7 +81,7 @@ async function main() {
 
       const ALL = {
         windowFocused: true, windowVisible: true,
-        hasOpenChat: true, lastMessageUnread: true, markReadEnabled: true,
+        hasOpenChat: true, chatUnread: true, markReadEnabled: true,
       };
 
       // ---- the rule -------------------------------------------------------
@@ -81,8 +90,8 @@ async function main() {
         FR.shouldMarkOnReturn(ALL) === true || 'the rule said no');
 
       check('nothing to read, nothing is marked', () =>
-        FR.shouldMarkOnReturn(Object.assign({}, ALL, { lastMessageUnread: false })) === false
-          || 'an already-read message was marked again');
+        FR.shouldMarkOnReturn(Object.assign({}, ALL, { chatUnread: false })) === false
+          || 'an already-read chat was marked again');
 
       check('a window without focus marks nothing', () =>
         FR.shouldMarkOnReturn(Object.assign({}, ALL, { windowFocused: false })) === false
@@ -106,7 +115,7 @@ async function main() {
       check('every condition is load-bearing', () => {
         // Flip each one and the rule must stop saying yes. This is what catches
         // a condition written into the signature but never actually consulted.
-        const keys = ['windowFocused', 'windowVisible', 'hasOpenChat', 'lastMessageUnread', 'markReadEnabled'];
+        const keys = ['windowFocused', 'windowVisible', 'hasOpenChat', 'chatUnread', 'markReadEnabled'];
         const inert = keys.filter((k) => FR.shouldMarkOnReturn(Object.assign({}, ALL, { [k]: !ALL[k] })) === true);
         return inert.length === 0 || 'these had no effect: ' + inert.join(', ');
       });
@@ -116,9 +125,18 @@ async function main() {
       const CHAT = { id: '!focus-check', title: 'Focus chat', unreadCount: 1, lastActivity: '2026-03-04T00:00:00Z' };
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-      const msg = (id, isUnread) => ({
+      // The real shape of a message in this app.
+      //
+      // Measured against the live account, Beeper's message objects are id,
+      // chatID, accountID, senderID, senderName, timestamp, sortKey, type,
+      // text, isSender, isDeleted and mentions. There is no isUnread flag,
+      // and a fixture that invented one is how this file went on passing over
+      // a real defect: the rule was "is the newest message flagged unread",
+      // exercised against a field the app never receives, so it never fired
+      // and the check never noticed.
+      const msg = (id) => ({
         id: id, chatID: CHAT.id, text: 'hello', senderName: 'Someone',
-        isSender: false, isUnread: isUnread,
+        isSender: false,
         timestamp: new Date().toISOString(), sortKey: id, attachments: [],
       });
 
@@ -140,11 +158,24 @@ async function main() {
       const seedOpen = async (settings) => {
         marks.length = 0;
         St.state.chats.set(CHAT.id, Object.assign({}, CHAT));
-        St.state.messages.set(CHAT.id, [msg('~check:old', false)]);
+        St.state.messages.set(CHAT.id, [msg('~check:old')]);
         St.state.settings = Object.assign({}, St.state.settings, { markReadOnOpen: true }, settings || {});
         T.closeThread();
         await asWindow(true, true, async () => { await T.openChat(CHAT.id); await wait(150); });
+        const made = marks.slice();
         marks.length = 0;
+        return made;
+      };
+
+      /**
+       * The chat has unread messages again.
+       *
+       * The unread count is what the mark path gates on, so a case that needs
+       * an unread chat sets it. The count is zero after the open above, which
+       * is the point: opening the chat is what clears it.
+       */
+      const becomesUnread = (count = 1) => {
+        St.state.chats.set(CHAT.id, Object.assign({}, St.state.chats.get(CHAT.id), { unreadCount: count }));
       };
 
       // Wire the real event path. Without this the bus has no listener, nothing
@@ -156,7 +187,7 @@ async function main() {
       /** A message lands while the window is in the background. */
       const arrivesWhileAway = async (id) => {
         const list = St.state.messages.get(CHAT.id) || [];
-        St.state.messages.set(CHAT.id, list.concat([msg(id, true)]));
+        St.state.messages.set(CHAT.id, list.concat([msg(id)]));
         St.state.chats.set(CHAT.id, Object.assign({}, St.state.chats.get(CHAT.id), { unreadCount: 1 }));
         St.bus.emit('messages:changed', { chatID: CHAT.id });
         await asWindow(false, false, async () => { await wait(200); });
@@ -164,20 +195,47 @@ async function main() {
 
       // ---- opening still works --------------------------------------------
 
-      await seedOpen();
-      add('opening a chat still marks it read', () =>
-        (async () => true)() && marks.length === 0
-          ? true
-          : 'the fixture did not settle');
+      const opened = await seedOpen();
+      add('opening a chat with unread messages marks it read',
+        opened.length === 1 && opened[0].chatID === CHAT.id
+          ? true : JSON.stringify(opened));
+
+      add('and the count the user can see comes back to zero',
+        (St.state.chats.get(CHAT.id) || {}).unreadCount === 0
+          ? true : 'unreadCount=' + (St.state.chats.get(CHAT.id) || {}).unreadCount);
 
       {
+        becomesUnread();
         marks.length = 0;
         await asWindow(true, true, async () => { await T.closeThread(); await wait(60); await T.openChat(CHAT.id); await wait(200); });
-        add('opening a chat marks the unread message read',
-          marks.length === 1 && marks[0].messageID === '~check:old' ? true : JSON.stringify(marks));
+        add('opening a chat marks the whole chat read',
+          marks.length === 1 && marks[0].messageID === null
+            ? true : JSON.stringify(marks));
       }
 
       // ---- the bug this is about ------------------------------------------
+
+      // The control for the whole file. The old gate was the newest message's
+      // isUnread flag. No message this app has ever received carries that
+      // field, so the old gate declined every chat, and the badge stayed on
+      // while the server kept counting the chat as unread. The fixture is now
+      // the real shape, and this asserts it, because a fixture that quietly
+      // grows the missing field again would hide the same bug a second time.
+      check('the fixture carries no unread flag, because no real message has one', () => {
+        const messages = St.state.messages.get(CHAT.id) || [];
+        if (!messages.length) return 'the fixture has no messages';
+        return messages.every((m) => !('isUnread' in m))
+          ? true
+          : 'the fixture invented a field the app does not have';
+      });
+
+      check('CONTROL: the old gate would have declined this very chat', () => {
+        const list = St.state.messages.get(CHAT.id) || [];
+        const last = list[list.length - 1];
+        if (!last) return 'no message in the fixture';
+        if (last.isUnread) return 'the old gate would have fired, so it was not the problem';
+        return true;
+      });
 
       await seedOpen();
       await arrivesWhileAway('~check:whileaway');
@@ -198,8 +256,8 @@ async function main() {
         marks.length = 0;
         const acted = await asWindow(true, true, async () => T.markReadOnReturn());
         await wait(250);
-        add('coming back marks the waiting message read',
-          (acted === true && marks.length === 1 && marks[0].messageID === '~check:whileaway')
+        add('coming back marks the waiting chat read',
+          (acted === true && marks.length === 1 && marks[0].messageID === null)
             ? true
             : JSON.stringify({ acted: acted, marks: marks }));
       }
@@ -234,19 +292,18 @@ async function main() {
 
       {
         // Already read: returning to the window must not mark anything again.
-        // This is the behaviour behind the lastMessageUnread condition, and it
-        // is the only place a hardcoded true would show up.
+        // This is the behaviour behind the chatUnread condition, and it is
+        // the only place a hardcoded true would show up.
         //
         // Seeded here rather than reusing whatever the previous block left:
         // that one turned the setting off, and a check that depends on its
         // neighbour's state is not a check.
         await seedOpen();
         marks.length = 0;
-        const list = St.state.messages.get(CHAT.id) || [];
-        St.state.messages.set(CHAT.id, list.map((m) => Object.assign({}, m, { isUnread: false })));
+        St.state.chats.set(CHAT.id, Object.assign({}, St.state.chats.get(CHAT.id), { unreadCount: 0 }));
         const acted = await asWindow(true, true, async () => T.markReadOnReturn());
         await wait(150);
-        add('an already-read message is not marked on return',
+        add('an already-read chat is not marked on return',
           (acted === false && marks.length === 0) ? true : JSON.stringify({ acted: acted, marks: marks }));
       }
 

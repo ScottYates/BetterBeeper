@@ -8,22 +8,22 @@
  * re-rendered, so nothing ever re-asked. Coming back to the window is exactly
  * when the answer changes, and it has to be asked explicitly.
  *
- * Kept separate and pure for the same reason as unread.js: the rule is four
- * conditions, and four conditions written twice is how one of them drifts.
+ * Kept separate and pure for the same reason as unread.js: the rule is five
+ * conditions, and five conditions written twice is how one of them drifts.
  */
 
 /**
  * @param windowFocused     document.hasFocus()
  * @param windowVisible     document.visibilityState === 'visible'
  * @param hasOpenChat       a chat is open in the thread
- * @param lastMessageUnread the newest message in it is still marked unread
+ * @param chatUnread        that chat still has unread messages
  * @param markReadEnabled   the "mark a chat as read when I open it" setting
  */
 export function shouldMarkOnReturn({
   windowFocused = false,
   windowVisible = false,
   hasOpenChat = false,
-  lastMessageUnread = false,
+  chatUnread = false,
   markReadEnabled = true,
 } = {}) {
   // Not looking at it is the whole question. This runs on focus and on
@@ -39,7 +39,7 @@ export function shouldMarkOnReturn({
   // not want a return to the window quietly reading things either.
   if (!markReadEnabled) return false;
 
-  return Boolean(lastMessageUnread);
+  return Boolean(chatUnread);
 }
 
 export default shouldMarkOnReturn;

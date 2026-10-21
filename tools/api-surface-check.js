@@ -182,7 +182,7 @@ function main() {
   const used = parseRendererUsage(RENDERER);
 
   const results = [];
-  const add = (name, ok, detail) => results.push({ name, ok, detail });
+  const add = (name, ok, detail) => results.push({ name, ok: ok === true, detail });
 
   for (const [key, { channel, push }] of preload) {
     if (push) continue;
