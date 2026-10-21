@@ -421,10 +421,12 @@ select { cursor: pointer; }
 }
 .job-more { padding: 3px 0; font-size: 11px; color: var(--text-faint); }
 
-/* The refresh button spins while its own chat is being worked on, and only
-   then - a permanently turning arrow would just be decoration. */
-#btn-refresh.is-busy { animation: job-spin 1s linear infinite; }
-@keyframes job-spin { to { transform: rotate(360deg); } }
+/* A button that is working right now spins while it works, and only then - a
+   permanently turning arrow would just be decoration. Both refresh buttons
+   use this: the one that re-syncs the open chat, and the one that re-reads
+   the chat list. */
+.icon-btn.is-busy { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---- Pinned "Note" row ----
    Notes are ordinary rows now. Beeper pins them to the top of the list; it

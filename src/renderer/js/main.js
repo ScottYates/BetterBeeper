@@ -15,6 +15,7 @@ import { initLayout } from './layout.js';
 import { checkForUpdatesOnLaunch } from './updates.js';
 import { newestPreviewEntry, mergeChatSummary } from './chat-preview.js';
 import { markAllTargets, inBatches } from './mark-all-read.js';
+import { newChats, refreshOutcome } from './chat-list-refresh.js';
 
 let bootstrapped = false;
 
@@ -138,8 +139,16 @@ async function enterApp() {
   // its chat unread in the list, so nothing is missed by not being pre-selected.
 }
 
+/**
+ * How many chats one page of the list holds.
+ *
+ * The list is read a page at a time, and the sidebar shows everything the
+ * app has. A hundred is a page Beeper answers quickly.
+ */
+const CHAT_PAGE = 100;
+
 async function loadChats() {
-  const res = await call(() => api.chats.list({ limit: 100 }), { context: 'chats', fallback: null });
+  const res = await call(() => api.chats.list({ limit: CHAT_PAGE }), { context: 'chats', fallback: null });
   if (!res) {
     renderChats();
     return;
@@ -148,7 +157,7 @@ async function loadChats() {
 
   // Pull a second page so the sidebar has real history depth.
   if (res.hasMore && res.oldestCursor) {
-    call(() => api.chats.list({ limit: 100, cursor: res.oldestCursor, direction: 'before' }), {
+    call(() => api.chats.list({ limit: CHAT_PAGE, cursor: res.oldestCursor, direction: 'before' }), {
       context: 'chats page 2',
     }).then((page2) => {
       if (!page2) return;
@@ -251,11 +260,90 @@ function refreshInboxOnFocus() {
   if (Date.now() - lastInboxRefresh < INBOX_REFRESH_AGE) return;
   lastInboxRefresh = Date.now();
 
-  call(() => api.chats.list({ limit: 100 }), { context: 'inbox refresh', fallback: null }).then((res) => {
+  call(() => api.chats.list({ limit: CHAT_PAGE }), { context: 'inbox refresh', fallback: null }).then((res) => {
     if (!res || state.searchQuery) return;
     for (const chat of res.items || []) upsertChat(chat);
     renderChats();
   });
+}
+
+/**
+ * Whether a manual refresh is already running.
+ *
+ * The button is not disabled while it runs - the arrow spinning is the
+ * signal, the same way the thread's own refresh button works - so a second
+ * click can land while the first call is still in flight. Two calls would
+ * race each other's answer about which chats are new.
+ */
+let chatListRefreshing = false;
+
+/**
+ * Re-read the chat list and say what turned up.
+ *
+ * The app already re-reads the list when the window comes back to the front,
+ * but that is a background nicety: at most once a minute, silently, and only
+ * when the window regains focus. A chat that arrived while the app was
+ * sitting in the background with the window already focused is not noticed
+ * at all. This is the version the user asks for, so it ignores the focus
+ * timer and always says what it found - silence after a deliberate click is
+ * indistinguishable from a button that does nothing.
+ *
+ * Only the first page is read. A new chat arrives at the top of the list, so
+ * it is in the first page by definition, and the deeper history already in
+ * the state is not what the user is asking about.
+ */
+async function refreshChatList() {
+  if (chatListRefreshing) return;
+  chatListRefreshing = true;
+
+  const button = $('#btn-refresh-chats');
+  setChatListRefreshBusy(button, true);
+
+  // The ids that were on screen before the call. A chat in the response that
+  // is not among them did not exist when the list was last read.
+  const known = new Set(state.chats.keys());
+  const hadChats = known.size > 0;
+
+  try {
+    const res = await call(() => api.chats.list({ limit: CHAT_PAGE }), {
+      context: 'chat list refresh',
+      fallback: null,
+      throwOnError: true,
+    });
+
+    const items = res?.items || [];
+    const fresh = newChats(known, items);
+    for (const chat of items) upsertChat(chat);
+
+    renderChats();
+    // A chat that just arrived has to be subscribed to, or its messages
+    // never arrive over the live socket.
+    subscribeVisibleChats();
+
+    const outcome = refreshOutcome(fresh, hadChats, items.length);
+    toast(outcome.message, outcome.kind, outcome.kind === 'success' ? 2600 : 1800);
+  } catch (err) {
+    toast(err?.message || 'Could not refresh the chat list', 'error', 4000);
+  } finally {
+    chatListRefreshing = false;
+    setChatListRefreshBusy(button, false);
+  }
+}
+
+/**
+ * The refresh button's busy state.
+ *
+ * The arrow spins while the call is in flight and the tooltip says so, which
+ * is the same pair of signals the thread's own refresh button uses. The
+ * button is not disabled: a disabled button loses focus, and the tooltip
+ * would stop appearing over it at exactly the moment it matters.
+ */
+function setChatListRefreshBusy(button, busy) {
+  const btn = button || $('#btn-refresh-chats');
+  if (!btn) return;
+  btn.classList.toggle('is-busy', busy);
+  btn.setAttribute('aria-busy', busy ? 'true' : 'false');
+  btn.dataset.tip = busy ? 'Checking for new chats' : 'Check for new chats';
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +510,7 @@ async function boot() {
   $('#btn-new-chat').addEventListener('click', () => openNewChat());
   $('#btn-settings').addEventListener('click', () => openSettings());
   $('#btn-mark-all-read').addEventListener('click', () => markAllChatsRead());
+  $('#btn-refresh-chats').addEventListener('click', () => refreshChatList());
 
   // Beeper keeps search hidden until the magnifier is clicked.
   $('#btn-focus-search').addEventListener('click', () => {

@@ -1,7 +1,8 @@
 # BetterBeeper working handoff
 
-Last updated 2026-10-20, after the entity-decoding fix was released as
-v1.19.7 and the handoff refresh behind it as v1.19.8.
+Last updated 2026-10-20, after the chat list refresh button was added and
+verified against the live account, on top of the entity-decoding fix released
+as v1.19.7 and the handoff refresh behind it as v1.19.8.
 
 The version before this one described a v1.18.6-era tree. The one before that
 described a v1.17.0-era tree, claimed the GitHub CLI was not authenticated, and
@@ -23,8 +24,9 @@ one person's machine.
 
 ## Git state
 
-Branch `main`, pushed and in sync with origin. This file is committed, so the
-tree is clean.
+Branch `main`, pushed and in sync with origin. The tree is **not** clean: it
+carries the chat list refresh button, which is written and verified but not
+committed. Everything below about releases describes the committed state.
 
 The last few commits, with the `Release 1.19.8` commit sitting on top of them:
 
@@ -271,10 +273,67 @@ v1.19.8 is the same code plus the handoff refresh, cut for the reason above:
 `check:released` fails whenever `main` is ahead of the newest tag, so a push
 that only updates this file still needs a release behind it.
 
+### The chat list can be refreshed by hand
+
+Reported as "add a refresh button for the list of chats to check if a new chat
+has come in".
+
+The app already re-reads the chat list when the window comes back to the
+foreground, but that is a background nicety: at most once a minute, silently,
+and only when the window regains focus. A chat that arrived while the app was
+sitting in the background with the window already focused was not noticed at
+all, and there was no way to ask.
+
+The button is the leftmost in the sidebar's tool row and reads as the same
+circled-arrow glyph (U+21BB) the thread's own refresh button uses - the same
+mark for the same meaning in two different headers. It spins while the call
+is in flight and the tooltip says "Checking for new chats", which is the same
+pair of signals the thread's refresh button uses. The button is not disabled
+while it works: a disabled button loses focus, and the tooltip would stop
+appearing over it at exactly the moment it matters. A second click is dropped
+by a flag instead, because two calls would race each other's answer about
+which chats are new.
+
+**The answer is a diff on ids, not on titles or timestamps.** A chat that was
+renamed, or that received a message, is the same chat and is not new;
+comparing anything else would announce it as one. The check carries a control
+case that runs a title-based diff on purpose and shows it making exactly that
+mistake.
+
+The report separates two cases that read differently. With the list already
+on screen, "no new chats" is a real answer and is said out loud, because
+silence after a deliberate click is indistinguishable from a button that does
+nothing. With nothing loaded before the call, every chat in the response is
+new to the app but new to nobody, so the line is "Loaded N chats" instead.
+
+Only the first page is read. A new chat arrives at the top of the list, so it
+is in the first page by definition; the deeper history already in the state is
+not what the user is asking about. Measured on the live account: 199 chats in
+the state, 100 on the first page.
+
+Selection and wording live in `src/renderer/js/chat-list-refresh.js`, pure, so
+`npm run check:refreshchats` can exercise them under plain node. The DOM side
+- the button exists, sits in the sidebar header, is not the thread's button,
+and spins only while it is working - is in `check:sidebar`, which grew from 58
+to 66 cases.
+
+The spin rule was generalised rather than duplicated: `#btn-refresh.is-busy`
+became `.icon-btn.is-busy`, and `job-spin` was renamed to `spin`. Both refresh
+buttons now share one rule and one keyframe.
+
+Verified against the live account in the running app. The negative path
+reported "No new chats" over the real list. The positive path was produced by
+removing one chat from the renderer's known set and letting the refresh fetch
+it back: the toast said "1 new chat", the chat went back into the state, and
+its row came back with no duplicate. The first attempt at that test picked a
+chat from the second page and reported nothing new, which is correct - a
+refresh reads the first page only, and that chat was never going to be in it.
+
 ## Verification status
 
-`npm run check:all` gives **40/40 suites passed** on a release commit,
-2026-10-20. It was 39 suites before `check:entity` was added, and 35/37 on
+`npm run check:all` gives **41/41 suites passed**, 2026-10-20, with the chat
+list refresh button uncommitted in the tree. It was 40 suites before
+`check:refreshchats` was added, 39 before `check:entity`, and 35/37 on
 2026-10-14.
 
 `check:released` is the one that moves with the git state. It fails whenever
@@ -289,13 +348,14 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
 | `tools/update-redproof.js` | 17/17 mutations caught, no holes |
 
-Individually measured: `check:entity` 0 failing across 31 cases (new),
+Individually measured: `check:entity` 0 failing across 31 cases,
 `check:rich` 27/27, `check:preview` 0 failing across 18 cases,
-`check:markallread` 0 failing across 18 cases, `check:sidebar` 58/58,
-`check:unread` 32/32, `check:layout` 13/13, `check:api` 136/136,
-`check:composer` 17/17, `check:actions` 21/21, `check:about` 6/6,
-`check:installer` passing, `check:syntax` OK on every JS file and harness,
-`check:ascii` OK.
+`check:markallread` 0 failing across 18 cases,
+`check:refreshchats` 0 failing across 24 cases (new),
+`check:sidebar` 66/66, `check:unread` 32/32, `check:layout` 13/13,
+`check:api` 136/136, `check:composer` 17/17, `check:actions` 21/21,
+`check:about` 6/6, `check:installer` passing, `check:syntax` OK on every JS
+file and harness, `check:ascii` OK.
 
 `tools/update-redproof.js` is not in the sweep, because it mutates the working
 tree on purpose. Run it by hand after touching the updater. It mutates a real

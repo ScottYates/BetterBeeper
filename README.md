@@ -264,6 +264,7 @@ npm run check:imagecopy # which image URLs may be copied, and how they map back 
 npm run check:api       # the preload surface, the IPC handlers and the renderer agree
 npm run check:settings  # a save keeps unknown settings and drops the retired ones
 npm run check:sidebar   # rows are reused rather than repainted, and jobs are visible
+npm run check:refreshchats # the chat list refresh tells the truth about what arrived
 npm run check:visibility # hiding and locally deleting a message, and surviving a restart
 npm run check:gif       # an animated GIF really advances frames on screen
 npm run check:gifrebuild # the thread is only rebuilt when what it draws changed

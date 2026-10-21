@@ -494,6 +494,48 @@ async function main() {
       });
       progress({ chatID: 'a1', state: 'done', pages: 2, fetched: 40 });
 
+      // --- the chat list refresh button --------------------------------------
+      //
+      // The sidebar's own refresh, which re-reads the list of chats. It has to
+      // be a separate control from the thread's #btn-refresh, which re-syncs
+      // the chat that is open, and a shared id would leave one of them
+      // pointing at the other.
+      const listRefresh = document.getElementById('btn-refresh-chats');
+
+      add('the sidebar has a refresh button for the chat list', () =>
+        !!listRefresh || 'no #btn-refresh-chats in the sidebar');
+
+      add('it sits in the sidebar header', () =>
+        !!document.querySelector('.sidebar-header #btn-refresh-chats')
+        || 'the chat list refresh button is not in the sidebar header');
+
+      add('it is not the thread refresh button', () =>
+        document.querySelectorAll('#btn-refresh-chats').length === 1
+        && document.getElementById('btn-refresh') !== listRefresh
+        || 'the two refresh buttons share an element');
+
+      add('it says what it does', () =>
+        !!listRefresh.getAttribute('aria-label') && !!listRefresh.dataset.tip
+        || 'the button has no label or no tooltip');
+
+      // A permanently turning arrow is just decoration, so it must sit still
+      // until it has something to do.
+      add('the refresh arrow is still when nothing is happening', () =>
+        getComputedStyle(listRefresh).animationName === 'none'
+        || ('the animation is ' + getComputedStyle(listRefresh).animationName));
+
+      listRefresh.classList.add('is-busy');
+
+      add('and it turns while it is working', () =>
+        getComputedStyle(listRefresh).animationName !== 'none'
+        || 'the busy state does not spin the arrow');
+
+      listRefresh.classList.remove('is-busy');
+
+      add('and it stops again when the work is done', () =>
+        getComputedStyle(listRefresh).animationName === 'none'
+        || ('the animation is ' + getComputedStyle(listRefresh).animationName));
+
       // --- work too quick to report ------------------------------------------
       //
       // Opening a chat queues a sync of it, and for a chat that is already up
