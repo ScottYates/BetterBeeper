@@ -38,10 +38,12 @@ b02d8a5  fix: opening a chat clears its unread badge
 
 Release is **v1.21.0**. The tag sits on the `Release 1.21.0` commit, which is
 the commit that carries the version, so `main` is not left ahead of its own
-tag. `package.json` says 1.21.0. The **installed app still reports
-`ProductVersion 1.19.8.0`**, on purpose: releases are published without
-installing, so the in-app update path has a newer release to offer and gets
-exercised on a real account. Install it from the app when you want it.
+tag. `package.json` says 1.21.0. The **installed app reported
+`ProductVersion 1.20.0.0` on 2026-10-21**, behind this release on purpose:
+releases are published without installing, so the in-app update path has a
+newer release to offer and gets exercised on a real account. That number
+moves whenever it is installed from, so read the date with it. Install it
+from the app when you want it.
 
 v1.21.0 carried the unread fix and the people list. It is a minor bump,
 because `tools/release.js` derives the level from the commit subjects since
