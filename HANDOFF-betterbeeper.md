@@ -1,8 +1,7 @@
 # BetterBeeper working handoff
 
-Last updated 2026-10-20, after the chat list refresh button was added and
-verified against the live account, on top of the entity-decoding fix released
-as v1.19.7 and the handoff refresh behind it as v1.19.8.
+Last updated 2026-10-21, as the chat list refresh button was released as
+v1.20.0.
 
 The version before this one described a v1.18.6-era tree. The one before that
 described a v1.17.0-era tree, claimed the GitHub CLI was not authenticated, and
@@ -24,30 +23,30 @@ one person's machine.
 
 ## Git state
 
-Branch `main`, pushed and in sync with origin. The tree is **not** clean: it
-carries the chat list refresh button, which is written and verified but not
-committed. Everything below about releases describes the committed state.
+Branch `main`, pushed and in sync with origin. This file is committed, so the
+tree is clean.
 
-The last few commits, with the `Release 1.19.8` commit sitting on top of them:
+The last few commits, with the `Release 1.20.0` commit sitting on top of them:
 
 ```
+6f1d349  feat: refresh the chat list by hand and report what arrived
+a648ac8  Release 1.19.8
+645c07b  docs: point the handoff at v1.19.8 before it is cut
+f7eb1a3  docs: refresh the handoff for the v1.19.7 release
 eb4f13f  Release 1.19.7
-1bc56df  docs: correct the verification numbers to the committed tree
-0e7ee7a  docs: refresh the handoff for the entity fix and v1.19.6
-02d7d80  fix: text that arrives HTML-escaped is shown as it was written
-1d2e6df  Release 1.19.6
 ```
 
-Release is **v1.19.8**. The tag sits on the `Release 1.19.8` commit, which is
+Release is **v1.20.0**. The tag sits on the `Release 1.20.0` commit, which is
 the commit that carries the version, so `main` is not left ahead of its own
-tag. `package.json` says 1.19.8. The **installed app still reports
-`ProductVersion 1.19.6.0`**, on purpose: releases are published without
+tag. `package.json` says 1.20.0. The **installed app still reports
+`ProductVersion 1.19.8.0`**, on purpose: releases are published without
 installing, so the in-app update path has a newer release to offer and gets
 exercised on a real account. Install it from the app when you want it.
 
-v1.19.7 carried the entity fix. v1.19.8 is the same code plus this file, cut
-because the repo's rule is a release after every push and `check:released`
-fails whenever `main` is ahead of the newest tag.
+v1.20.0 carried the chat list refresh button. It is a minor bump, because
+`tools/release.js` derives the level from the commit subjects since the last
+tag and a `feat:` is a minor. v1.19.7 carried the entity fix and v1.19.8 was
+the same code plus the handoff behind it, cut for the reason below.
 
 `tools/release.js` owns the version field and derives the bump from commit
 subjects since the last tag, so do not hand-edit it.
@@ -331,10 +330,9 @@ refresh reads the first page only, and that chat was never going to be in it.
 
 ## Verification status
 
-`npm run check:all` gives **41/41 suites passed**, 2026-10-20, with the chat
-list refresh button uncommitted in the tree. It was 40 suites before
-`check:refreshchats` was added, 39 before `check:entity`, and 35/37 on
-2026-10-14.
+`npm run check:all` gives **41/41 suites passed** on the v1.20.0 release
+commit, 2026-10-21. It was 40 suites before `check:refreshchats` was added,
+39 before `check:entity`, and 35/37 on 2026-10-14.
 
 `check:released` is the one that moves with the git state. It fails whenever
 `main` is ahead of the newest tag, because a push with no release behind it is
