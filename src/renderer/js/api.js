@@ -110,6 +110,7 @@ export const api = {
     open: (chatID) => window.beeper.history.open(chatID),
     page: (chatID, opts) => window.beeper.history.page(chatID, opts),
     upsert: (chatID, message) => window.beeper.history.upsert(chatID, message),
+    renameSenders: (chatID, names) => window.beeper.history.renameSenders(chatID, names),
     search: (query, opts) => window.beeper.history.search(query, opts),
     status: () => window.beeper.history.status(),
     refresh: (chatID) => window.beeper.history.refresh(chatID),

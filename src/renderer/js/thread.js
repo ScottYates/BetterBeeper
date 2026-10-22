@@ -62,6 +62,7 @@ import { shouldMarkOnReturn } from './focus-read.js';
 import { chatIsUnread } from './unread.js';
 import { avatarNode, renderChats, networkBadge } from './sidebar.js';
 import { renderJobs } from './jobs.js';
+import { mergeChatInfo, nameMap, applyNames } from './contact-refresh.js';
 
 let currentChat = null;
 let hasMore = false;
@@ -356,12 +357,12 @@ export async function openChat(chatID, { focusMessageID: focusId } = {}) {
 
   await markRead();
 
-  // Re-apply the full chat record so pinned/muted/archived state is accurate.
+  // Re-apply the full chat record so pinned/muted/archived state is accurate,
+  // and so the people in the chat are brought up to date: the record carries
+  // the participants, and somebody who has since changed their name would
+  // otherwise stay under their old one on every message they ever wrote.
   const full = await call(() => api.chats.get(chatID), { context: 'chat details' });
-  if (full) {
-    currentChat = { ...currentChat, ...full };
-    renderHeader();
-  }
+  await applyContactInfo(chatID, full);
 
   // The live socket only streams subscribed chats, and the open chat is not
   // always among the most recent ones, so re-subscribe now that it is active.
@@ -446,6 +447,55 @@ function renderRefreshButton(chat = currentChat, button) {
 }
 
 /**
+ * Put fresh contact information for the people in a chat into place.
+ *
+ * Refreshing a conversation used to re-read the messages and nothing else. The
+ * people in it are part of it too: somebody who has changed their name or
+ * their picture is still in the conversation, and the messages keep the name
+ * they had when they were written.
+ *
+ * The chat record Beeper sends carries the participants, so one fetch covers
+ * all of it.
+ */
+async function applyContactInfo(chatID, fresh) {
+  if (!chatID || !fresh) return false;
+
+  // The sidebar's row for this chat and the open thread each hold a copy of
+  // the chat record. Both are updated, or the chat would carry its old name
+  // in the list and its new one in the header.
+  const known = state.chats.get(chatID);
+  if (known) state.chats.set(chatID, mergeChatInfo(known, fresh));
+  if (currentChat?.id === chatID) {
+    currentChat = mergeChatInfo(currentChat, fresh);
+    renderHeader();
+  }
+
+  // The names on the messages we hold are the names people had when they
+  // wrote them. Somebody who has since changed their name should show the new
+  // one, so the conversation is brought into line with the people in it.
+  const names = nameMap(fresh.participants?.items || []);
+  if (names.size) {
+    const held = state.messages.get(chatID) || [];
+    const { renamed } = applyNames(held, names);
+    if (renamed.length) {
+      // Upserting announces them once, and the thread rebuilds because the
+      // sender's name is part of what it draws.
+      upsertMessages(chatID, renamed);
+    }
+    // The store holds every message in the chat, not just the page on screen,
+    // so the rename is finished there. Without this the old names come back
+    // the next time the app starts.
+    await call(() => api.history.renameSenders(chatID, Object.fromEntries(names)), {
+      context: 'contact names',
+      fallback: null,
+    });
+  }
+
+  renderChats();
+  return true;
+}
+
+/**
  * Ask the main process to bring this chat fully up to date.
  *
  * Deliberately not awaited into anything the user waits on. The walk is the
@@ -464,6 +514,13 @@ async function refreshThisChat() {
     // Already running or already queued: the button is doing what was asked.
     toast('Already syncing this chat', 'success', 1600);
   }
+
+  // The people in the chat are part of the conversation, and a refresh is the
+  // moment to check them. This is a separate request from the message walk
+  // and runs whether or not the walk was already running.
+  const fresh = await call(() => api.chats.get(chat.id), { context: 'contact info', fallback: null });
+  await applyContactInfo(chat.id, fresh);
+
   renderRefreshButton();
   renderJobs();
 }

@@ -82,6 +82,8 @@ contextBridge.exposeInMainWorld('beeper', {
     open: (chatID) => invoke('history:open', chatID),
     page: (chatID, opts) => invoke('history:page', chatID, opts),
     upsert: (chatID, message) => invoke('history:upsert', chatID, message),
+    // Put new names on the messages of people whose contact information changed.
+    renameSenders: (chatID, names) => invoke('history:renameSenders', chatID, names),
     search: (query, opts) => invoke('history:search', query, opts),
     status: () => invoke('history:status'),
     // Queues the work and returns. It never waits for the walk to finish.

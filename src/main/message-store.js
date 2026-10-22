@@ -201,6 +201,75 @@ function openMessageStore(userDataDir, { onRecover } = {}) {
     },
 
     /**
+     * Put new names on the messages of people whose contact information changed.
+     *
+     * A message carries the name its sender had when they wrote it, so somebody
+     * who has since changed their name leaves their old name all over the
+     * conversation. The renderer only holds the page it happens to be showing;
+     * the store holds every message, so the rename is done here where all of
+     * them are.
+     *
+     * `names` maps a sender id to the name to use. Both the column and the
+     * stored payload are updated, because the renderer reads the payload - a
+     * rename in one place only would leave the other saying something else.
+     *
+     * Returns how many messages changed.
+     */
+    renameSenders(chatID, names) {
+      if (!chatID) return 0;
+      const entries = Object.entries(names || {}).filter(([id, name]) => id && name);
+      if (!entries.length) return 0;
+
+      const wanted = new Map(entries.map(([id, name]) => [String(id), String(name)]));
+      const placeholders = entries.map(() => '?').join(',');
+
+      // First pass: the names only. No payload is read here, because reading
+      // and parsing every message a person has ever sent is most of the cost
+      // of this and the usual answer is that nothing changed.
+      const select = db.prepare(`
+        SELECT id, senderID, senderName FROM messages
+         WHERE chatID = ? AND gone = 0 AND senderID IN (${placeholders})
+      `);
+      const loadPayload = db.prepare('SELECT payload FROM messages WHERE chatID = ? AND id = ?');
+      const update = db.prepare(`
+        UPDATE messages SET senderName = ?, payload = ? WHERE chatID = ? AND id = ?
+      `);
+
+      db.exec('BEGIN');
+      try {
+        const stale = [];
+        for (const row of select.all(chatID, ...entries.map(([id]) => id))) {
+          const name = wanted.get(String(row.senderID ?? ''));
+          if (!name || row.senderName === name) continue;
+          stale.push({ id: row.id, name });
+        }
+        if (!stale.length) {
+          db.exec('COMMIT');
+          return 0;
+        }
+
+        // Second pass: only the rows that actually changed, which is the only
+        // time the stored JSON has to be parsed at all.
+        let changed = 0;
+        for (const row of stale) {
+          const stored = loadPayload.get(chatID, row.id);
+          const payload = safeParse(stored?.payload);
+          const isObject = payload && typeof payload === 'object';
+          // The column and the payload are written together, so they agree;
+          // the payload is patched anyway rather than assumed.
+          if (isObject) payload.senderName = row.name;
+          update.run(row.name, JSON.stringify(isObject ? payload : stored?.payload), chatID, row.id);
+          changed++;
+        }
+        db.exec('COMMIT');
+        return changed;
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
+    },
+
+    /**
      * Older than `before`, oldest first. The ordering the thread draws in is
      * the only ordering it ever wants, so the reversal happens here rather
      * than at every call site.

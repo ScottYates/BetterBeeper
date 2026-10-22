@@ -575,6 +575,14 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     return ok({ written: historyStore.upsertMessages(chatID, [message]) });
   }));
 
+  // Somebody's contact information changed, so the name on their messages has
+  // changed with it. The store holds every message in the chat, not just the
+  // page on screen, so the rename is done there in one pass.
+  ipcMain.handle('history:renameSenders', handle(async (chatID, names) => {
+    if (!chatID || !names) return ok({ written: 0 });
+    return ok({ written: historyStore.renameSenders(chatID, names) });
+  }));
+
   ipcMain.handle('history:search', handle(async (query, opts) =>
     ok(historyStore.search(query, opts || {}))));
 
