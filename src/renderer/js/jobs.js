@@ -355,14 +355,41 @@ function scheduleReveal() {
  * events land before the next paint, the panel is updated once - which is also
  * all the update is worth, since a progress event never changes more than a few
  * characters of text.
+ *
+ * A frame is not the only way to be woken up, though, and relying on one
+ * alone is a trap. A window that is not painting does not run the frame
+ * callback, and the guard above then drops every later render as well - so the
+ * panel stops updating and stays stopped, with the state behind it still
+ * moving. A timer is not tied to painting, so it runs whatever the window is
+ * doing. Whichever of the two arrives first does the work, and the other is
+ * discarded.
  */
 let frame = null;
+let fallback = null;
+let cycle = 0;
 export function scheduleRender() {
-  if (frame !== null) return;
-  frame = requestAnimationFrame(() => {
-    frame = null;
-    renderJobs();
-  });
+  if (frame === null) {
+    const mine = ++cycle;
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      // A timer got there first and already drew it.
+      if (mine !== cycle) return;
+      if (fallback !== null) {
+        clearTimeout(fallback);
+        fallback = null;
+      }
+      renderJobs();
+    });
+  }
+  if (fallback === null) {
+    fallback = setTimeout(() => {
+      fallback = null;
+      // The frame never came, so this is the one that has to do the work.
+      cycle++;
+      frame = null;
+      renderJobs();
+    }, 50);
+  }
 }
 
 /**

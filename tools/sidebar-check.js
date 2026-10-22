@@ -593,6 +593,28 @@ async function main() {
         document.querySelector('.job-row[data-chat-id="slow1"]') !== null
         || 'the delayed row never appeared');
 
+      // The panel must not be waiting for the window to paint.
+      //
+      // The renders are coalesced into a frame, and a window that is not
+      // painting does not run that callback - so a panel that waits for one
+      // stops updating and stays stopped, with the state behind it still
+      // moving. A window that is not on screen is exactly when that matters.
+      //
+      // Holding the frames back is the same thing, without needing a window
+      // that is not on screen: nothing paints, so the callback never comes.
+      const realFrame = window.requestAnimationFrame;
+      const held = [];
+      window.requestAnimationFrame = (fn) => { held.push(fn); return held.length; };
+      progress({ chatID: 'paint1', state: 'backfilling', pages: 3, fetched: 60, walked: true, fresh: true });
+      await new Promise((r) => setTimeout(r, 150));
+      const paintedAnyway = document.querySelector('.job-row[data-chat-id="paint1"]') !== null;
+      window.requestAnimationFrame = realFrame;
+      for (const fn of held) realFrame(fn);
+
+      add('the panel updates even when the window never paints', () =>
+        paintedAnyway || 'the panel was waiting for a frame that never came');
+
+      progress({ chatID: 'paint1', state: 'done', pages: 3, fetched: 60, fresh: true });
       progress({ chatID: 'slow1', state: 'done', pages: 1, fetched: 20, fresh: true });
       progress({ chatID: 'walk1', state: 'done', pages: 4, fetched: 80, fresh: true });
       await new Promise((r) => setTimeout(r, 150));
