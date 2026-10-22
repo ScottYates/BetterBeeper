@@ -40,12 +40,16 @@
         <span id="reply-preview-text"></span>
         <button id="btn-cancel-reply"></button>
       </div>
-      <div id="composer">
-        <button id="btn-attach"></button>
-        <button id="btn-attach-image"></button>
-        <button id="btn-emoji"></button>
-        <button id="btn-send"></button>
-      </div>
+      <!-- The composer is a textarea in the real app, and it is a textarea
+           here. A fixture that says div where the app says textarea is a
+           fixture that lies: code which reads the draft out of the composer
+           gets undefined, and the check reports a failure that is not in the
+           app. The buttons are siblings because a textarea cannot hold them. -->
+      <textarea id="composer" rows="1"></textarea>
+      <button id="btn-attach"></button>
+      <button id="btn-attach-image"></button>
+      <button id="btn-emoji"></button>
+      <button id="btn-send"></button>
     </div>
 
     <div id="thread-empty"></div>

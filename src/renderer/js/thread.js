@@ -157,18 +157,71 @@ export function initThread() {
   // message. Anchored to the composer, the paste fired at the document and the
   // composer never heard about it.
   document.addEventListener('paste', (event) => {
-    // Only the chat composer claims an image. Anywhere else - the
-    // search box, the token field - a paste is left alone.
+    // Only the chat composer claims a file. Anywhere else - the search box,
+    // the token field - a paste is left alone.
     const target = event.target;
     if (target?.closest?.('#search-input, #manual-token')) return;
     if (!currentChat) return;
     // A screenshot arrives as a clipboard *file* with no text beside it, so the
     // textarea has nothing to insert and the paste would look like nothing
-    // happened. Only claim the event when an image really is there: swallowing
-    // a normal text paste would be far worse than not supporting image paste.
-    if (!hasImageItem(event.clipboardData)) return;
+    // happened. Only claim the event when a file really is there: swallowing
+    // a normal text paste would be far worse than not supporting file paste.
+    //
+    // A file wins over any text beside it, which is what makes pasting a
+    // document copied from Explorer attach the document rather than type its
+    // path into the box.
+    const files = payloadFiles(event.clipboardData);
+    if (!files.length) return;
     event.preventDefault();
-    attachPastedImages(event.clipboardData);
+    attachFiles(files, PASTE_LIMIT);
+  });
+
+  // Drag and drop.
+  //
+  // The whole window takes the drop, because a file is dropped into a
+  // conversation and not into a particular box - dropping it on the message
+  // list is the natural gesture, and asking for it to land on the composer
+  // would be a rule nobody could see.
+  document.addEventListener('dragover', (event) => {
+    if (!hasFileItem(event.dataTransfer)) return;
+    // Without this the browser refuses the drop and the drop event never
+    // fires at all. It is the one line that makes drag and drop work.
+    //
+    // It is claimed even when no conversation is open, because a drop the
+    // app ignores is a drop the browser opens instead, and the browser
+    // opening a file means navigating this window away from the app.
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    // The hint is only worth showing where there is somewhere to put it.
+    setDropHint(Boolean(currentChat));
+  });
+
+  document.addEventListener('dragleave', (event) => {
+    // A dragleave fires for every element the pointer crosses on its way
+    // out, so the hint is only dropped when the pointer has really left the
+    // window - which is the one case where relatedTarget is null.
+    if (event.relatedTarget) return;
+    setDropHint(false);
+  });
+
+  document.addEventListener('dragend', () => setDropHint(false));
+
+  document.addEventListener('drop', (event) => {
+    setDropHint(false);
+    const files = payloadFiles(event.dataTransfer);
+    // The drop is claimed before anything else is decided. A file that is
+    // dropped on a page which does not claim it makes the browser navigate
+    // to that file, and navigating this window away from the app is far
+    // worse than a file that did not get attached.
+    if (files.length) event.preventDefault();
+    if (!currentChat) {
+      if (files.length) toast('Open a conversation before attaching a file', 'error');
+      return;
+    }
+    const target = event.target;
+    if (target?.closest?.('#search-input, #manual-token')) return;
+    if (!files.length) return;
+    attachFiles(files, DROP_LIMIT);
   });
 
   // Right-click any image in the thread to copy it as a pasteable picture
@@ -294,6 +347,16 @@ export async function openChat(chatID, { focusMessageID: focusId } = {}) {
   updateReplyPreview();
   renderHeader();
   renderChats();
+
+  // The cursor belongs in the composer.
+  //
+  // Clicking a chat and then reaching for the keyboard is the normal way to
+  // write a message, and a thread that has been opened but not focused makes
+  // the user reach for the mouse first. It is done here rather than at the
+  // end of the open because the store read below is an IPC round trip that
+  // can queue behind a background sync, and waiting for it would mean
+  // waiting for the cursor as well.
+  focusComposer();
 
   const listEl = $('#message-list');
 
@@ -575,13 +638,16 @@ export function composerPlaceholder(chat) {
 }
 
 // ---------------------------------------------------------------------------
-// Clipboard images
+// Files from the clipboard and from a drag
 // ---------------------------------------------------------------------------
 
 // Enough for a full-resolution screenshot, small enough that a stray 200 MB
 // clipboard payload cannot wedge the upload.
-const MAX_PASTE_BYTES = 25 * 1024 * 1024;
-const MAX_PASTE_MB = MAX_PASTE_BYTES / 1048576;
+const PASTE_LIMIT = 25 * 1024 * 1024;
+
+// A dropped file is one the user picked out of a folder, so it is allowed to
+// be much bigger than a clipboard payload. A video is the usual case.
+const DROP_LIMIT = 100 * 1024 * 1024;
 
 const PASTE_EXT = {
   'image/png': 'png',
@@ -598,47 +664,80 @@ export function pasteImageName(mimeType, index) {
 }
 
 /**
- * Whether the clipboard holds an image at all. Called synchronously from the
- * paste handler, because preventDefault has to happen during the event - by the
- * time an async read has finished the browser has already inserted its default.
+ * The files in a clipboard or drag payload.
+ *
+ * The items list first, because that is the only way to see a clipboard file
+ * that has no name - a screenshot arrives with neither a name nor a path. The
+ * files list second, for a drop, where the two hold the same thing and the
+ * files list is the easier of the two to read.
  */
-export function hasImageItem(dataTransfer) {
-  return imageItems(dataTransfer).length > 0;
-}
-
-function imageItems(dataTransfer) {
-  return Array.from(dataTransfer?.items || []).filter(
-    (item) => item.kind === 'file' && String(item.type || '').startsWith('image/'),
-  );
+export function payloadFiles(dataTransfer) {
+  const fromItems = Array.from(dataTransfer?.items || [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile?.())
+    .filter(Boolean);
+  if (fromItems.length) return fromItems;
+  return Array.from(dataTransfer?.files || []);
 }
 
 /**
- * Read the pasted images out of a clipboard payload.
- *
- * Returns { images, rejected } rather than throwing or silently truncating: a
- * screenshot that is too big has to be *told* about, because from the user's
- * side nothing happened is indistinguishable from the paste not working.
+ * Whether the payload carries a file at all. Called synchronously from the
+ * drag handler, because preventDefault has to happen during the event - by the
+ * time an async read has finished the browser has already done its default.
  */
-export async function pastedImages(dataTransfer) {
-  const images = [];
+export function hasFileItem(dataTransfer) {
+  // The types list is the reliable signal, and it is the only one that works
+  // during a drag. While the pointer is still over the window the browser
+  // keeps the payload in protected mode: getAsFile can come back empty and
+  // the files list is empty as well. What the browser does say, from the
+  // first dragover onwards, is that this drag carries files.
+  const types = Array.from(dataTransfer?.types || []).map((t) => String(t).toLowerCase());
+  if (types.includes('files')) return true;
+  return payloadFiles(dataTransfer).length > 0;
+}
+
+/**
+ * The name an uploaded file should carry.
+ *
+ * A file that arrives with a name keeps it - a dropped "holiday.jpg" is
+ * holiday.jpg. A clipboard screenshot arrives with no name at all, so one is
+ * made from its mime type, which is all a screenshot can be described by.
+ */
+export function attachFileName(file, index) {
+  const name = String(file?.name || '').trim();
+  if (name) return name;
+  const type = String(file?.type || '').trim().toLowerCase();
+  if (type.startsWith('image/')) return pasteImageName(type, index);
+  const ext = type.split('/')[1] || 'bin';
+  return `pasted-file-${index + 1}.${ext.replace(/[^a-z0-9]+/g, '') || 'bin'}`;
+}
+
+/**
+ * Read files out of a payload, ready to upload.
+ *
+ * Returns { uploads, rejected } rather than throwing or silently truncating:
+ * a file that is too big has to be *told* about, because from the user's side
+ * nothing happened is indistinguishable from the paste not working.
+ */
+export async function filesToUpload(files, limit) {
+  const uploads = [];
   const rejected = [];
 
-  for (const item of imageItems(dataTransfer)) {
-    const file = item.getAsFile();
+  for (const file of files || []) {
     if (!file) continue;
-    const name = pasteImageName(file.type, images.length);
-    if (file.size > MAX_PASTE_BYTES) {
+    const name = attachFileName(file, uploads.length);
+    if (file.size > limit) {
       rejected.push({ fileName: name, bytes: file.size });
       continue;
     }
-    images.push({
+    uploads.push({
       data: new Uint8Array(await file.arrayBuffer()),
-      mimeType: file.type,
+      mimeType: file.type || '',
       fileName: name,
     });
   }
 
-  return { images, rejected };
+  return { uploads, rejected };
 }
 
 /**
@@ -1801,6 +1900,35 @@ function setReplyTo(message) {
   $('#composer').focus();
 }
 
+/**
+ * Put the cursor in the composer, at the end of whatever is in it.
+ *
+ * The end, not the start: the cursor going to the beginning of a draft the
+ * user was part way through is its own small annoyance, and this is called
+ * every time a chat is opened.
+ *
+ * Returns whether there was a composer to focus, so a caller can tell the
+ * difference between "the cursor is in the box" and "there is no box".
+ */
+export function focusComposer() {
+  const input = $('#composer');
+  if (!input) return false;
+  input.focus();
+  // The end, not the start: the cursor going to the beginning of a draft the
+  // user was part way through is its own small annoyance, and this is called
+  // every time a chat is opened.
+  //
+  // Both of these are guarded because this runs inside openChat, and an
+  // exception here would leave the user with a chat that did not open. A
+  // composer that is not a textarea has no value and no selection range;
+  // focusing it is still better than not.
+  const end = String(input.value || '').length;
+  if (typeof input.setSelectionRange === 'function') {
+    input.setSelectionRange(end, end);
+  }
+  return true;
+}
+
 function updateReplyPreview() {
   const box = $('#reply-preview');
   if (!state.replyTo) {
@@ -1833,34 +1961,36 @@ async function pickAttachments() {
 }
 
 /**
- * Upload whatever images were pasted into the composer.
+ * Upload the files from a paste or a drop and chip them onto the composer.
  *
  * The bytes go over as a Uint8Array rather than a path, because a pasted
  * screenshot has never been a file - there is nothing on disk to hand back.
+ * A drop is handled the same way on purpose: one rule for both, rather than
+ * two that can drift apart, and the clipboard has no path to offer anyway.
  */
-async function attachPastedImages(dataTransfer) {
-  const { images, rejected } = await pastedImages(dataTransfer);
+async function attachFiles(files, limit) {
+  const { uploads, rejected } = await filesToUpload(files, limit);
 
   for (const skip of rejected) {
     toast(
-      `${skip.fileName} is ${(skip.bytes / 1048576).toFixed(1)} MB, over the ${MAX_PASTE_MB} MB paste limit`,
+      `${skip.fileName} is ${(skip.bytes / 1048576).toFixed(1)} MB, over the ${(limit / 1048576).toFixed(0)} MB limit`,
       'error',
     );
   }
-  if (!images.length) return;
+  if (!uploads.length) return;
 
   let done = 0;
-  for (const image of images) {
+  for (const upload of uploads) {
     try {
-      const upload = await call(() => api.assets.uploadBytes(image), {
-        context: 'upload pasted image',
+      const res = await call(() => api.assets.uploadBytes(upload), {
+        context: 'upload attachment',
         fallback: null,
       });
-      if (upload?.uploadID) {
+      if (res?.uploadID) {
         pendingAttachments.push({
-          uploadID: upload.uploadID,
-          mimeType: upload.mimeType || image.mimeType,
-          fileName: upload.fileName || image.fileName,
+          uploadID: res.uploadID,
+          mimeType: res.mimeType || upload.mimeType,
+          fileName: res.fileName || upload.fileName,
         });
         renderAttachments();
         done += 1;
@@ -1871,9 +2001,20 @@ async function attachPastedImages(dataTransfer) {
   }
 
   if (done) {
-    toast(`Attached ${done} pasted image${done > 1 ? 's' : ''}`, 'success', 1500);
-    $('#composer').focus();
+    toast(`Attached ${done} file${done > 1 ? 's' : ''}`, 'success', 1500);
+    focusComposer();
   }
+}
+
+/**
+ * Say that a file is being dragged over the window.
+ *
+ * Without this, dropping a file feels like it did nothing until the chip
+ * appears, and a drag that appears to be ignored is one nobody tries twice.
+ */
+function setDropHint(on) {
+  const app = $('#app');
+  if (app) app.classList.toggle('is-dropping', Boolean(on));
 }
 
 function renderAttachments() {

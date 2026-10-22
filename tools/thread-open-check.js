@@ -187,6 +187,47 @@ async function main() {
           !/loading messages/i.test(loading())
           || ('thread is showing ' + JSON.stringify(loading())));
 
+        // The cursor belongs in the composer, and it belongs there before the
+        // store answers. The read is an IPC round trip that can queue behind a
+        // background sync, and waiting for it would mean waiting for the
+        // cursor too - which is the whole point of the complaint this answers.
+        //
+        // A window that is not on screen cannot take focus at all - Chromium
+        // will not move the focus into a hidden window - so what is measured
+        // here is that the app asks the composer for focus, and that the
+        // composer is the last thing it asked.
+        //
+        // The spy is installed here rather than at the top of the harness so
+        // it measures this open and not the ones before it.
+        const focusCalls = [];
+        const realProtoFocus = HTMLElement.prototype.focus;
+        HTMLElement.prototype.focus = function (...args) {
+          focusCalls.push(this.id || this.tagName || 'unknown');
+          return realProtoFocus.apply(this, args);
+        };
+
+        plan = forever;
+        open('c-cached');
+        await settle();
+
+        add('the composer is asked for focus when a chat is opened', () =>
+          focusCalls.includes('composer')
+          || ('focus went to ' + JSON.stringify(focusCalls)));
+
+        add('and the composer is the last thing focused', () =>
+          focusCalls[focusCalls.length - 1] === 'composer'
+          || ('the last focus went to ' + focusCalls[focusCalls.length - 1]));
+
+        add('the caret goes to the end of the draft, not the start', () => {
+          const input = document.getElementById('composer');
+          input.value = 'a draft that is already there';
+          T.focusComposer();
+          return input.selectionStart === input.value.length
+            || ('the caret is at ' + input.selectionStart);
+        });
+
+        HTMLElement.prototype.focus = realProtoFocus;
+
         add('no scroll-back header from the chat opened before this one', () =>
           !hint() || ('inherited ' + JSON.stringify(loading()) + ' from c-more'));
 

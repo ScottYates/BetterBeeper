@@ -251,6 +251,27 @@ select { cursor: pointer; }
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   grid-template-columns: var(--sidebar-w) var(--splitter-w) minmax(0, 1fr);
+  position: relative;
+}
+
+/* A file is being dragged over the window.
+   The whole window takes the drop, so the whole window says so. Without this
+   a drag looks like it is being ignored until the chip appears, and a gesture
+   that looks ignored is one nobody tries a second time. */
+.app.is-dropping::after {
+  content: 'Drop to attach';
+  position: absolute;
+  inset: 8px;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 650;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  z-index: 40;
 }
 
 /* Drag handle between the conversation list and the thread. It is painted in
