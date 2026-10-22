@@ -12,6 +12,11 @@
  * worth testing are the ones that fail quietly: a participant list that Beeper
  * chose to shorten must not look like everybody leaving, and a name we do not
  * have must never blank a name we already have.
+ *
+ * It also says what it found. A refresh that changed nothing used to look
+ * exactly like a refresh that was broken, because neither of them said
+ * anything - and for a contact Beeper knows only by a number, nothing is
+ * ever going to change. The answer is worth saying out loud.
  */
 
 /**
@@ -27,15 +32,48 @@
  * is not a name, and the thread shows numbers in the subtitle already, so it
  * is not used as one here.
  *
+ * A number in `fullName` is a number here too, and that is not a rare case:
+ * Beeper fills `fullName` in with the number for a contact it has no name
+ * for, so "the name" is a number for most of a phone network's contacts. A
+ * number is never a name, and one must never be written over a name we
+ * already have.
+ *
  * Null means we know nothing better, which is a different answer from "this
  * person is called nothing" and must be treated as one. It is what keeps a
  * participant with no name from replacing a good one with their id.
  */
 export function contactName(participant) {
   const full = typeof participant?.fullName === 'string' ? participant.fullName.trim() : '';
-  if (full) return full;
+  if (full && !isPhoneNumber(full)) return full;
   const user = typeof participant?.username === 'string' ? participant.username.trim() : '';
-  return user || null;
+  if (user && !isPhoneNumber(user)) return user;
+  return null;
+}
+
+/**
+ * Is this string a telephone number rather than a name?
+ *
+ * Beeper puts the number in `fullName` for a contact it has no name for, so a
+ * name that is only a number is not a name. Measured on the live account: of
+ * the 123 Google Voice contacts Beeper Desktop keeps, 68 have a number as
+ * their name and 53 have a real one - so "the name is a number" is the normal
+ * case for a phone network, not the rare one.
+ *
+ * A short code counts. "89464" is how Beeper knows that sender, and there is
+ * still no name behind it.
+ *
+ * This is a different question from the one participants.js asks. That one is
+ * "should the number be printed under the name", and it wants seven digits
+ * before it will call two strings the same number. This one is "is there a
+ * name here at all", and a number of any length is not one.
+ */
+export function isPhoneNumber(value) {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (!/[0-9]/.test(trimmed)) return false;
+  // Nothing but the characters a telephone number is written with.
+  return !/[^0-9+()\s.-]/.test(trimmed);
 }
 
 /**
@@ -104,12 +142,18 @@ export function mergeParticipants(previous, fresh) {
  *
  * Only people we can actually name are in here. A participant with no name is
  * left out rather than entered as an empty string, so that applying this map
- * can never blank a name we already had.
+ * can never blank a name we already have.
+ *
+ * `skipSelf` leaves you out of the map. Your own messages are not renamed -
+ * they are already labelled as yours - and the two places that write names
+ * have to agree about that, or the app and the store end up saying different
+ * things about the same message.
  */
-export function nameMap(participants) {
+export function nameMap(participants, { skipSelf = false } = {}) {
   const names = new Map();
   for (const person of participants || []) {
     if (!person?.id) continue;
+    if (skipSelf && person.isSelf) continue;
     const name = contactName(person);
     if (name) names.set(String(person.id), name);
   }
@@ -168,4 +212,75 @@ export function mergeChatInfo(previous, fresh) {
   if (previous && 'unreadCount' in previous) merged.unreadCount = previous.unreadCount;
 
   return merged;
+}
+
+/**
+ * What a refresh learned about the people in a chat.
+ *
+ * Two things, and they answer two different questions.
+ *
+ * `renamed` is who changed: the people whose messages carry a name that is no
+ * longer the one Beeper has. Each entry is the old name and the new one.
+ *
+ * `unnamed` is who Beeper cannot name at all: the people it knows only by a
+ * number. They are not a failure of the refresh - they are the answer. A
+ * Google Voice contact with no name in Google Contacts is a number in every
+ * layer Beeper has, and no amount of refreshing will turn it into a name.
+ *
+ * You are not in either list. You do not need a name to be recognised, and
+ * your own messages are not renamed.
+ */
+export function contactReport(participants, messages, names) {
+  const map = names instanceof Map ? names : new Map();
+
+  const changed = new Map();
+  for (const message of messages || []) {
+    if (!message || message.isSender) continue;
+    const to = map.get(String(message.senderID ?? ''));
+    if (!to || to === message.senderName) continue;
+    if (changed.has(message.senderID)) continue;
+    changed.set(message.senderID, { id: message.senderID, from: message.senderName, to });
+  }
+
+  const unnamed = [];
+  for (const person of participants || []) {
+    if (!person?.id || person.isSelf) continue;
+    if (map.has(String(person.id))) continue;
+    const number = typeof person.phoneNumber === 'string' ? person.phoneNumber.trim() : '';
+    if (number) unnamed.push(number);
+  }
+
+  return { renamed: [...changed.values()], unnamed };
+}
+
+/**
+ * What to say after a refresh.
+ *
+ * The refresh used to say nothing at all, so a refresh that changed nothing
+ * looked exactly like a refresh that was broken. From the reader's side the
+ * two are the same, and only one of them is.
+ *
+ * So it says which of the two happened. `written` is how many messages the
+ * store actually rewrote - the honest count, because the store holds the
+ * whole conversation and the screen holds a page of it.
+ */
+export function contactRefreshMessage(report, written = 0) {
+  const changed = (report?.renamed || []).map((entry) => entry.to);
+  const unnamed = report?.unnamed || [];
+
+  if (written > 0) {
+    const head = `Updated ${written} name${written === 1 ? '' : 's'}`;
+    return changed.length ? `${head}: ${list(changed, 3)}` : head;
+  }
+  if (unnamed.length) {
+    return `Beeper has no name yet for ${list(unnamed, 2)}`;
+  }
+  return 'No contact changes';
+}
+
+/** A list short enough to read, with a count of what did not fit. */
+function list(items, max) {
+  const shown = items.slice(0, max).join(', ');
+  const rest = items.length - max;
+  return rest > 0 ? `${shown} and ${rest} more` : shown;
 }

@@ -62,7 +62,7 @@ import { shouldMarkOnReturn } from './focus-read.js';
 import { chatIsUnread } from './unread.js';
 import { avatarNode, renderChats, networkBadge } from './sidebar.js';
 import { renderJobs } from './jobs.js';
-import { mergeChatInfo, nameMap, applyNames } from './contact-refresh.js';
+import { mergeChatInfo, nameMap, applyNames, contactReport, contactRefreshMessage } from './contact-refresh.js';
 
 let currentChat = null;
 let hasMore = false;
@@ -456,9 +456,12 @@ function renderRefreshButton(chat = currentChat, button) {
  *
  * The chat record Beeper sends carries the participants, so one fetch covers
  * all of it.
+ *
+ * Returns what the refresh found, so the caller can say it out loud: who was
+ * renamed, and who Beeper cannot name at all.
  */
 async function applyContactInfo(chatID, fresh) {
-  if (!chatID || !fresh) return false;
+  if (!chatID || !fresh) return null;
 
   // The sidebar's row for this chat and the open thread each hold a copy of
   // the chat record. Both are updated, or the chat would carry its old name
@@ -473,9 +476,13 @@ async function applyContactInfo(chatID, fresh) {
   // The names on the messages we hold are the names people had when they
   // wrote them. Somebody who has since changed their name should show the new
   // one, so the conversation is brought into line with the people in it.
-  const names = nameMap(fresh.participants?.items || []);
+  const participants = fresh.participants?.items || [];
+  const names = nameMap(participants);
+  const held = state.messages.get(chatID) || [];
+  const report = contactReport(participants, held, names);
+
+  let written = 0;
   if (names.size) {
-    const held = state.messages.get(chatID) || [];
     const { renamed } = applyNames(held, names);
     if (renamed.length) {
       // Upserting announces them once, and the thread rebuilds because the
@@ -485,14 +492,20 @@ async function applyContactInfo(chatID, fresh) {
     // The store holds every message in the chat, not just the page on screen,
     // so the rename is finished there. Without this the old names come back
     // the next time the app starts.
-    await call(() => api.history.renameSenders(chatID, Object.fromEntries(names)), {
+    //
+    // You are left out of it. Your own messages are not renamed on screen
+    // either, and the store has to agree with the screen or the two say
+    // different things about the same message.
+    const storeNames = nameMap(participants, { skipSelf: true });
+    const res = await call(() => api.history.renameSenders(chatID, Object.fromEntries(storeNames)), {
       context: 'contact names',
       fallback: null,
     });
+    written = res?.written || 0;
   }
 
   renderChats();
-  return true;
+  return { report, written };
 }
 
 /**
@@ -519,7 +532,19 @@ async function refreshThisChat() {
   // moment to check them. This is a separate request from the message walk
   // and runs whether or not the walk was already running.
   const fresh = await call(() => api.chats.get(chat.id), { context: 'contact info', fallback: null });
-  await applyContactInfo(chat.id, fresh);
+  const outcome = await applyContactInfo(chat.id, fresh);
+
+  // Say what came of it.
+  //
+  // A refresh that changed nothing used to look exactly like a refresh that
+  // was broken, because neither of them said anything. Most of the time
+  // nothing has changed: the people in a chat keep the names they had. And
+  // when there is no name to be had - a Google Voice contact Beeper knows
+  // only by a number - that is worth saying too, because it is the answer
+  // rather than a failure.
+  if (outcome) {
+    toast(contactRefreshMessage(outcome.report, outcome.written), 'info', 4200);
+  }
 
   renderRefreshButton();
   renderJobs();

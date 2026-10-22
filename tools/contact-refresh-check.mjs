@@ -16,6 +16,13 @@
  * the rest of the conversation is the store's, and without it the old names
  * come back the next time the app starts.
  *
+ * And then there is the quietest failure of the lot: a refresh that changed
+ * nothing looks exactly like a refresh that was broken, because neither of
+ * them said anything. Most of the time nothing has changed. And for a contact
+ * Beeper knows only by a number - 68 of the 123 Google Voice contacts on the
+ * live account - nothing ever will. So the refresh has to be able to say
+ * which of the two happened.
+ *
  * Plain node, no Electron: message-store.js deliberately imports nothing from
  * electron so it can be exercised here.
  *
@@ -29,10 +36,13 @@ import { fileURLToPath } from 'node:url';
 
 import {
   contactName,
+  isPhoneNumber,
   mergeParticipants,
   nameMap,
   applyNames,
   mergeChatInfo,
+  contactReport,
+  contactRefreshMessage,
 } from '../src/renderer/js/contact-refresh.js';
 
 const require = createRequire(import.meta.url);
@@ -75,6 +85,43 @@ add(
 );
 add('a missing participant has no name', contactName(null) === null);
 add('a name is trimmed', contactName({ fullName: '  Bea  ' }) === 'Bea');
+
+// ---------------------------------------------------------------------------
+// A number is not a name
+// ---------------------------------------------------------------------------
+//
+// Beeper puts the number in fullName for a contact it has no name for, so
+// "the name is a number" is the normal case for a phone network and not the
+// rare one. Measured on the live account: 68 of the 123 Google Voice contacts
+// Beeper Desktop keeps are called by their number, and 53 have a real name.
+//
+// The damage this does is not that a number is shown - the thread shows
+// numbers in the subtitle anyway, and that is right. The damage is that a
+// number is written over a name we already had.
+
+add('a telephone number is a number', isPhoneNumber('+16414858965') === true);
+add('a number written the way people write them is a number', isPhoneNumber('+1 515-988-3633') === true);
+add('a number with brackets is a number', isPhoneNumber('(515) 988-3633') === true);
+add('a short code is a number too', isPhoneNumber('89464') === true);
+add('a name is not a number', isPhoneNumber('Trae Johnson') === false);
+add('a name with a number in it is not a number', isPhoneNumber('Agent 47') === false);
+add('nothing at all is not a number', isPhoneNumber('') === false);
+add('something that is not a string is not a number', isPhoneNumber(null) === false);
+
+add(
+  'a name that is only a number is not a name',
+  contactName({ fullName: '+16414858965' }) === null,
+  'Beeper calls a contact it has no name for by its number, and that is not a name',
+);
+add(
+  'a username is used when the full name is only a number',
+  contactName({ fullName: '+16414858965', username: 'trae' }) === 'trae',
+);
+add(
+  'a participant whose name is a number is left out of the map',
+  !nameMap([{ id: '!num', fullName: '+16414858965' }]).has('!num'),
+  'so a number can never be written over a name we already have',
+);
 
 // ---------------------------------------------------------------------------
 // The map from person to name
@@ -200,6 +247,106 @@ add(
 );
 
 // ---------------------------------------------------------------------------
+// You
+// ---------------------------------------------------------------------------
+//
+// Your own messages are not renamed: they are already labelled as yours. The
+// screen has always known that, and the store has to know it too, or the app
+// and the store end up saying different things about the same message.
+
+const withYou = [
+  { id: '!me', fullName: 'Scott Yates', isSelf: true },
+  { id: '!them', fullName: 'Bea Example' },
+];
+
+add(
+  'you are in the map that puts names on the screen',
+  nameMap(withYou).has('!me'),
+);
+add(
+  'you are left out of the map that goes to the store',
+  !nameMap(withYou, { skipSelf: true }).has('!me'),
+  'your own messages are not renamed, and the store has to agree with the screen',
+);
+add(
+  'everybody else is still in the map that goes to the store',
+  nameMap(withYou, { skipSelf: true }).get('!them') === 'Bea Example',
+);
+
+// ---------------------------------------------------------------------------
+// What a refresh found
+// ---------------------------------------------------------------------------
+//
+// A refresh that changed nothing used to look exactly like a refresh that was
+// broken, because neither of them said anything. Most of the time nothing has
+// changed, and when there is no name to be had - a Google Voice contact
+// Beeper knows only by a number - that is the answer rather than a failure.
+// So the refresh has to be able to say which of the two it was.
+
+const reportPeople = [
+  { id: '!a', fullName: 'Ada Lovelace' },
+  { id: '!b', fullName: '+16414858965', phoneNumber: '+16414858965' },
+  { id: '!me', fullName: '+1 515-988-3633', phoneNumber: '+15159883633', isSelf: true },
+];
+const reportMsgs = [
+  { id: 'm1', senderID: '!a', senderName: 'Ada', isSender: false },
+  { id: 'm2', senderID: '!b', senderName: '+16414858965', isSender: false },
+  { id: 'm3', senderID: '!me', senderName: 'You', isSender: true },
+];
+const reportNames = nameMap(reportPeople);
+const report = contactReport(reportPeople, reportMsgs, reportNames);
+
+add(
+  'the person whose name changed is reported',
+  report.renamed.length === 1,
+  'and only that person',
+);
+add(
+  'the old name and the new one are both reported',
+  report.renamed[0]?.from === 'Ada' && report.renamed[0]?.to === 'Ada Lovelace',
+);
+add(
+  'a person Beeper knows only by a number is reported',
+  report.unnamed.join(',') === '+16414858965',
+);
+add(
+  'you are not reported as having no name',
+  !report.unnamed.includes('+15159883633'),
+  'you do not need a name to be recognised',
+);
+add(
+  'a person with a name is not reported as having none',
+  !report.unnamed.includes('Ada Lovelace'),
+);
+add(
+  'a report with nothing in it is still a report',
+  contactReport([], [], new Map()).renamed.length === 0
+    && contactReport([], [], new Map()).unnamed.length === 0,
+);
+
+add(
+  'a refresh that changed something says so',
+  contactRefreshMessage({ renamed: [{ to: 'Ada Lovelace' }], unnamed: [] }, 4) === 'Updated 4 names: Ada Lovelace',
+);
+add(
+  'one name is not plural',
+  contactRefreshMessage({ renamed: [{ to: 'Ada Lovelace' }], unnamed: [] }, 1) === 'Updated 1 name: Ada Lovelace',
+);
+add(
+  'a refresh that changed nothing says so',
+  contactRefreshMessage({ renamed: [], unnamed: [] }, 0) === 'No contact changes',
+);
+add(
+  'a person Beeper cannot name is said out loud',
+  contactRefreshMessage({ renamed: [], unnamed: ['+16414858965'] }, 0) === 'Beeper has no name yet for +16414858965',
+);
+add(
+  'the number of names is what the store wrote',
+  contactRefreshMessage({ renamed: [], unnamed: [] }, 12) === 'Updated 12 names',
+  'the store holds the whole conversation, and the screen only a page of it',
+);
+
+// ---------------------------------------------------------------------------
 // The chat record
 // ---------------------------------------------------------------------------
 
@@ -292,6 +439,42 @@ add(
 );
 
 store.close();
+
+// ---------------------------------------------------------------------------
+// The wiring
+// ---------------------------------------------------------------------------
+//
+// The decisions are in contact-refresh.js, but the decision to leave you out
+// of the store's map is made by the caller, in thread.js, and a check of the
+// pure functions cannot see it. So the call is read out of the file and
+// checked where it is made.
+//
+// What is asserted is the shape of the call: a map built with skipSelf, and
+// that map is the one handed to the store. Matching the words skipSelf
+// anywhere in the file would pass on a call that is not the one being made,
+// so both halves have to hold at once.
+
+const threadSrc = fs.readFileSync(path.join(ROOT, 'src', 'renderer', 'js', 'thread.js'), 'utf8');
+const applyContactInfoSrc = (threadSrc.match(/async function applyContactInfo\([^)]*\)\s*\{([\s\S]*?)\n\}/) || [])[1] || '';
+
+add('the store is given names that leave you out', () => {
+  if (!applyContactInfoSrc) return 'could not find applyContactInfo in thread.js';
+  const built = /const\s+(\w+)\s*=\s*nameMap\([^;]*?skipSelf:\s*true[^;]*?\);/.exec(applyContactInfoSrc);
+  if (!built) return 'no name map is built with skipSelf';
+  const given = new RegExp(`renameSenders\\([^;]*?Object\\.fromEntries\\(\\s*${built[1]}\\s*\\)`);
+  if (!given.test(applyContactInfoSrc)) {
+    return `the rename is not given the map that leaves you out (${built[1]})`;
+  }
+  return true;
+});
+
+add('the refresh says what it found', () => {
+  const refreshSrc = (threadSrc.match(/async function refreshThisChat\([^)]*\)\s*\{([\s\S]*?)\n\}/) || [])[1] || '';
+  if (!refreshSrc) return 'could not find refreshThisChat in thread.js';
+  if (!/contactRefreshMessage\(/.test(refreshSrc)) return 'the refresh does not work out what to say';
+  return /toast\(\s*contactRefreshMessage\(/.test(refreshSrc)
+    || 'what it found is worked out but never said';
+});
 
 // ---------------------------------------------------------------------------
 

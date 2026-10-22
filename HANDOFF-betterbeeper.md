@@ -431,12 +431,72 @@ The naming and the order live in `src/renderer/js/participants.js`, pure, so
 `npm run check:participants` can exercise them - 36 cases, with a control that
 the list shows more people than the title names.
 
+### The names in a chat, and why the refresh could not change them
+
+v1.22.0 shipped the contact refresh: refreshing a conversation also re-reads the
+people in it, so somebody who had changed their name stops appearing under the
+old one. It works. What it could not do is explain itself, and for the contact
+the complaint was about it had nothing to say at all.
+
+**The contact 16414858965 has no name anywhere in Beeper.** Measured, layer by
+layer, on the live account:
+
+- the Google Voice bridge's own store, `%APPDATA%\BeeperTexts\local-gvoice\megabridge.db`,
+  row `ghost`: `name = "+16414858965"`, `extra_profile = null`,
+  `identifiers = ["tel:+16414858965"]`
+- Beeper Desktop's own store, `%APPDATA%\BeeperTexts\index.db`, row
+  `participants`: `full_name = "+16414858965"`, `nickname = null`
+- the bridge API, `GET /v1/chats/{id}`: `participants[].fullName = "+16414858965"`,
+  and no `username` at all
+- the chat record itself: `title = "+16414858965"`
+
+So the app was right and the data was thin. A Google Voice contact with no name
+in Google Contacts is a number in every layer Beeper has, and refreshing it
+cannot turn it into a name. Of the 123 Google Voice contacts Beeper Desktop
+keeps, 68 have a number as their name and 53 have a real one.
+
+**And the refresh said nothing while it happened.** A refresh that changed
+nothing looked exactly like a refresh that was broken, because neither of them
+spoke. That is the part worth fixing, and it is now fixed: the refresh reports
+what it found, including the people Beeper cannot name at all.
+
+Three things changed, and one of them was a bug that had been there all along.
+
+**A number is not a name.** `contactName` took `fullName` as the name, and
+Beeper fills `fullName` in with the number for a contact it has no name for -
+so for most of a phone network's contacts, the "name" was a number. The
+function's own comment said a number is not a name and must not be used as
+one; the code did not agree. It matters because the name map is what the store
+is written with, and a number written over a name is a name lost. `isPhoneNumber`
+now draws the line, and a participant whose only name is a number is left out
+of the map - which is also what keeps the store from being written a number at
+all.
+
+**Your own messages are not renamed, in both places.** The screen has always
+left them alone; the store did not, so the two disagreed about the same
+message. `nameMap` takes `skipSelf` now, and the store is given that map.
+
+**The refresh says what it found.** `contactReport` works out who was renamed
+and who Beeper cannot name; `contactRefreshMessage` says it: "Updated 4 names:
+Ada Lovelace", "Beeper has no name yet for +16414858965", or "No contact
+changes".
+
+**And the jobs panel was waiting for the window to paint.** The panel's renders
+are coalesced into a `requestAnimationFrame`, and a window that is not painting
+does not run that callback - so the guard above it dropped every later render
+too. The panel stopped updating and stayed stopped, with the state behind it
+still moving. A timer is not tied to painting, so `scheduleRender` now has one
+as well, and whichever arrives first does the work. This was found because the
+refresh report is a toast, and a toast is a DOM change at a moment that moved
+the frame; the panel's staleness was already there. `check:sidebar` now has a
+check for it that holds the frames back and waits for the row to appear anyway.
+
 ## Verification status
 
-`npm run check:all` gives **42/42 suites passed** on the v1.21.0 release
-commit, 2026-10-21. It was 41 suites before `check:participants` was added, 40
-before `check:refreshchats`, 39 before `check:entity`, and 35/37 on
-2026-10-14.
+`npm run check:all` gives **43/43 suites passed** on the v1.23.0 release
+commit, 2026-10-21. It was 42 suites before `check:contactrefresh` was added,
+41 before `check:participants`, 40 before `check:refreshchats`, 39 before
+`check:entity`, and 35/37 on 2026-10-14.
 
 `check:released` is the one that moves with the git state. It fails whenever
 `main` is ahead of the newest tag, because a push with no release behind it is
@@ -456,7 +516,9 @@ Individually measured: `check:entity` 0 failing across 31 cases,
 `check:refreshchats` 0 failing across 24 cases,
 `check:focusread` 27/27,
 `check:participants` 0 failing across 36 cases (new),
-`check:sidebar` 66/66, `check:unread` 32/32, `check:layout` 13/13,
+`check:contactrefresh` 71/71 and `tools/contact-refresh-redproof.js` 19/19
+mutations caught, 2/2 neutral rewrites tolerated (new),
+`check:sidebar` 67/67, `check:unread` 32/32, `check:layout` 13/13,
 `check:api` 136/136, `check:composer` 17/17, `check:actions` 21/21,
 `check:about` 6/6, `check:installer` passing, `check:syntax` OK on every JS
 file and harness, `check:ascii` OK.

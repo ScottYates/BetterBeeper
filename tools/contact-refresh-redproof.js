@@ -6,6 +6,13 @@
  * stayed under their old one, on the chat and on every message they had ever
  * written.
  *
+ * The second bug is quieter, and it is the one a person would actually
+ * complain about: a refresh that changed nothing looked exactly like a
+ * refresh that was broken, because neither of them said anything. So the
+ * refresh now says what it found, and what it found includes the people
+ * Beeper cannot name at all - a contact it knows only by a number will never
+ * change, and saying so is the answer rather than a failure.
+ *
  * Every mutation below reintroduces one part of that, and asserts that the
  * NAMED check fails. A mutation that leaves the suite green is reported as a
  * hole, because it means that rule is not actually load-bearing.
@@ -25,6 +32,7 @@ const ROOT = path.join(__dirname, '..');
 const FILES = {
   contact: path.join(ROOT, 'src', 'renderer', 'js', 'contact-refresh.js'),
   store: path.join(ROOT, 'src', 'main', 'message-store.js'),
+  thread: path.join(ROOT, 'src', 'renderer', 'js', 'thread.js'),
 };
 
 const hash = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -140,6 +148,92 @@ const MUTATIONS = [
     from: '    const name = names.get(String(message.senderID ?? \'\'));',
     to: '    const name = names.get(String(message.senderID || \'\'));',
     expect: 'a renamed person gets the new name',
+    expectGreen: true,
+  },
+  {
+    what: 'a name that is only a number is used as a name',
+    file: 'contact',
+    from: '  if (full && !isPhoneNumber(full)) return full;',
+    to: '  if (full) return full;',
+    expect: 'a name that is only a number is not a name',
+  },
+  {
+    what: 'every name is taken to be a number',
+    file: 'contact',
+    from: '  return !/[^0-9+()\\s.-]/.test(trimmed);',
+    to: '  return true;',
+    expect: 'a name with a number in it is not a number',
+  },
+  {
+    what: 'a participant whose name is a number goes into the map anyway',
+    file: 'contact',
+    from: '    const name = contactName(person);',
+    to: '    const name = person?.fullName || contactName(person);',
+    expect: 'a participant whose name is a number is left out of the map',
+  },
+  {
+    what: 'you are put back into the map that goes to the store',
+    file: 'contact',
+    from: '    if (skipSelf && person.isSelf) continue;',
+    to: '    if (false) continue;',
+    expect: 'you are left out of the map that goes to the store',
+  },
+  {
+    what: 'the store is given the map that includes you',
+    file: 'thread',
+    from: '    const storeNames = nameMap(participants, { skipSelf: true });',
+    to: '    const storeNames = nameMap(participants);',
+    expect: 'the store is given names that leave you out',
+  },
+  {
+    what: 'you are reported as having no name',
+    file: 'contact',
+    from: '    if (!person?.id || person.isSelf) continue;',
+    to: '    if (!person?.id) continue;',
+    expect: 'you are not reported as having no name',
+  },
+  {
+    what: 'a person Beeper knows only by a number is not reported',
+    file: 'contact',
+    from: '    if (number) unnamed.push(number);',
+    to: '    if (false) unnamed.push(number);',
+    expect: 'a person Beeper knows only by a number is reported',
+  },
+  {
+    what: 'a change of name is not reported',
+    file: 'contact',
+    from: '    if (!to || to === message.senderName) continue;',
+    to: '    if (true) continue;',
+    expect: 'the person whose name changed is reported',
+  },
+  {
+    what: 'a refresh that changed something says nothing',
+    file: 'contact',
+    from: '  if (written > 0) {',
+    to: '  if (false) {',
+    expect: 'a refresh that changed something says so',
+  },
+  {
+    what: 'a person Beeper cannot name is not said out loud',
+    file: 'contact',
+    from: '  if (unnamed.length) {',
+    to: '  if (false) {',
+    expect: 'a person Beeper cannot name is said out loud',
+  },
+  {
+    what: 'the refresh works out what to say and never says it',
+    file: 'thread',
+    from: '    toast(contactRefreshMessage(outcome.report, outcome.written), \'info\', 4200);',
+    to: '    void contactRefreshMessage(outcome.report, outcome.written);',
+    expect: 'the refresh says what it found',
+  },
+  {
+    // Not a bug. The same name, reached the same way.
+    what: 'TOLERATED: the report reads the sender id the other way round',
+    file: 'contact',
+    from: '    const to = map.get(String(message.senderID ?? \'\'));',
+    to: '    const to = map.get(String(message.senderID || \'\'));',
+    expect: 'the person whose name changed is reported',
     expectGreen: true,
   },
 ];
