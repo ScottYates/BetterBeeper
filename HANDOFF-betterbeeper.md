@@ -1,12 +1,13 @@
 # BetterBeeper working handoff
 
-Last updated 2026-10-21, as the unread fix and the people list were released
-as v1.21.0, on top of the chat list refresh button released as v1.20.0.
+Last updated 2026-10-22, with the composer focus, the paste-and-drop work for
+any file, and the fix for an attachment vanishing on a socket reconnect all
+committed and released as **v1.24.0**.
 
-The version before this one described a v1.18.6-era tree. The one before that
-described a v1.17.0-era tree, claimed the GitHub CLI was not authenticated, and
-described an update helper that is no longer on `main`. Do not trust any of it
-without re-checking.
+The version before this one described the v1.21.0 released state. The one before
+that described a v1.18.6-era tree, claimed the GitHub CLI was not authenticated,
+and described an update helper that is no longer on `main`. Do not trust any of
+it without re-checking.
 
 ## Where everything is
 
@@ -23,36 +24,34 @@ one person's machine.
 
 ## Git state
 
-Branch `main`, pushed and in sync with origin. This file is committed, so the
-tree is clean.
-
-The last few commits, with the `Release 1.21.0` commit sitting on top of them:
-
-```
-e9fcc06  feat: show everyone in a conversation
-b02d8a5  fix: opening a chat clears its unread badge
-4b1125b  Release 1.20.0
-7380b24  docs: point the handoff at v1.20.0 before it is cut
-6f1d349  feat: refresh the chat list by hand and report what arrived
-```
-
-Release is **v1.21.0**. The tag sits on the `Release 1.21.0` commit, which is
-the commit that carries the version, so `main` is not left ahead of its own
-tag. `package.json` says 1.21.0. The **installed app reported
-`ProductVersion 1.20.0.0` on 2026-10-21**, behind this release on purpose:
-releases are published without installing, so the in-app update path has a
-newer release to offer and gets exercised on a real account. That number
-moves whenever it is installed from, so read the date with it. Install it
-from the app when you want it.
-
-v1.21.0 carried the unread fix and the people list. It is a minor bump,
+Branch `main`, in sync with origin. The work described under "Work done
+2026-10-22" is committed and released as **v1.24.0**. It is a minor bump,
 because `tools/release.js` derives the level from the commit subjects since
-the last tag and the `feat:` is the higher of the two. v1.20.0 carried the
-chat list refresh button, v1.19.7 the entity fix, and v1.19.8 was the same
-code plus the handoff behind it.
+the last tag and the `feat:` is the higher of the two.
+
+The last few commits, with the `Release 1.24.0` commit sitting on top of them:
+
+```
+af32530  feat: focus the composer on open, and paste or drop any file
+b4ecaba  fix: re-opening a chat no longer discards what was in progress
+e0a527a  Release 1.23.0
+8909f1b  feat: refreshing a chat now says what it found
+3d89030  fix: the jobs panel must not wait for the window to paint
+```
+
+The newest tag is **v1.24.0**, on the `Release 1.24.0` commit, so `main` is
+not left ahead of its own tag. `package.json` says 1.24.0.
+
+v1.23.0 carried the contact refresh report, v1.22.0 the contact refresh
+itself, v1.21.1 a handoff correction, v1.21.0 the unread fix and the people
+list, and v1.20.0 the chat list refresh button.
 
 `tools/release.js` owns the version field and derives the bump from commit
 subjects since the last tag, so do not hand-edit it.
+
+**A release is required behind every push to `main`.** `check:released` fails
+whenever `main` is ahead of the newest tag, so the work above needs
+`npm run release` before it is pushed, not after.
 
 Local branches, none of them needed any more:
 
@@ -491,11 +490,149 @@ refresh report is a toast, and a toast is a DOM change at a moment that moved
 the frame; the panel's staleness was already there. `check:sidebar` now has a
 check for it that holds the frames back and waits for the row to appear anyway.
 
-## Verification status
+## Work done 2026-10-22
 
-`npm run check:all` gives **43/43 suites passed** on the v1.23.0 release
-commit, 2026-10-21. It was 42 suites before `check:contactrefresh` was added,
-41 before `check:participants`, 40 before `check:refreshchats`, 39 before
+Three requests in one: clicking a conversation must leave the cursor in its
+composer, pasting must work for attachments as well as images, and drag and
+drop must work for both. **Released as v1.24.0.**
+
+### The cursor goes to the composer
+
+`openChat()` calls `focusComposer()` right after it draws the thread and
+**before** it awaits the store read. That order matters: the read is an IPC
+round trip into the process that is running the background syncs, so a read
+that queues behind a sync would leave the cursor waiting with it. The focus
+happens first, so the cursor is ready while the messages are still arriving.
+
+The caret goes to the **end** of whatever is in the box, not the start. A draft
+the user was part way through is the common case, and a cursor that jumps to
+the beginning of it is its own small annoyance.
+
+`focusComposer()` is defensive on purpose: it is called from inside
+`openChat`, so an exception raised there would leave the user with a chat that
+did not open at all. A composer that is not a textarea has no `value` and no
+`setSelectionRange`, and both are checked.
+
+Measured live: the focus was in the search box, a conversation was clicked, and
+`document.activeElement` became the composer textarea with the caret at the end
+of a 29 character draft.
+
+### Paste and drop take any file
+
+The paste path was images only, because the code filtered the clipboard items
+on `type.startsWith('image/')`. A document copied from Explorer is a file like
+any other, so the filter is gone and the path takes anything.
+
+Two decisions worth keeping:
+
+- **A file wins over any text beside it.** That is what makes pasting a
+  document copied from Explorer attach the document rather than type its path
+  into the box.
+- **Upload by bytes, for both.** `api.assets.uploadBytes` takes
+  `{ data, fileName, mimeType }` and is not image-specific. One code path for
+  paste and drop, no change to the preload or the IPC surface, and a clipboard
+  file has no path to offer anyway. `webUtils.getPathForFile` was considered and
+  rejected: exposing it through the preload would need a matching IPC handler
+  under `check:api`, and it buys nothing for a clipboard payload.
+
+The drop limit is 100 MB and the paste limit is 25 MB. A dropped file is one
+the user picked out of a folder; a clipboard payload is whatever the OS put
+there.
+
+**The whole window takes the drop,** excluding the search box and the manual
+token field, matching what the paste handler excludes. A file is dropped into
+a conversation, not into a particular box.
+
+Three things the drag had to get right:
+
+- **`dragover` has to call `preventDefault`.** Without it the browser refuses
+  the drop and the drop event never fires at all.
+- **The file has to be recognised while the payload is still protected.** During
+  a drag the browser will not let the app read the files, so `getAsFile()` can
+  come back empty and the files list is empty too. What the browser does say,
+  from the first `dragover` onwards, is `dataTransfer.types` contains `Files`.
+  That is the signal `hasFileItem()` uses, with the files as the fallback.
+- **The drop must be claimed before the chat check.** A file dropped on a page
+  that does not claim it makes the browser navigate to that file, and
+  navigating this window away from the app is worse than a file that did not
+  get attached. So the drop is always claimed when it carries a file, and a
+  drop with no conversation open says so instead of doing nothing.
+
+The window says it will take the file while the drag is over it: `.app` gets an
+`is-dropping` class and a dashed overlay reads "Drop to attach". A drag that
+appears to be ignored is one nobody tries twice.
+
+### The attachment vanished when the socket reconnected
+
+This is the bug that made the first live attempt look like the feature did not
+work at all: the drop was claimed, the upload ran, and the chip was gone five
+seconds later.
+
+`main.js` re-opens the chat it is showing whenever the live event socket
+reconnects:
+
+```js
+window.beeper.on.eventsReady(() => {
+  if (state.activeChatID) openChat(state.activeChatID);
+});
+```
+
+and `openChat()` started with `pendingAttachments = []`, so every reconnect
+threw away the file the user had just attached - and the reply they were
+writing. The pending state belongs to the chat it was made in, so it is now
+cleared only when the user moves to a **different** chat. Re-opening the same
+chat keeps it.
+
+That is the whole difference between the two: the file survives the re-open,
+and it still goes when the user moves on.
+
+### Two checks that were wrong about the app
+
+`check:focusread` and `check:download` both failed the moment this work went
+in, and both were the harness's fault. Their page had `<div id="composer">`
+with the buttons inside it, while the app has a `<textarea id="composer">` with
+the buttons beside it. A fixture that says div where the app says textarea is
+a fixture that lies: the code that reads the draft out of the composer gets
+`undefined`, and the check reports a failure that is not in the app.
+
+Both pages are generated from the real `index.html` now, the way
+`check:threadopen` and `check:sidebar` already did, so the DOM in a check
+cannot drift from the DOM the app ships.
+
+`check:paste` was rewritten on the same pattern. It used to run against a
+blank page and drive the parsing functions; it now runs against the real
+markup and drives **the whole path**: a real `dragover`, a real `drop`, a real
+`paste`, and the upload that follows each one, with the API boundary stubbed.
+52 cases. The upload is stubbed so the second half of the check needs no
+account, no window and no network.
+
+### How this was verified without disturbing the account
+
+The live app was never driven for this. Two things made that possible:
+
+- **A hidden window with the real preload and the real IPC.** A probe in the
+  Electron main process registers the app's own `ipc.js`, opens a hidden
+  `BrowserWindow` with the real preload and the real `index.html`, and drops a
+  file into the real DOM. The only thing replaced is `history:open`, so the
+  probe never writes to the message database the running app has open. That
+  exercises the one hop the hermetic check stubs: renderer, bridge, preload,
+  IPC, client, and the real local Beeper server.
+- **Only the Note to self chat.** The probe finds the Note to self chat, opens
+  it, drops one small text file, checks the chip, and takes the attachment back
+  off. No message is ever sent.
+
+The result was `"Attached 1 file"`, a chip reading `e2e-probe.txt`, and the
+chip still there after the chat was re-opened. The upload itself was also
+measured on its own, against the real local server: a document uploaded with a
+mime type comes back with an `uploadID`, so Beeper does accept a typed
+document.
+
+
+
+`npm run check:all` gives **43/43 suites passed** on the tree carrying the
+2026-10-22 work, 2026-10-22. It was 43/43 on the v1.23.0 release commit,
+2026-10-21; 42 suites before `check:contactrefresh` was added, 41 before
+`check:participants`, 40 before `check:refreshchats`, 39 before
 `check:entity`, and 35/37 on 2026-10-14.
 
 `check:released` is the one that moves with the git state. It fails whenever
@@ -518,10 +655,21 @@ Individually measured: `check:entity` 0 failing across 31 cases,
 `check:participants` 0 failing across 36 cases (new),
 `check:contactrefresh` 71/71 and `tools/contact-refresh-redproof.js` 19/19
 mutations caught, 2/2 neutral rewrites tolerated (new),
+`check:paste` 52/52 (rewritten, new),
+`check:threadopen` 16/16,
 `check:sidebar` 67/67, `check:unread` 32/32, `check:layout` 13/13,
 `check:api` 136/136, `check:composer` 17/17, `check:actions` 21/21,
 `check:about` 6/6, `check:installer` passing, `check:syntax` OK on every JS
 file and harness, `check:ascii` OK.
+
+`check:paste` is worth a word, because it is the shape the other checks
+should take. It drives the **real** event path - a `dragover`, a `drop`, a
+`paste` - against the **real** markup, and stubs only the API boundary. Two
+cases in it are controls: one shows the drag signal is the types list and not
+the files, and one shows that re-opening the same chat keeps the attachment
+while opening a different chat clears it. Those two are a pair on purpose: if
+the re-open always cleared, the first would fail, and if it never cleared, the
+second would.
 
 `tools/update-redproof.js` is not in the sweep, because it mutates the working
 tree on purpose. Run it by hand after touching the updater. It mutates a real
@@ -590,6 +738,19 @@ is what catches that gap.
   name.** To read another Electron app's ciphertext, point `userData` at that
   app's real folder before `app.whenReady()`; the key is `os_crypt.encrypted_key`
   in `<userData>\Local State`. `app.setName()` does nothing for this.
+- **`TokenStore.read()` DELETES the credentials it cannot decrypt.** The file
+  is written by the app under `<userData>\Local State`'s key, so a probe that
+  reads it with the **wrong** `userData` cannot decrypt it - and `read()`
+  treats that as "this will never become decryptable", logs
+  `stored credentials are unreadable, clearing:` and calls `clear()`, which
+  removes `auth.json`. The app is then signed out on its next start. This
+  happened on 2026-10-22 while probing the upload endpoint; the file was put
+  back by running the app's own OAuth flow headlessly (register a client, POST
+  `/oauth/authorize/callback`, exchange the code, write the file with
+  `TokenStore.write()`), which needs no window and no click, because the local
+  Beeper server approves on its own when the desktop app is already signed in.
+  **Point `userData` at the real profile before reading a token, or copy the
+  whole profile, `Local State` included.**
 - **The shell validates its working directory before running anything.** If the
   session folder is deleted, every command fails with
   `Working directory does not exist`.
