@@ -262,9 +262,19 @@ export function activeChat() {
 
 export async function openChat(chatID, { focusMessageID: focusId } = {}) {
   focusMessageID = focusId || null;
-  pendingAttachments = [];
-  state.replyTo = null;
-  state.editing = null;
+
+  // What the user was in the middle of belongs to the chat they were in.
+  //
+  // The app re-opens the chat it is showing on its own - every time the live
+  // event socket reconnects, for one - and clearing these on every open threw
+  // away the file the user had just attached, and the reply they were
+  // writing. They are cleared when the user moves to a different chat, which
+  // is the only time they belong to somebody else.
+  if (state.activeChatID !== chatID) {
+    pendingAttachments = [];
+    state.replyTo = null;
+    state.editing = null;
+  }
 
   // A chat you have just opened always shows its newest message. `atBottom`
   // survives chat switches, so without this a chat opened after scrolling up
