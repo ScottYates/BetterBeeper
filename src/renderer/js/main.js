@@ -16,6 +16,7 @@ import { checkForUpdatesOnLaunch } from './updates.js';
 import { newestPreviewEntry, mergeChatSummary } from './chat-preview.js';
 import { markAllTargets, inBatches } from './mark-all-read.js';
 import { newChats, refreshOutcome } from './chat-list-refresh.js';
+import { focusComposerOnWindowFocus, wireNotificationClicks } from './notification-click.js';
 
 let bootstrapped = false;
 
@@ -455,6 +456,11 @@ function wireKeyboard() {
   window.beeper.on.menuNewChat(() => openNewChat());
   window.beeper.on.menuFocusSearch(() => focusSearch());
 
+  // A click on a desktop notification opens that conversation and puts the
+  // cursor in its composer. A toast is a request to reply, not merely to
+  // bring the window up.
+  wireNotificationClicks();
+
   bus.on('chat:open', (chatID, opts) => openChat(chatID, opts));
   bus.on('chat:activated', () => subscribeVisibleChats());
   bus.on('chat:close', () => closeActiveChat());
@@ -500,11 +506,19 @@ async function boot() {
   window.addEventListener('focus', () => {
     refreshInboxOnFocus();
     markReadOnReturn();
+    // A notification click asked for the cursor, and the window was not the
+    // foreground window when the click arrived.
+    focusComposerOnWindowFocus();
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     refreshInboxOnFocus();
     markReadOnReturn();
+    // The same pending cursor as above. Switching away from the window often
+    // does not fire the focus event, and coming back does not always, which
+    // is why both are wired to everything the app does on its return. The
+    // request is one-shot, so whichever arrives first takes it.
+    focusComposerOnWindowFocus();
   });
 
   $('#btn-new-chat').addEventListener('click', () => openNewChat());

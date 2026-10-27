@@ -1,13 +1,15 @@
 # BetterBeeper working handoff
 
-Last updated 2026-10-22, with the composer focus, the paste-and-drop work for
-any file, and the fix for an attachment vanishing on a socket reconnect all
-committed and released as **v1.24.0**.
+Last updated 2026-10-27, with a desktop notification click now opening the
+conversation it was about and putting the cursor in its composer.
 
-The version before this one described the v1.21.0 released state. The one before
-that described a v1.18.6-era tree, claimed the GitHub CLI was not authenticated,
-and described an update helper that is no longer on `main`. Do not trust any of
-it without re-checking.
+The version before this one described the v1.24.0 released state, which
+carried the composer focus, the paste-and-drop work for any file, and the fix
+for an attachment vanishing on a socket reconnect. The one before that
+described a v1.21.0 released state. The one before that described a
+v1.18.6-era tree, claimed the GitHub CLI was not authenticated, and described
+an update helper that is no longer on `main`. Do not trust any of it without
+re-checking.
 
 ## Where everything is
 
@@ -24,24 +26,26 @@ one person's machine.
 
 ## Git state
 
-Branch `main`, in sync with origin. The work described under "Work done
-2026-10-22" is committed and released as **v1.24.0**. It is a minor bump,
-because `tools/release.js` derives the level from the commit subjects since
-the last tag and the `feat:` is the higher of the two.
+Branch `main`, in sync with origin, at `ff11067 Release 1.24.0`. The work
+described under "Work done 2026-10-27" is written but **not committed**, and
+not released.
 
-The last few commits, with the `Release 1.24.0` commit sitting on top of them:
+The last few commits, with the `Release 1.24.0` commit on top of them:
 
 ```
+ff11067  Release 1.24.0
+a365ce8  docs: point the handoff at v1.24.0 before it is cut
 af32530  feat: focus the composer on open, and paste or drop any file
 b4ecaba  fix: re-opening a chat no longer discards what was in progress
 e0a527a  Release 1.23.0
-8909f1b  feat: refreshing a chat now says what it found
-3d89030  fix: the jobs panel must not wait for the window to paint
 ```
 
 The newest tag is **v1.24.0**, on the `Release 1.24.0` commit, so `main` is
 not left ahead of its own tag. `package.json` says 1.24.0.
 
+v1.24.0 carried the composer focus, the paste and drop work, and the reconnect
+fix. It is a minor bump, because `tools/release.js` derives the level from the
+commit subjects since the last tag and the `feat:` is the higher of the two.
 v1.23.0 carried the contact refresh report, v1.22.0 the contact refresh
 itself, v1.21.1 a handoff correction, v1.21.0 the unread fix and the people
 list, and v1.20.0 the chat list refresh button.
@@ -627,13 +631,81 @@ measured on its own, against the real local server: a document uploaded with a
 mime type comes back with an `uploadID`, so Beeper does accept a typed
 document.
 
+## Work done 2026-10-27
 
+### A notification click opens the chat and puts the cursor in it
 
-`npm run check:all` gives **43/43 suites passed** on the tree carrying the
-2026-10-22 work, 2026-10-22. It was 43/43 on the v1.23.0 release commit,
-2026-10-21; 42 suites before `check:contactrefresh` was added, 41 before
-`check:participants`, 40 before `check:refreshchats`, 39 before
-`check:entity`, and 35/37 on 2026-10-14.
+Reported as "when you click on a pop up notification, it should open to the
+chat and focus the text entry field".
+
+It did neither. The click handler in `src/main/main.js` brought the window up
+and nothing else, so the user was left looking at whatever chat was already
+open, then had to find the right conversation in the list, click it, and click
+the composer before they could reply. A toast is a request to reply.
+
+**The click now names the chat it was about,** and the renderer opens it. The
+main process sends the chat id over a new push channel, `notification:click`;
+the preload carries it; the renderer opens that conversation. Opening a chat
+has focused the composer since v1.24.0, so the caret lands there with no
+extra work - which is the point of having done that first.
+
+**The window is often not the foreground window when the click arrives.** The
+main process has only just been asked to show it, and Windows can refuse the
+foreground request outright. A caret set in a background window does not
+always survive the activation, so the composer is asked for focus again when
+the window takes focus.
+
+That second attempt is **armed once, and only for a click that asked for it**.
+An ordinary return to the window must not drag the caret back into the
+composer, because the user may have been in the search box, or editing a
+message, or halfway through a reply. So the flag is set only when the window
+was not already active when the click arrived, and it is cleared the moment
+it is used. The control case in the check is the one that fails if it leaks.
+
+The logic lives in `src/renderer/js/notification-click.js`, and the wiring
+lives there too - `wireNotificationClicks()` installs the handler the app
+really uses, rather than the bootstrap doing it inline. That is what lets the
+check drive the real subscription instead of calling the module's function
+and hoping the bootstrap matches.
+
+`check:notificationclick` is 20 cases, and
+`tools/notification-click-redproof.js` catches 12/12 mutations with 1/1
+neutral rewrite tolerated. The red proof found three things worth keeping:
+
+- A check whose body throws reports one failure and hides the rest, which is
+  how a broken check looks like a passing one. The harness now keeps the
+  cases it collected and adds the error to them, instead of losing all of
+  them.
+- The first version of the source assertion for the preload matched the
+  *subscription* and said nothing about the body, so a wiring that stopped
+  opening the conversation would have stayed green. The subscription is now
+  driven through the real handler, and the source assertion is about the
+  line that installs it.
+- The channel name is a string on both sides of the bridge, and a typo on
+  one side only left both source checks green while the click did nothing
+  at all. The two names are now read out of the source and compared, so
+  they cannot drift apart unnoticed.
+
+### A regex that was not a regex
+
+`npm run check:syntax` exists because "a broken check cannot pose as an app
+crash", and this is exactly the case it was written for. A pattern written as
+`/notificationClick: \(fn) => on\('notification:click', fn\)/` has an
+unescaped closing bracket: the regex ended at that bracket and everything
+after it was read as flags, so the file did not parse and Electron showed a
+JavaScript error dialog instead of the check failing.
+
+**Validate the JavaScript before running it.** `npm run check:syntax` parses
+every file in the tree and every harness in it, and it is the difference
+between a check failing and the app looking broken.
+
+## Verification status
+
+`npm run check:all` gives **44/44 suites passed** on the tree carrying the
+2026-10-27 work, 2026-10-27. It was 43/43 on the v1.24.0 release commit and
+on the v1.23.0 release commit, 2026-10-21; 42 suites before
+`check:contactrefresh` was added, 41 before `check:participants`, 40 before
+`check:refreshchats`, 39 before `check:entity`, and 35/37 on 2026-10-14.
 
 `check:released` is the one that moves with the git state. It fails whenever
 `main` is ahead of the newest tag, because a push with no release behind it is
@@ -657,6 +729,9 @@ Individually measured: `check:entity` 0 failing across 31 cases,
 mutations caught, 2/2 neutral rewrites tolerated (new),
 `check:paste` 52/52 (rewritten, new),
 `check:threadopen` 16/16,
+`check:notificationclick` 20/20 and
+`tools/notification-click-redproof.js` 12/12 mutations caught, 1/1 neutral
+rewrite tolerated (new),
 `check:sidebar` 67/67, `check:unread` 32/32, `check:layout` 13/13,
 `check:api` 136/136, `check:composer` 17/17, `check:actions` 21/21,
 `check:about` 6/6, `check:installer` passing, `check:syntax` OK on every JS
@@ -723,6 +798,11 @@ is what catches that gap.
 
 ## Environment gotchas that cost time
 
+- **Validate the JavaScript before running it.** `npm run check:syntax` parses
+  every file in the tree and every harness in it. A check that does not parse
+  does not fail - it throws, and Electron answers a broken check with a
+  "A JavaScript error occurred in the main process" dialog, which reads as
+  the app crashing rather than as a check being broken.
 - **`npm.cmd`, not `npm`.** PowerShell resolves `npm` to `npm.ps1`, which the
   execution policy blocks.
 - **PATH is stale mid-session.** If a tool looks missing after installing it,

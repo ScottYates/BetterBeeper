@@ -117,5 +117,6 @@ contextBridge.exposeInMainWorld('beeper', {
     menuNewChat: (fn) => on('menu:newChat', fn),
     menuFocusSearch: (fn) => on('menu:focusSearch', fn),
     historyProgress: (fn) => on('history:progress', fn),
+    notificationClick: (fn) => on('notification:click', fn),
   },
 });

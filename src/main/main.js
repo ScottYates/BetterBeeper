@@ -638,6 +638,10 @@ function wireNotifications() {
         if (mainWindow.isMinimized()) mainWindow.restore();
         mainWindow.show();
         mainWindow.focus();
+        // The click is a request to go to that conversation and start typing
+        // in it, not merely to bring the window up. The chat is named so the
+        // renderer can open it and put the cursor in its composer.
+        mainWindow.webContents.send('notification:click', chatID);
       });
       notification.show();
     } catch {

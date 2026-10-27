@@ -261,6 +261,7 @@ npm run check:layout    # message bubbles use the full width of the chat pane
 npm run check:composer  # the composer placeholder names one person and stays one line
 npm run check:paste     # a pasted or dropped file becomes an attachment; a text paste is not swallowed
 npm run check:threadopen # opening a chat keeps what the window already had, and focuses the composer
+npm run check:notificationclick # a notification click opens that chat and puts the cursor in it
 npm run check:imagecopy # which image URLs may be copied, and how they map back to bytes
 npm run check:api       # the preload surface, the IPC handlers and the renderer agree
 npm run check:settings  # a save keeps unknown settings and drops the retired ones
