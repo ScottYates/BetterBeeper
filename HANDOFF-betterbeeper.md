@@ -1,7 +1,8 @@
 # BetterBeeper working handoff
 
 Last updated 2026-10-27, with a desktop notification click now opening the
-conversation it was about and putting the cursor in its composer.
+conversation it was about and putting the cursor in its composer, released as
+**v1.25.0**.
 
 The version before this one described the v1.24.0 released state, which
 carried the composer focus, the paste-and-drop work for any file, and the fix
@@ -26,29 +27,31 @@ one person's machine.
 
 ## Git state
 
-Branch `main`, in sync with origin, at `ff11067 Release 1.24.0`. The work
-described under "Work done 2026-10-27" is written but **not committed**, and
-not released.
+Branch `main`, in sync with origin. The work described under "Work done
+2026-10-27" is committed and released as **v1.25.0**. It is a minor bump,
+because `tools/release.js` derives the level from the commit subjects since
+the last tag and the `feat:` is the higher of the two.
 
-The last few commits, with the `Release 1.24.0` commit on top of them:
+The last few commits, with the `Release 1.25.0` commit sitting on top of them:
 
 ```
+1b8c2ff  feat: a notification click opens the chat and puts the cursor in it
 ff11067  Release 1.24.0
 a365ce8  docs: point the handoff at v1.24.0 before it is cut
 af32530  feat: focus the composer on open, and paste or drop any file
 b4ecaba  fix: re-opening a chat no longer discards what was in progress
-e0a527a  Release 1.23.0
 ```
 
-The newest tag is **v1.24.0**, on the `Release 1.24.0` commit, so `main` is
-not left ahead of its own tag. `package.json` says 1.24.0.
+The newest tag is **v1.25.0**, on the `Release 1.25.0` commit, so `main` is
+not left ahead of its own tag. `package.json` says 1.25.0.
 
-v1.24.0 carried the composer focus, the paste and drop work, and the reconnect
-fix. It is a minor bump, because `tools/release.js` derives the level from the
-commit subjects since the last tag and the `feat:` is the higher of the two.
-v1.23.0 carried the contact refresh report, v1.22.0 the contact refresh
-itself, v1.21.1 a handoff correction, v1.21.0 the unread fix and the people
-list, and v1.20.0 the chat list refresh button.
+v1.25.0 carried the notification click. v1.24.0 carried the composer focus,
+the paste and drop work, and the reconnect fix. It is a minor bump, because
+`tools/release.js` derives the level from the commit subjects since the last
+tag and the `feat:` is the higher of the two. v1.23.0 carried the contact
+refresh report, v1.22.0 the contact refresh itself, v1.21.1 a handoff
+correction, v1.21.0 the unread fix and the people list, and v1.20.0 the chat
+list refresh button.
 
 `tools/release.js` owns the version field and derives the bump from commit
 subjects since the last tag, so do not hand-edit it.
