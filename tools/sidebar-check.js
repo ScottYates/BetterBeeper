@@ -61,6 +61,17 @@ async function main() {
       return JSON.stringify(cases);
 
       async function body() {
+      // The app shell is hidden until the app's own script connects, and the
+      // harness strips the scripts, so it would stay hidden. A hidden element
+      // has no layout at all: every rectangle inside it is zero, and a
+      // rectangle of zero is inside every pane. An assertion about where a
+      // row is would then pass with the scrolling taken out - which is
+      // exactly what happened.
+      //
+      // So the shell is shown, and the layout is real.
+      const shell = document.getElementById('app');
+      if (shell) shell.hidden = false;
+
       const S = await import(${JSON.stringify(js('state.js'))});
       const B = await import(${JSON.stringify(js('sidebar.js'))});
       const J = await import(${JSON.stringify(js('jobs.js'))});
@@ -94,15 +105,34 @@ async function main() {
         },
         images: {},
         shell: { openExternal: async () => envelope(true) },
-        chats: { get: async () => envelope({}), markRead: async () => envelope(true) },
-        messages: { list: async () => envelope({ items: [] }) },
+        chats: {
+          get: async () => envelope({}),
+          markRead: async () => envelope(true),
+          // Two chats, so the sidebar's search has a list to step through.
+          search: async () => envelope({
+            items: [
+              { id: 's1', title: 'Invoice chat one', network: 'Signal', type: 'single' },
+              { id: 's2', title: 'Invoice chat two', network: 'Signal', type: 'single' },
+            ],
+          }),
+        },
+        messages: {
+          list: async () => envelope({ items: [] }),
+          search: async () => envelope({
+            items: [{ id: 'm9', chatID: 's1', text: 'the invoice is due', senderName: 'Someone' }],
+          }),
+        },
         settings: { get: async () => envelope({}), set: async () => envelope({}) },
         events: { subscribe: async () => envelope({ subscribed: 0 }) },
         history: {
           open: async () => envelope({ messages: [], hasMore: false, complete: true }),
           page: async () => envelope({ messages: [], hasMore: false }),
           upsert: async () => envelope({ written: 1 }),
-          search: async () => envelope([]),
+          // The local store's answer, which reaches further back than
+          // Beeper's and is merged in front of it.
+          search: async () => envelope([
+            { id: 'm8', chatID: 's2', text: 'the invoice again', senderName: 'Someone' },
+          ]),
           status: async () => envelope({ messages: 10, chats: 3, bytes: 1, mediaBytes: 2, mediaCount: 1, running: null, queued: 0 }),
           jobs: async () => envelope({ jobs: [], queued: 0, messages: 10, chats: 3 }),
           refresh: async () => { refreshCalls.push(true); return envelope({ queued: true }); },
@@ -665,6 +695,161 @@ async function main() {
       add('the toggle reports the real state to assistive tech', () =>
         document.getElementById('jobs-toggle').getAttribute('aria-expanded') === 'true'
         || 'aria-expanded disagrees with what is on screen');
+
+      // --- the search, and stepping through its results ---------------------
+      //
+      // The conversation's own search steps through its matches with a pair of
+      // arrows. The sidebar's search draws a list of results, and the arrows
+      // step through that list: the same rule, both ways.
+      //
+      // The results are stubbed so the list has something in it: two chats and
+      // two messages, so the arrows have to cross a section boundary as well as
+      // step within one.
+      const searchInput = document.getElementById('search-input');
+      const searchCount = document.getElementById('search-count');
+      const searchPrev = document.getElementById('search-prev');
+      const searchNext = document.getElementById('search-next');
+      const resultRows = () => [
+        ...document.querySelectorAll('#chat-list .chat-item'),
+        ...document.querySelectorAll('#chat-list .result-item'),
+      ];
+      const currentRows = () => document.querySelectorAll('#chat-list .is-current');
+      // Where the arrows are, counted from the top of the list. Read from
+      // the rows rather than from a counter, so a case cannot be fooled by a
+      // counter that says something the list does not show.
+      const currentIndex = () => resultRows().indexOf(currentRows()[0]);
+
+      searchInput.value = 'invoice';
+      searchInput.dispatchEvent(new Event('input'));
+      // The box is debounced, and the search itself is a round trip.
+      await new Promise((r) => setTimeout(r, 500));
+
+      add('the search draws its results', () =>
+        resultRows().length === 4 || ('there are ' + resultRows().length + ' rows'));
+
+      add('the arrows say where they are', () =>
+        searchCount.textContent === '1 of 4' || ('the counter reads ' + JSON.stringify(searchCount.textContent)));
+
+      add('the first result is the current one', () =>
+        currentRows().length === 1 && currentRows()[0] === resultRows()[0]
+        || ('there are ' + currentRows().length + ' current rows'));
+
+      searchNext.click();
+      add('the next arrow steps forward', () =>
+        currentIndex() === 1 && searchCount.textContent === '2 of 4'
+        || ('the counter reads ' + JSON.stringify(searchCount.textContent)));
+
+      searchPrev.click();
+      add('the previous arrow steps back', () =>
+        currentIndex() === 0 && searchCount.textContent === '1 of 4'
+        || ('the counter reads ' + JSON.stringify(searchCount.textContent)));
+
+      searchPrev.click();
+      add('stepping back past the start wraps to the last result', () =>
+        currentIndex() === 3 && searchCount.textContent === '4 of 4'
+        || ('the counter reads ' + JSON.stringify(searchCount.textContent)));
+
+      searchNext.click();
+      add('stepping past the end wraps to the first result', () =>
+        currentIndex() === 0 && searchCount.textContent === '1 of 4'
+        || ('the counter reads ' + JSON.stringify(searchCount.textContent)));
+
+      add('only one result is ever the current one', () =>
+        currentRows().length === 1 || ('there are ' + currentRows().length + ' current rows'));
+
+      // Stepping to a result the user cannot see is the same as not stepping
+      // at all, so the current one is brought into view.
+      //
+      // The list is made short first. Four results in a tall sidebar all fit,
+      // and a result that was never off screen would prove nothing - the
+      // check would pass with the scrolling taken out.
+      //
+      // The flex is what has to be overridden, not the height: the list is
+      // flex 1, so a height on it is ignored and the list stays as tall as
+      // the sidebar.
+      //
+      // The pane is two rows tall, not one. A row taller than the pane it is
+      // scrolled into gets its top edge aligned and the rest of it hangs
+      // below - that is what the browser does with 'nearest' - and then "the
+      // row is in the pane" is true of the top of the row only. Two rows is
+      // a pane the row fits inside, so the question the check asks is the
+      // question the user would ask.
+      //
+      // (No backticks in here. This whole block is inside a template
+      // literal, and one of them ends the string early - the file then stops
+      // parsing, and Electron answers that with an error dialog on the
+      // desktop.)
+      // The control. If the list has no height, then nothing can be scrolled,
+      // every rectangle in it is zero, and a zero rectangle is inside every
+      // pane - so the case below would pass with the scrolling taken out.
+      add('the results list has a height to scroll in', () => {
+        const list = document.getElementById('chat-list');
+        return list.clientHeight > 0
+          || ('the list is ' + list.clientHeight + ' tall, so there is nothing to scroll');
+      });
+
+      add('the current result is brought into view', () => {
+        const list = document.getElementById('chat-list');
+        const rows = resultRows();
+        const last = rows[rows.length - 1];
+        if (!last) return 'there are no results';
+        const rowHeight = Math.ceil(last.getBoundingClientRect().height) || 48;
+        const flex = list.style.flex;
+        list.style.flex = '0 0 ' + (rowHeight * 2) + 'px';
+        // Onto the last result, from wherever the arrows happen to be.
+        for (let i = 0; i < 4 && currentRows()[0] !== last; i++) searchNext.click();
+        const onScreen = last.getBoundingClientRect();
+        const pane = list.getBoundingClientRect();
+        const scrolled = list.scrollTop;
+        list.style.flex = flex;
+        return (onScreen.top >= pane.top - 1 && onScreen.bottom <= pane.bottom + 1)
+          ? (scrolled > 0 ? true
+            : ('the result is in the pane but the list never scrolled, scrollTop ' + scrolled))
+          : ('the result is at ' + Math.round(onScreen.top) + ' and the pane runs '
+            + Math.round(pane.top) + ' to ' + Math.round(pane.bottom) + ', scrollTop ' + scrolled);
+      });
+
+      // The keyboard answers the same way the arrows do.
+      const beforeEnter = currentIndex();
+      searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      add('Enter steps to the next result', () =>
+        currentIndex() === (beforeEnter + 1) % 4
+        || ('the counter reads ' + JSON.stringify(searchCount.textContent)));
+
+      const beforeShift = currentIndex();
+      searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
+      add('Shift+Enter steps back', () =>
+        currentIndex() === (beforeShift + 3) % 4
+        || ('the counter reads ' + JSON.stringify(searchCount.textContent)));
+
+      // Enter searches for what is in the box, not the results of the search
+      // that came before it.
+      //
+      // The box is debounced, so a user who types and presses Enter straight
+      // away would otherwise be stepping through the answers to a question
+      // they have already changed - and the debounce would then search the
+      // new text a moment later, hiding that it had happened.
+      //
+      // So the counter is read straight after the key, with nothing awaited
+      // in between: the search that is now under way has not resolved yet,
+      // and a timer cannot fire in the middle of this block. What it says is
+      // what the Enter did.
+      searchInput.value = 'receipt';
+      searchInput.dispatchEvent(new Event('input'));
+      searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      add('Enter searches for what is in the box, not the old results', () =>
+        !/^\d+ of \d+$/.test(searchCount.textContent)
+        || ('the counter still reads ' + JSON.stringify(searchCount.textContent)));
+
+      // Clearing the search clears the arrows with it.
+      searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await new Promise((r) => setTimeout(r, 150));
+
+      add('clearing the search clears the counter', () =>
+        searchCount.textContent === '' || ('the counter reads ' + JSON.stringify(searchCount.textContent)));
+
+      add('clearing the search leaves no result marked', () =>
+        currentRows().length === 0 || ('there are ' + currentRows().length + ' current rows'));
 
       // --- an avatar rebuilt after the first paint ---------------------------
       //

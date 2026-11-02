@@ -261,7 +261,7 @@ async function main() {
                 ? [bubble('o1', 1000, 'a different conversation', 'a2', 'c-other')]
                 : [
                     bubble('m1', 1000, 'the battery is flat', 'a2'),
-                    bubble('m2', 2000, 'nothing to see here', 'a2'),
+                    bubble('m2', 2000, 'a battery in the bag', 'a2'),
                     bubble('m3', 3000, 'batt batt batt', 'a1'),
                   ],
               complete: true,
@@ -276,8 +276,12 @@ async function main() {
             search: async () => envelope([]),
             searchInChat: async (chatID, query) => {
               searchCalls.push({ chatID, query });
+              // Three hits, not two: with two of them, forward and backward
+              // land on the same one, and an arrow that stepped the wrong
+              // way could not be told apart from one that stepped right.
               return envelope([
                 { chatID: 'c-note', id: 'm1', text: 'the battery is flat', ts: 1000 },
+                { chatID: 'c-note', id: 'm2', text: 'a battery in the bag', ts: 2000 },
                 { chatID: 'c-note', id: 'm3', text: 'batt batt batt', ts: 3000 },
               ]);
             },
@@ -352,6 +356,73 @@ async function main() {
           return (after !== before) || ('the index stayed at ' + after);
         });
 
+        // The arrows do the same thing as the keys, and they are what the
+        // row is read as being for. Until now only the keys were checked, so
+        // the two buttons on screen were never driven by anything.
+        await add('the next button steps to the next match', async () => {
+          const before = TS.threadSearchState();
+          const total = before.hits.length;
+          document.getElementById('thread-search-next').click();
+          await settle(150);
+          const after = TS.threadSearchState().index;
+          const expected = (before.index + 1) % total;
+          return after === expected || ('the index went to ' + after + ', not ' + expected);
+        });
+
+        await add('the previous button steps back', async () => {
+          const before = TS.threadSearchState();
+          const total = before.hits.length;
+          document.getElementById('thread-search-prev').click();
+          await settle(150);
+          const after = TS.threadSearchState().index;
+          const expected = (before.index - 1 + total) % total;
+          return after === expected || ('the index went to ' + after + ', not ' + expected);
+        });
+
+        await add('the mark on screen follows the button', async () => {
+          document.getElementById('thread-search-next').click();
+          await settle(150);
+          const state = TS.threadSearchState();
+          const marked = document.querySelector('#message-list mark.ts-hit.is-current');
+          const hit = state.hits[state.index];
+          if (!marked || !hit) return 'nothing is marked as current';
+          const id = marked.closest('[data-message-id]')?.getAttribute('data-message-id');
+          return id === hit.id || ('the mark is on ' + id + ', not ' + hit.id);
+        });
+
+        // Stepping to a match the user cannot see is the same as not stepping
+        // at all, so the arrow has to bring it into view.
+        //
+        // The window is hidden, so it has no layout and nothing in it can be
+        // measured - a rectangle of zero is inside every pane, and an
+        // assertion about where the match sits would pass with the scrolling
+        // taken out. So the call is watched instead: the app asking the
+        // browser to scroll the match into view is the part that belongs to
+        // the app.
+        await add('the arrow brings the match into view', async () => {
+          const scrolled = [];
+          const real = Element.prototype.scrollIntoView;
+          Element.prototype.scrollIntoView = function (options) {
+            scrolled.push(this);
+            try { return real.call(this, options); } catch (e) { return undefined; }
+          };
+          try {
+            document.getElementById('thread-search-next').click();
+            await settle(150);
+          } finally {
+            Element.prototype.scrollIntoView = real;
+          }
+          const state = TS.threadSearchState();
+          const hit = state.hits[state.index];
+          if (!hit) return 'there is no current match';
+          const found = scrolled.some(
+            (el) => el.closest('[data-message-id]')?.getAttribute('data-message-id') === hit.id,
+          );
+          return found === true
+            || ('the match ' + hit.id + ' was not brought into view; '
+              + (scrolled.length ? 'something else was' : 'nothing was'));
+        });
+
         await add('clearing the query removes every mark', async () => {
           const field = document.getElementById('thread-search-input');
           field.value = '';
@@ -359,6 +430,14 @@ async function main() {
           await settle(400);
           return document.querySelectorAll('#message-list mark.ts-hit').length === 0
             || 'a mark was left behind';
+        });
+
+        await add('CONTROL: with no matches there is nowhere for the arrow to go', async () => {
+          document.getElementById('thread-search-next').click();
+          await settle(150);
+          const state = TS.threadSearchState();
+          return state.index === -1 && state.hits.length === 0
+            || ('the index went to ' + state.index + ' with ' + state.hits.length + ' hits');
         });
 
         await add('Escape closes the row', async () => {

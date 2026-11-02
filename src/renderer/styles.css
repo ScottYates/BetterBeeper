@@ -347,6 +347,18 @@ select { cursor: pointer; }
 .search-row input { flex: 1; min-width: 0; }
 .search-row select { width: auto; flex: none; font-size: 12.5px; padding: 8px 6px; }
 
+/* Which result the arrows are on.
+   The sidebar's search steps through its results the way the conversation's
+   own search steps through its matches, so the current one is marked the same
+   way in both: the same soft wash, and the same accent for the edge. */
+.search-count { font-size: 12.5px; color: var(--text-dim); white-space: nowrap; flex: none; }
+.chat-item.is-current { background: var(--accent-soft); }
+.chat-item.is-current::after {
+  content: ""; position: absolute; right: 0; top: 8px; bottom: 8px;
+  width: 3px; border-radius: 3px 0 0 3px; background: var(--accent);
+}
+.result-item.is-current { background: var(--accent-soft); border-color: var(--accent); }
+
 /* The conversation's own search sits under the thread header, in the same
    shape as the sidebar's, so the app has one search idiom rather than two.
    The row is hidden with the attribute rather than by collapsing it, so the
@@ -358,7 +370,7 @@ select { cursor: pointer; }
 }
 .thread-search-row[hidden] { display: none; }
 .thread-search-row input { flex: 1; min-width: 0; }
-.thread-search-count { font-size: 12.5px; color: var(--text-dim); white-space: nowrap; }
+.thread-search-count { font-size: 12.5px; color: var(--text-dim); white-space: nowrap; flex: none; }
 .thread-search-note { font-size: 12.5px; color: var(--text-faint); }
 .thread-search-note:empty { display: none; }
 

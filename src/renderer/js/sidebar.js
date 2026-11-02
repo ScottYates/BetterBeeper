@@ -21,12 +21,23 @@ import { toast, openLightbox } from './ui.js';
 import { totalUnread, chatIsUnread } from './unread.js';
 import { setArchived } from './chat-actions.js';
 import { networkIconMarkup, badgeBackground } from './network-icons.js';
+import { nextIndex } from './search-nav.js';
 
 let onSelectChat = () => {};
 let onSelectView = () => {};
 let searchToken = 0;
 let searchMode = 'chats'; // 'chats' | 'messages'
 let searchResults = { chats: [], messages: [] };
+/**
+ * The result rows, in the order they are on screen, and which one the arrows
+ * are on.
+ *
+ * The rows are the search's own, not the chat list's: the search owns the
+ * pane while it is running, and the arrows step through what it drew.
+ */
+let searchRows = [];
+let searchIndex = -1;
+let searching = false;
 
 export function initSidebar(handlers) {
   onSelectChat = handlers.onSelectChat || onSelectChat;
@@ -57,9 +68,29 @@ export function initSidebar(handlers) {
     }
     if (event.key === 'Enter') {
       event.preventDefault();
-      runSearch();
+      // The text in the box is what the user wants searched. If it is not
+      // what the results on screen came from, those results are stale, and
+      // the search is what Enter means. The box is debounced, so a user who
+      // types and presses Enter straight away would otherwise be stepping
+      // through the answers to a question they have already changed.
+      const typed = input.value.trim();
+      if (typed !== state.searchQuery) {
+        state.searchQuery = typed;
+        runSearch();
+        return;
+      }
+      // Enter steps through the results, the way the conversation's own
+      // search does. With nothing to step through yet it asks for the search
+      // instead, so the box still answers straight away.
+      if (searchRows.length) stepSearchResults(event.shiftKey ? -1 : 1);
+      else runSearch();
     }
   });
+
+  // The arrows. They step through the results the search drew, and they wrap
+  // at both ends, so the same rule answers for the conversation's search.
+  $('#search-prev')?.addEventListener('click', () => stepSearchResults(-1));
+  $('#search-next')?.addEventListener('click', () => stepSearchResults(1));
 
   $('#search-scope').addEventListener('change', (event) => {
     state.searchScope = event.target.value;
@@ -568,6 +599,10 @@ async function runSearch() {
   if (!state.searchQuery) {
     searchMode = 'chats';
     searchResults = { chats: [], messages: [] };
+    searching = false;
+    searchRows = [];
+    searchIndex = -1;
+    updateSearchCount();
     renderChats();
     return;
   }
@@ -575,6 +610,14 @@ async function runSearch() {
   const query = state.searchQuery;
   const wantMessages = state.searchScope !== 'chats';
   const wantChats = state.searchScope !== 'messages';
+
+  // The results on screen belong to the previous query, so they go before
+  // the new ones arrive. Otherwise the arrows would be stepping through
+  // answers to a question that is no longer being asked.
+  searching = true;
+  searchRows = [];
+  searchIndex = -1;
+  updateSearchCount();
 
   clear(list);
   list.append(el('div', { class: 'search-loading', text: 'Searching…' }));
@@ -597,6 +640,7 @@ async function runSearch() {
   ]);
 
   if (token !== searchToken) return; // a newer search superseded this one
+  searching = false;
 
   const merged = mergeMessageHits(remote?.items || [], local || []);
   searchResults = { chats: chats?.items || [], messages: merged };
@@ -628,6 +672,7 @@ function renderSearchResults(query) {
   clear(list);
 
   const { chats, messages } = searchResults;
+  const rows = [];
 
   list.append(
     el('div', {
@@ -640,12 +685,20 @@ function renderSearchResults(query) {
 
   if (chats.length) {
     list.append(el('div', { class: 'search-summary', text: 'Chats' }));
-    for (const chat of chats) list.append(chatItem(chat));
+    for (const chat of chats) {
+      const row = chatItem(chat);
+      rows.push(row);
+      list.append(row);
+    }
   }
 
   if (searchMode === 'messages' && messages.length) {
     list.append(el('div', { class: 'search-summary', text: 'Messages' }));
-    for (const message of messages) list.append(messageHit(message));
+    for (const message of messages) {
+      const row = messageHit(message);
+      rows.push(row);
+      list.append(row);
+    }
   }
 
   if (!chats.length && !messages.length) {
@@ -656,6 +709,62 @@ function renderSearchResults(query) {
       }),
     );
   }
+
+  // The rows are what the arrows step through, in the order they are on
+  // screen: the chats first, then the messages.
+  searchRows = rows;
+  searchIndex = rows.length ? 0 : -1;
+  markCurrentSearchResult();
+}
+
+/**
+ * Step to the next or previous result.
+ *
+ * Wrapping at both ends, and the same rule the conversation's own search
+ * uses, so the two searches step the same way.
+ */
+function stepSearchResults(direction) {
+  if (!searchRows.length) return;
+  searchIndex = nextIndex(searchIndex, searchRows.length, direction);
+  markCurrentSearchResult();
+}
+
+/**
+ * Put the current marker on the result the arrows are on.
+ *
+ * The result is also brought into view: the list of results can be longer
+ * than the sidebar, and stepping to a result the user cannot see is the same
+ * as not stepping at all.
+ */
+function markCurrentSearchResult() {
+  for (const row of searchRows) row.classList.remove('is-current');
+  const row = searchRows[searchIndex];
+  if (row) {
+    row.classList.add('is-current');
+    row.scrollIntoView({ block: 'nearest' });
+  }
+  updateSearchCount();
+}
+
+/**
+ * What the arrows are on, and how many there are.
+ *
+ * The count is there for the same reason the conversation's search has one:
+ * a search that finds nothing and a search that has not run yet look the
+ * same from outside, and the difference is worth saying.
+ */
+function updateSearchCount() {
+  const count = $('#search-count');
+  if (!count) return;
+  if (!state.searchQuery) {
+    count.textContent = '';
+    return;
+  }
+  if (searching) {
+    count.textContent = 'Searching…';
+    return;
+  }
+  count.textContent = searchRows.length ? `${searchIndex + 1} of ${searchRows.length}` : 'No matches';
 }
 
 function messageHit(message) {
