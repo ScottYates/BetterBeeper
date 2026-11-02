@@ -1,16 +1,18 @@
 # BetterBeeper working handoff
 
-Last updated 2026-10-27, with a desktop notification click now opening the
-conversation it was about and putting the cursor in its composer, released as
-**v1.25.0**.
+Last updated 2026-11-02, with a search inside the conversation that is open:
+a magnifier in the thread header, the matches highlighted in the conversation
+itself, and Enter and Shift+Enter stepping through them. Released as
+**v1.26.0**.
 
-The version before this one described the v1.24.0 released state, which
-carried the composer focus, the paste-and-drop work for any file, and the fix
-for an attachment vanishing on a socket reconnect. The one before that
-described a v1.21.0 released state. The one before that described a
-v1.18.6-era tree, claimed the GitHub CLI was not authenticated, and described
-an update helper that is no longer on `main`. Do not trust any of it without
-re-checking.
+The version before this one described the v1.25.0 released state, which
+carried the desktop notification click. The one before that described the
+v1.24.0 released state, which carried the composer focus, the paste-and-drop
+work for any file, and the fix for an attachment vanishing on a socket
+reconnect. The one before that described a v1.21.0 released state. The one
+before that described a v1.18.6-era tree, claimed the GitHub CLI was not
+authenticated, and described an update helper that is no longer on `main`. Do
+not trust any of it without re-checking.
 
 ## Where everything is
 
@@ -28,24 +30,28 @@ one person's machine.
 ## Git state
 
 Branch `main`, in sync with origin. The work described under "Work done
-2026-10-27" is committed and released as **v1.25.0**. It is a minor bump,
+2026-11-02" is committed and released as **v1.26.0**. It is a minor bump,
 because `tools/release.js` derives the level from the commit subjects since
 the last tag and the `feat:` is the higher of the two.
 
 The last few commits, with the `Release 1.25.0` commit sitting on top of them:
 
 ```
-1b8c2ff  feat: a notification click opens the chat and puts the cursor in it
-ff11067  Release 1.24.0
-a365ce8  docs: point the handoff at v1.24.0 before it is cut
-af32530  feat: focus the composer on open, and paste or drop any file
-b4ecaba  fix: re-opening a chat no longer discards what was in progress
+2fab2ac  fix: a progress-event count that depended on how fast the machine is
+2e135d9  fix: the check runner names the failing case instead of the last few lines
+a82fa56  feat: reach the rest of the conversation when searching
+93f6987  feat: search inside the conversation that is open
+c6f21bb  feat: the renderer can ask Beeper for a single message
+19a8281  feat: the search rules in a module of their own
+1b483b8  feat: the local store can search one chat by substring
+9e023a0  Release 1.25.0
 ```
 
-The newest tag is **v1.25.0**, on the `Release 1.25.0` commit, so `main` is
-not left ahead of its own tag. `package.json` says 1.25.0.
+The newest tag is **v1.26.0**, on the `Release 1.26.0` commit, so `main` is
+not left ahead of its own tag. `package.json` says 1.26.0.
 
-v1.25.0 carried the notification click. v1.24.0 carried the composer focus,
+v1.26.0 carried the in-conversation search. v1.25.0 carried the notification
+click. v1.24.0 carried the composer focus,
 the paste and drop work, and the reconnect fix. It is a minor bump, because
 `tools/release.js` derives the level from the commit subjects since the last
 tag and the `feat:` is the higher of the two. v1.23.0 carried the contact
@@ -702,13 +708,100 @@ JavaScript error dialog instead of the check failing.
 every file in the tree and every harness in it, and it is the difference
 between a check failing and the app looking broken.
 
+## Work done 2026-11-02
+
+### Searching inside the conversation that is open
+
+The sidebar has always had a search box, and it searches every conversation
+at once. That is the right tool for "where did I talk about the invoice" and
+the wrong one for "what did she say about Saturday", which needs the
+conversation that is already open.
+
+A magnifier in the thread header now opens a search row under the header, in
+the same shape as the sidebar's, so the app has one search idiom rather than
+two. The matches are highlighted in the conversation itself rather than listed
+beside it, the counter says how many there are, and Enter and Shift+Enter step
+through them. **The sidebar's search is untouched** - same input, same scope
+selector, same results.
+
+**The matching rule is a substring, not a whole word.** The store's FTS index
+matches tokens, so "batt" does not find "battery", and that is the wrong
+behaviour for a search box. The store therefore gained a second search,
+scoped to one chat, that scans that chat's rows. One chat is thousands of
+messages at most and `(chatID, ts, id)` is already indexed, so the scan is
+quick, and it cannot reach into another chat by construction. The FTS search
+is untouched and the sidebar still uses it.
+
+**Two sources are merged, and the measurements that shaped that are worth
+keeping.** `tools/probe-search-shape.js` was written to ask Beeper's own
+search three questions, and the answers are in the file's output:
+
+- `chatIDs` **is** honoured. The same query returned 20 hits unscoped and 1
+  hit scoped, with none from another chat.
+- a hit carries the full `text` and `timestamp`, so a hit can be drawn as a
+  real bubble rather than as a line in a list.
+- a single message can be fetched by id, which is what turns a hit this
+  machine has never stored into a bubble in the thread.
+- it matches substrings (`stro` finds `strong`), but a **two-word query
+  behaves like a phrase**: `strong code` returns nothing where the single
+  words return hits. So Beeper is asked for single-word queries only, and
+  its hits are re-tested against the same substring rule the local search
+  uses, so the counter can never count a match that is not highlighted.
+
+**Reaching a hit that is not on screen** took two paths. A hit the store holds
+but the thread has not drawn is paged backwards through the store until the
+window reaches it, and then scrolled to; the scroll position is not preserved
+across those pages, because the user asked to be put on the message. A hit only
+Beeper knows about is fetched by id, stored, and drawn, and a search that
+finds one queues a refresh of the chat - the app is being told its copy of the
+conversation is incomplete, and the refresh shows in the jobs panel like any
+other, so nothing happens quietly.
+
+The logic lives in `src/renderer/js/thread-search.js`: the matching rule, the
+merge, the step order and the highlighter, with no Electron and no import of
+the thread. The thread imports it and hands it its own functions, so the
+dependency runs one way only and both halves can be checked. The store's
+chat-scoped scan is `searchInChat` in `src/main/message-store.js`. The
+check is `npm run check:threadsearch` (`tools/thread-search-check.js`), and
+`tools/thread-search-redproof.js` proves it can fail.
+
+**The Escape key needed a guard.** The global Escape handler runs in the
+capture phase, so it sees the key before the search row's own handler does.
+Without a guard, one Escape would close the row *and* the conversation behind
+it. The harness does not load `main.js`, so that guard is checked against the
+source rather than driven.
+
+### A bug the new check found while it was being written
+
+**A message arriving during a search wiped every mark on screen.** The thread
+rebuilds itself in two places, not one: `renderAll`, and the rebuild that
+handles an arriving message. Only the first was putting the marks back. The
+case that found it is "a message arriving during a search does not wipe the
+marks", and the red proof breaks the one line that fixes it.
+
+### Two things in the tooling that were measuring the machine
+
+- **The check runner kept the last six lines of a failed suite**, which is its
+  summary: it names the count but not the case that failed. The FAIL lines
+  are kept now. This is what a flaky history case looked like - one failure in
+  a sweep of forty-five, passing every time it was run alone, and no way to
+  tell which case it was.
+- **One history case asserted a count that depended on how fast the machine
+  is.** The progress announcements are coalesced on a wall-clock interval, so
+  the count for the same 200 pages varies with how long the walk took, and a
+  walk of 200 pages takes about fifteen seconds here. The case now asserts
+  what does not vary: no two announcements are closer together than the
+  interval, and there cannot be more of them than the time that passed allows.
+  Setting the interval to zero still turns it red.
+
 ## Verification status
 
-`npm run check:all` gives **44/44 suites passed** on the tree carrying the
-2026-10-27 work, 2026-10-27. It was 43/43 on the v1.24.0 release commit and
-on the v1.23.0 release commit, 2026-10-21; 42 suites before
-`check:contactrefresh` was added, 41 before `check:participants`, 40 before
-`check:refreshchats`, 39 before `check:entity`, and 35/37 on 2026-10-14.
+`npm run check:all` gives **45/45 suites passed** on the tree carrying the
+2026-11-02 work, 2026-11-02. It was 44/44 on the v1.25.0 release commit and
+on the v1.24.0 release commit, 2026-10-27; 43/43 on the v1.23.0 release
+commit, 2026-10-21; 42 suites before `check:contactrefresh` was added, 41
+before `check:participants`, 40 before `check:refreshchats`, 39 before
+`check:entity`, and 35/37 on 2026-10-14.
 
 `check:released` is the one that moves with the git state. It fails whenever
 `main` is ahead of the newest tag, because a push with no release behind it is
@@ -735,6 +828,8 @@ mutations caught, 2/2 neutral rewrites tolerated (new),
 `check:notificationclick` 20/20 and
 `tools/notification-click-redproof.js` 12/12 mutations caught, 1/1 neutral
 rewrite tolerated (new),
+`check:threadsearch` 53/53 and `tools/thread-search-redproof.js` 11/11
+mutations caught, 1/1 neutral rewrite tolerated (new),
 `check:sidebar` 67/67, `check:unread` 32/32, `check:layout` 13/13,
 `check:api` 136/136, `check:composer` 17/17, `check:actions` 21/21,
 `check:about` 6/6, `check:installer` passing, `check:syntax` OK on every JS

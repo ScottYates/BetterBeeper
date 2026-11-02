@@ -66,6 +66,13 @@ The chat UI talks to Beeper's REST API and its live WebSocket event stream. Beep
   they played fine
 - Independent vertical scrolling for the chat list and the message thread, with infinite
   scroll backwards through history
+- Search inside the conversation that is open. The magnifier in the thread header opens a search
+  row under the header, the matches are highlighted in the conversation itself rather than listed
+  beside it, and Enter and Shift+Enter step through them. A fragment of a word finds the word, so
+  "batt" finds "battery". The search reaches the whole conversation rather than only the part that
+  happens to be on screen: a match further back is paged in, and a match Beeper has but this
+  machine has never stored is fetched and drawn. The sidebar's search is a different thing and is
+  unchanged: it searches every conversation at once
 - Opening a chat always lands on its newest message, even when you were scrolled up in the
   previous one and even when images are still decoding
 - Hover any row to archive it without opening it. The button becomes "Move back to inbox" on
@@ -456,6 +463,8 @@ src/
     layout-harness.html  page that hosts layout-check.js, against the real stylesheet
     syntax-check.js   check: every JS file parses, so a broken check cannot look like a crash
     harness-guard.js  dev helper: a check harness expires on its own instead of being killed
+    thread-search-check.js  check: searching inside the conversation that is open
+    thread-search-redproof.js  prove the search check fails when the rules are broken
     release.js        bump the version from the commits, build, install, publish, verify by hash
     released-check.js check: every push to main has a release
     bump-check.js     check: the semver level a commit message produces is the right one
