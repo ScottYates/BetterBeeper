@@ -917,6 +917,57 @@ the **start of a line** now, and `npm run check:harness` holds that up:
 `tools/syntax-redproof.js` reintroduces each part of the rule and asserts the
 named case fails.
 
+### The avatar cache forgot nothing, and remembered everything
+
+The resolved-avatar cache is what stops a rebuilt avatar from flashing. The
+chat list is rebuilt on every local state change, and a rebuilt avatar has no
+memory of the image it had, so without the cache every avatar is a circle of
+initials for a frame and then the picture. That is why it is cached.
+
+It was cached for ever. Every avatar URL the app had ever seen stayed in the
+map until the window closed, and a map that only grows is a leak. It is
+bounded now - two hundred pictures - and the ones that have not been wanted
+for the longest are the ones that go, because the ones still in use are the
+ones being asked about now.
+
+**A cached picture can go stale.** The file behind a resolved URL is a copy
+in the app's own media folder, and `npm run media:prune` can remove it while
+the app is open. The cache would keep handing out that picture, so the avatar
+showed a broken image for good and nothing ever asked for it again. The
+browser is the only thing that can say the file is not there, so the image
+now watches for its own failure: when one does not load, the entry is dropped
+and the picture is asked for again - once, because a picture that is broken
+on purpose must not ask for ever.
+
+`check:sidebar` covers all of it, and `tools/avatar-redproof.js`
+reintroduces each part of the fix and asserts that the named case fails.
+
+### The note-to-self chat, measured
+
+The note-to-self chat (`!WYgEUOHBAKcVStQTpC:beeper.com`, the pinned "Note")
+held thirty-odd stored messages and the thread drew one of them. Measured
+against the live account, every link in the chain is sound:
+
+- The store holds 51 messages for that chat, none tombstoned, and the chat is
+  marked complete. The read path returns all 51: `pageWithMore` on the real
+  file, with the real store code.
+- The renderer draws all 51 when they are handed to it directly - the real
+  payloads, through the real `openChat`, in a hidden window.
+- Beeper's own API answers 20 messages for that chat, so the store is ahead of
+  the API, not behind it. The thread has read from disk since v1.10.0 ("the
+  thread reads from disk instead of Beeper"), and a thread reading from
+  Beeper would have had 20, not 1.
+
+What was missing was proof, and the case that carries it: `check:historyrender`
+now opens a note-to-self chat with 31 stored messages and asserts that all 31
+are drawn and that the oldest one is on screen too. A list that loses
+everything but the newest is indistinguishable from a list that was never
+read, so the case counts rows rather than looking for a word.
+
+`tools/history-render-redproof.js` reintroduces the loss - the page fed in as
+only its newest message, and the page not fed in at all - and asserts that the
+named case fails.
+
 ## Verification status
 
 `npm run check:all` gives **47/47 suites passed** on the tree carrying the
@@ -940,6 +991,8 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `tools/update-redproof.js` | 17/17 mutations caught, no holes |
 | `tools/search-nav-redproof.js` | 12/12 mutations caught, no holes |
 | `tools/syntax-redproof.js` | 3/3 mutations caught, no holes |
+| `tools/avatar-redproof.js` | 4/4 mutations caught, no holes |
+| `tools/history-render-redproof.js` | 2/2 mutations caught, no holes |
 
 Individually measured: `check:entity` 0 failing across 31 cases,
 `check:rich` 27/27, `check:preview` 0 failing across 18 cases,
@@ -956,7 +1009,11 @@ mutations caught, 2/2 neutral rewrites tolerated (new),
 rewrite tolerated (new),
 `check:threadsearch` 53/53 and `tools/thread-search-redproof.js` 11/11
 mutations caught, 1/1 neutral rewrite tolerated (new),
-`check:sidebar` 67/67, `check:unread` 32/32, `check:layout` 13/13,
+`check:sidebar` 87/87 and `tools/avatar-redproof.js` 4/4 mutations caught, 1/1
+neutral rewrite tolerated (new),
+`check:historyrender` 28/28 and `tools/history-render-redproof.js` 2/2
+mutations caught, 1/1 neutral rewrite tolerated (new),
+`check:unread` 32/32, `check:layout` 13/13,
 `check:api` 136/136, `check:composer` 17/17, `check:actions` 21/21,
 `check:about` 6/6, `check:installer` passing, `check:syntax` OK on every JS
 file and harness, `check:ascii` OK.
