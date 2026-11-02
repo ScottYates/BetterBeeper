@@ -11,6 +11,7 @@
  */
 
 import { api, call } from './api.js';
+import { upsertMessages } from './state.js';
 
 /** The lowercased terms of a query. An empty query has no terms. */
 export function termsOf(query) {
@@ -227,6 +228,7 @@ let deps = {
   renderAll: () => {},
   focusComposer: () => {},
   scrollToMessage: () => {},
+  loadHistoryUntil: async () => false,
 };
 
 let activeQuery = '';
@@ -368,6 +370,10 @@ async function runSearch() {
   hits = mergeHits(local, remoteHits);
   currentIndex = hits.length ? 0 : -1;
 
+  // Beeper knows of something this device has never seen. The chat's own
+  // copy is incomplete, so the refresh is queued to bring the rest home.
+  if (remoteHits.length) queueHistoryRefresh(chatID);
+
   if (counter()) {
     counter().textContent = hits.length ? `1 of ${hits.length}` : 'No matches';
   }
@@ -375,18 +381,79 @@ async function runSearch() {
   if (hits.length) goTo(0);
 }
 
-/** Step to the next or previous hit, wrapping at both ends. */
-function step(direction) {
-  if (!hits.length) return;
-  currentIndex = nextIndex(currentIndex, hits.length, direction);
-  goTo(currentIndex);
+/**
+ * Fetch a hit the local store does not have and draw it.
+ *
+ * A hit that only Beeper knows about cannot be drawn until the message
+ * itself is fetched, so it is fetched, put in the renderer, and written to
+ * the store so the next search finds it locally.
+ *
+ * Returns false for a hit the store already holds, and for one that cannot
+ * be fetched, so the step is skipped rather than stalling on it.
+ */
+export async function fetchRemoteHit(hit) {
+  if (!hit?.id || hit.source !== 'remote') return false;
+  const chatID = hit.chatID || deps.getChatID();
+  if (!chatID) return false;
+
+  const message = await call(
+    () => api.messages.get(chatID, hit.id),
+    { context: 'message', fallback: null },
+  );
+  if (!message?.id) return false;
+
+  upsertMessages(chatID, [message]);
+  await call(() => api.history.upsert(chatID, message), { context: 'history', fallback: null });
+  deps.renderAll();
+  return true;
 }
 
-/** Scroll to the current hit and mark it as the current one. */
-function goTo(index) {
+/**
+ * Queue a refresh of the chat's history.
+ *
+ * A search that finds a hit this device has never seen is telling the app
+ * that its copy of the conversation is incomplete. The refresh walks the
+ * chat back from the oldest message held, so the missing context arrives on
+ * its own and later searches find those hits locally.
+ */
+export async function queueHistoryRefresh(chatID) {
+  const id = chatID || deps.getChatID();
+  if (!id) return;
+  await call(() => api.history.refresh(id), { context: 'history refresh', fallback: null });
+}
+
+/**
+ * Step to the next or previous hit, wrapping at both ends.
+ *
+ * Awaited, so a slow fetch cannot leave two steps racing each other and
+ * landing on the wrong hit.
+ */
+async function step(direction) {
+  if (!hits.length) return;
+  currentIndex = nextIndex(currentIndex, hits.length, direction);
+  await goTo(currentIndex);
+}
+
+/**
+ * Scroll to the current hit and mark it as the current one.
+ *
+ * A hit that is not on screen is brought into the window first: a hit only
+ * Beeper knows about has to be fetched, and a hit the store holds but the
+ * thread has not drawn has to be paged in.
+ */
+async function goTo(index) {
   const hit = hits[index];
   if (!hit) return;
   if (counter()) counter().textContent = `${index + 1} of ${hits.length}`;
+
+  const node = document.querySelector(`[data-message-id="${CSS.escape(hit.id)}"]`);
+  if (!node && hit.source === 'remote') {
+    await fetchRemoteHit(hit);
+  } else if (!node) {
+    await deps.loadHistoryUntil(hit.ts);
+    deps.renderAll();
+  }
+
   deps.scrollToMessage(hit.id);
   markCurrent(index);
 }

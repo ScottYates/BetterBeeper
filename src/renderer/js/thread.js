@@ -143,6 +143,7 @@ export function initThread() {
     renderAll: () => renderAll(),
     focusComposer: () => focusComposer(),
     scrollToMessage: (id) => scrollToMessage(id),
+    loadHistoryUntil: (ts) => loadHistoryUntil(ts),
   });
 
   // A job's progress is the only thing that starts and stops the refresh
@@ -1122,6 +1123,12 @@ function onMessageUpserted() {
     listEl.append(el('div', { class: 'empty-note', text: 'No messages here yet.' }));
   }
 
+  // The list was just replaced, so the search marks have to be put back.
+  // This rebuild is separate from renderAll, and a message arriving during a
+  // search comes through here: without this, the first new message wiped
+  // every mark on screen.
+  applyThreadSearchHighlights();
+
   if (stick) scrollToBottom();
   if (window.document.hasFocus() && window.document.visibilityState === 'visible') markRead();
 }
@@ -1851,6 +1858,49 @@ async function loadOlder() {
   onMessageUpserted();
   // Keep the viewport anchored to the message the user was looking at.
   listEl.scrollTop = listEl.scrollHeight - previousHeight;
+}
+
+/**
+ * Page backwards until the window reaches a timestamp.
+ *
+ * A search can find a message that is in the store but not on screen, and
+ * scrolling to it means drawing it first. The scroll position is not
+ * preserved across these pages, because the user asked to be put on the
+ * message rather than left where they were.
+ *
+ * The cap is a guard, not a policy: a chat with a very old hit needs more
+ * pages than one with a recent hit, and a loop that never ends is worse than
+ * a hit that is not reached.
+ */
+export async function loadHistoryUntil(targetTs, maxPages = 20) {
+  const chatID = state.activeChatID;
+  if (!chatID) return false;
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const oldest = renderableMessages(chatID)[0];
+    if (!oldest) return false;
+    // The oldest drawn message is already older than the hit, so the window
+    // reaches it.
+    if (millisOf(oldest.timestamp) <= Number(targetTs)) return true;
+
+    const result = await call(
+      () => api.history.page(chatID, { before: oldest.id, limit: 50 }),
+      { context: 'older messages' },
+    );
+    if (!result || state.activeChatID !== chatID) return false;
+    const items = result.messages || [];
+    if (!items.length) return false;
+
+    upsertMessages(chatID, items);
+    hasMore = Boolean(result.hasMore);
+  }
+  return false;
+}
+
+/** Epoch millis from a timestamp in any of Beeper's shapes. */
+function millisOf(value) {
+  const parsed = parseTs(value);
+  return parsed ? parsed.getTime() : 0;
 }
 
 function scrollToBottom() {

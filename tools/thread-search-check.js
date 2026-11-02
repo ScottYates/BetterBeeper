@@ -227,13 +227,14 @@ async function main() {
         // --- the interface, driven through the wiring the app installs -----
 
         const envelope = (data) => ({ ok: true, data });
-        const bubble = (id, ts, text, sender) => ({
-          id, chatID: 'c-note', accountID: 'a1', senderID: sender,
+        const bubble = (id, ts, text, sender, chatID) => ({
+          id, chatID: chatID || 'c-note', accountID: 'a1', senderID: sender,
           senderName: sender === 'a1' ? 'Me' : 'Them', text,
           timestamp: ts, isSender: sender === 'a1', type: 'TEXT',
         });
 
         const searchCalls = [];
+        const refreshCalls = [];
         window.beeper = {
           on: () => {},
           chats: {
@@ -248,19 +249,29 @@ async function main() {
           messages: {
             list: async () => envelope({ items: [], hasMore: false }),
             search: async () => envelope({ items: [] }),
-            get: async () => envelope(null),
+            get: async (chatID, messageID) => envelope({
+              id: messageID, chatID, accountID: 'a2', senderID: 'a2', senderName: 'Them',
+              text: 'a message only Beeper had', timestamp: 1500,
+              isSender: false, type: 'TEXT',
+            }),
           },
           history: {
-            open: async () => envelope({
-              messages: [
-                bubble('m1', 1000, 'the battery is flat', 'a2'),
-                bubble('m2', 2000, 'nothing to see here', 'a2'),
-                bubble('m3', 3000, 'batt batt batt', 'a1'),
-              ],
+            open: async (chatID) => envelope({
+              messages: chatID === 'c-other'
+                ? [bubble('o1', 1000, 'a different conversation', 'a2', 'c-other')]
+                : [
+                    bubble('m1', 1000, 'the battery is flat', 'a2'),
+                    bubble('m2', 2000, 'nothing to see here', 'a2'),
+                    bubble('m3', 3000, 'batt batt batt', 'a1'),
+                  ],
               complete: true,
               hasMore: false,
             }),
-            page: async () => envelope({ messages: [], hasMore: false, complete: true }),
+            page: async () => envelope({
+              messages: [bubble('m0', 500, 'the oldest battery', 'a2')],
+              hasMore: false,
+              complete: true,
+            }),
             upsert: async () => envelope({ written: 1 }),
             search: async () => envelope([]),
             searchInChat: async (chatID, query) => {
@@ -271,7 +282,10 @@ async function main() {
               ]);
             },
             status: async () => envelope({ messages: 0, chats: 0, bytes: 0 }),
-            refresh: async () => envelope({ queued: true }),
+            refresh: async (chatID) => {
+              refreshCalls.push(chatID);
+              return envelope({ queued: true });
+            },
             jobs: async () => envelope({ jobs: [] }),
           },
         };
@@ -361,6 +375,109 @@ async function main() {
         await add('CONTROL: the sidebar search is not this search', () =>
           document.getElementById('search-input') !== document.getElementById('thread-search-input')
           || 'the two searches share an input');
+
+        // --- reaching the rest of the conversation -------------------------
+
+        await add('a hit only Beeper knows about is fetched and drawn', async () => {
+          const fetched = await TS.fetchRemoteHit({
+            chatID: 'c-note', id: 'remote-1', ts: 1500, source: 'remote',
+          });
+          if (fetched !== true) return 'the hit was not fetched';
+          await settle(200);
+          const list = document.getElementById('message-list');
+          return list.querySelector('[data-message-id="remote-1"]') !== null
+            || 'the message was not drawn';
+        });
+
+        await add('CONTROL: a hit the store already holds is not fetched again', async () => {
+          const fetched = await TS.fetchRemoteHit({
+            chatID: 'c-note', id: 'm1', ts: 1000, source: 'local',
+          });
+          return fetched === false || 'a known hit was fetched anyway';
+        });
+
+        await add('a refresh of the chat is queued', async () => {
+          refreshCalls.length = 0;
+          await TS.queueHistoryRefresh('c-note');
+          await settle(150);
+          return refreshCalls.includes('c-note')
+            || ('the refresh was not queued for ' + JSON.stringify(refreshCalls));
+        });
+
+        await add('a hit older than the window is paged into view', async () => {
+          const reached = await T.loadHistoryUntil(500);
+          await settle(200);
+          const list = document.getElementById('message-list');
+          return (reached === true && list.querySelector('[data-message-id="m0"]') !== null)
+            || ('reached ' + reached + ', drawn '
+              + Boolean(list.querySelector('[data-message-id="m0"]')));
+        });
+
+        await add('CONTROL: paging to a hit that is already on screen does nothing', async () => {
+          const reached = await T.loadHistoryUntil(9000);
+          return reached === true || ('reached ' + reached);
+        });
+
+        await add('a message arriving during a search does not wipe the marks', async () => {
+          document.getElementById('btn-thread-search').click();
+          const field = document.getElementById('thread-search-input');
+          field.value = 'batt';
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          await settle(400);
+          const before = document.querySelectorAll('#message-list mark.ts-hit').length;
+
+          // A new message makes the thread rebuild itself, which is exactly
+          // when the marks would be lost if they were not put back.
+          S.upsertMessages('c-note', [bubble('m4', 4000, 'a new message', 'a2')]);
+          await settle(250);
+
+          const after = document.querySelectorAll('#message-list mark.ts-hit').length;
+          return (before > 0 && after === before)
+            || ('before ' + before + ', after ' + after);
+        });
+
+        await add('re-opening the same conversation keeps the marks', async () => {
+          document.getElementById('btn-thread-search').click();
+          const field = document.getElementById('thread-search-input');
+          field.value = 'batt';
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          await settle(400);
+          const before = document.querySelectorAll('#message-list mark.ts-hit').length;
+
+          // The same conversation, so the search stays open while the thread
+          // is rebuilt from scratch underneath it.
+          await T.openChat('c-note');
+          await settle(250);
+
+          const after = document.querySelectorAll('#message-list mark.ts-hit').length;
+          return (before > 0 && after === before)
+            || ('before ' + before + ', after ' + after);
+        });
+
+        // --- the marks belong to one conversation --------------------------
+
+        await add('CONTROL: opening another conversation clears the marks', async () => {
+          document.getElementById('btn-thread-search').click();
+          const field = document.getElementById('thread-search-input');
+          field.value = 'batt';
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          await settle(400);
+          const marked = document.querySelectorAll('#message-list mark.ts-hit').length;
+
+          S.state.chats.set('c-other', {
+            id: 'c-other', title: 'Another conversation', type: 'single',
+            participants: { items: [{ isSelf: true }, { isSelf: false }] },
+          });
+          await T.openChat('c-other');
+          await settle(200);
+
+          return (marked > 0
+            && document.querySelectorAll('#message-list mark.ts-hit').length === 0
+            && document.getElementById('thread-search-row').hidden === true)
+            || ('marked ' + marked
+              + ', left ' + document.querySelectorAll('#message-list mark.ts-hit').length
+              + ', row hidden ' + document.getElementById('thread-search-row').hidden);
+        });
       }
     })()
   `;
@@ -389,6 +506,7 @@ async function main() {
   const preloadSrc = fs.readFileSync(path.join(ROOT, 'src', 'preload', 'preload.js'), 'utf8');
   const ipcSrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'ipc.js'), 'utf8');
   const apiSrc = fs.readFileSync(path.join(ROOT, 'src', 'renderer', 'js', 'api.js'), 'utf8');
+  const mainSrc = fs.readFileSync(path.join(ROOT, 'src', 'renderer', 'js', 'main.js'), 'utf8');
 
   const preloadChannel = (preloadSrc.match(/get: \(chatID, messageID\) => invoke\('([^']+)'/) || [])[1];
   const ipcChannel = (ipcSrc.match(/ipcMain\.handle\('([^']+)', handle\(async \(chatID, messageID\)/) || [])[1];
@@ -403,6 +521,12 @@ async function main() {
       `the preload listens on "${preloadChannel}", the main process handles "${ipcChannel}"`],
     ['the renderer can ask for one message',
       /get: \(chatID, messageID\) => window\.beeper\.messages\.get\(/.test(apiSrc)],
+    // The global Escape handler runs in the capture phase, so it sees the key
+    // before the search row's own handler does. Without this guard one Escape
+    // would close the row and the conversation behind it, and nothing in the
+    // harness could catch it, because the harness does not load main.js.
+    ['the global Escape handler leaves the conversation search alone',
+      /if \(event\.target\?\.id === 'thread-search-input'\) return;/.test(mainSrc)],
   ].map(([name, ok, detail]) => [name, ok, detail || '']);
 
   const cases = harnessCases.concat(sourceCases);
