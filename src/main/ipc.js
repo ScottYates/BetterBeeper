@@ -586,6 +586,12 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   ipcMain.handle('history:search', handle(async (query, opts) =>
     ok(historyStore.search(query, opts || {}))));
 
+  // Searching inside one conversation. This is the substring scan rather than
+  // the FTS index, because a search box is expected to find a fragment of a
+  // word and the index only knows whole words.
+  ipcMain.handle('history:searchInChat', handle(async (chatID, query, opts) =>
+    ok(historyStore.searchInChat(chatID, query, opts || {}))));
+
   ipcMain.handle('history:status', handle(async () => {
     const stats = historyStore.stats();
     const sync = historySync.status();

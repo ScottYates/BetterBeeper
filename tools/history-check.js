@@ -215,6 +215,69 @@ add('search can be scoped to chats', () => {
 add('search scoped to an empty chat list returns nothing', () =>
   store.search('needle', { limit: 10, chatIDs: [] }).length === 0 || 'ignored the scope');
 
+// The FTS index matches whole words, so "batt" finds nothing in "battery".
+// A search box is expected to find the fragment, so the chat-scoped scan
+// exists for that.
+add('a chat search finds a fragment of a word', () => {
+  store.upsertMessages('c-frag', [msg('f1', 6000, 'the battery is flat')], {});
+  const hits = store.searchInChat('c-frag', 'batt', { limit: 10 });
+  return hits.length === 1 || ('got ' + hits.length + ' hits');
+});
+
+add('and it finds the whole word too', () => {
+  const hits = store.searchInChat('c-frag', 'battery', { limit: 10 });
+  return hits.length === 1 || ('got ' + hits.length + ' hits');
+});
+
+add('a chat search does not reach into another chat', () => {
+  store.upsertMessages('c-frag-other', [msg('f2', 6001, 'another battery')], {});
+  const hits = store.searchInChat('c-frag', 'batt', { limit: 50 });
+  return (hits.length === 1 && hits[0].chatID === 'c-frag')
+    || ('got ' + JSON.stringify(hits.map((h) => h.chatID)));
+});
+
+add('a chat search matches every term of a multi-word query', () => {
+  // Its own chat, so the count is exact rather than whatever the shared
+  // fixtures happen to hold.
+  store.upsertMessages('c-terms', [msg('tm1', 6100, 'the flat battery')], {});
+  const both = store.searchInChat('c-terms', 'flat batt', { limit: 10 });
+  const one = store.searchInChat('c-terms', 'flat missing', { limit: 10 });
+  return (both.length === 1 && one.length === 0)
+    || ('both ' + both.length + ', one ' + one.length);
+});
+
+add('a chat search does not treat a wildcard as a wildcard', () => {
+  store.upsertMessages('c-frag', [msg('f4', 6003, 'plain text')], {});
+  const hits = store.searchInChat('c-frag', '%', { limit: 10 });
+  return hits.length === 0 || ('a percent sign matched ' + hits.length + ' rows');
+});
+
+add('a chat search skips tombstoned rows', () => {
+  // Its own chat, so an earlier case's tombstoning cannot decide this one.
+  store.upsertMessages('c-tomb', [msg('tb1', 8000, 'battery here')], {});
+  store.reconcile('c-tomb', [], { complete: true, oldestTs: 8000 });
+  const hits = store.searchInChat('c-tomb', 'batt', { limit: 10 });
+  return hits.length === 0 || 'returned a tombstone';
+});
+
+add('an empty chat search returns nothing rather than everything', () =>
+  (store.searchInChat('c-frag', '', { limit: 10 }).length === 0
+    && store.searchInChat('c-frag', '   ', { limit: 10 }).length === 0)
+  || 'an empty query matched rows');
+
+add('a chat search returns its hits oldest first', () => {
+  store.upsertMessages('c-order', [
+    msg('o2', 7000, 'order marker'),
+    msg('o1', 6000, 'order marker'),
+  ], {});
+  const hits = store.searchInChat('c-order', 'order', { limit: 10 });
+  return (hits.length === 2 && hits[0].ts < hits[1].ts)
+    || ('got ' + JSON.stringify(hits.map((h) => h.ts)));
+});
+
+add('CONTROL: a chat search with no chat named returns nothing', () =>
+  store.searchInChat('', 'batt', { limit: 10 }).length === 0 || 'ignored the chat');
+
 // A row of messages with no name on it is close to useless when you are the one
 // looking for it, and Beeper is not always there to say what the chat was.
 //

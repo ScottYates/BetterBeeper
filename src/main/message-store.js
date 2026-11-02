@@ -95,6 +95,17 @@ function ftsQuery(raw) {
 }
 
 /**
+ * A LIKE pattern for a literal substring.
+ *
+ * The wildcards are escaped because a user typing "%" is looking for a percent
+ * sign, not asking for every row. The escape character is a backslash, which
+ * SQLite takes literally in a string literal.
+ */
+function likePattern(text) {
+  return '%' + String(text).replace(/[\\%_]/g, (ch) => '\\' + ch) + '%';
+}
+
+/**
  * Open the store, creating or migrating it.
  *
  * A database that will not open is set aside rather than allowed to take the
@@ -503,6 +514,47 @@ function openMessageStore(userDataDir, { onRecover } = {}) {
         // Beeper can name the chat even when this machine has never been told
         // its title, so an absent name here is normal rather than a failure.
         chatTitle: row.chatTitle || null,
+      }));
+    },
+
+    /**
+     * Every stored message in one chat that contains the text.
+     *
+     * The FTS index matches whole words, so "batt" does not find "battery".
+     * A search box is expected to find a fragment, so this scans the chat's
+     * rows instead. One chat is thousands of messages at most and
+     * (chatID, ts, id) is indexed, so the scan is quick.
+     *
+     * Every whitespace-separated term must be found. LIKE is
+     * case-insensitive for ASCII, which is what a search box is expected to
+     * do, and case-sensitive beyond it.
+     */
+    searchInChat(chatID, query, { limit = 500 } = {}) {
+      const terms = String(query ?? '').trim().split(/\s+/).filter(Boolean);
+      if (!chatID || !terms.length) return [];
+
+      const clause = terms.map(() => "text LIKE ? ESCAPE '\\'").join(' AND ');
+      const params = terms.map((term) => likePattern(term));
+
+      // Newest first in the query, then reversed, so the cap keeps the most
+      // recent matches rather than the oldest ones. A chat can hold more
+      // matches than the cap allows, and the recent ones are the ones being
+      // looked for.
+      const rows = db.prepare(`
+        SELECT chatID, id, text, ts, senderID, senderName
+          FROM messages
+         WHERE chatID = ? AND gone = 0 AND ${clause}
+         ORDER BY ts DESC, id DESC
+         LIMIT ?
+      `).all(chatID, ...params, limit);
+
+      return rows.reverse().map((row) => ({
+        chatID: row.chatID,
+        id: row.id,
+        text: row.text,
+        ts: row.ts,
+        senderID: row.senderID,
+        senderName: row.senderName,
       }));
     },
 

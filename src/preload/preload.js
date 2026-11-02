@@ -85,6 +85,7 @@ contextBridge.exposeInMainWorld('beeper', {
     // Put new names on the messages of people whose contact information changed.
     renameSenders: (chatID, names) => invoke('history:renameSenders', chatID, names),
     search: (query, opts) => invoke('history:search', query, opts),
+    searchInChat: (chatID, query, opts) => invoke('history:searchInChat', chatID, query, opts),
     status: () => invoke('history:status'),
     // Queues the work and returns. It never waits for the walk to finish.
     refresh: (chatID) => invoke('history:refresh', chatID),

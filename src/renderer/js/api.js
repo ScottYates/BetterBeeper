@@ -112,6 +112,7 @@ export const api = {
     upsert: (chatID, message) => window.beeper.history.upsert(chatID, message),
     renameSenders: (chatID, names) => window.beeper.history.renameSenders(chatID, names),
     search: (query, opts) => window.beeper.history.search(query, opts),
+    searchInChat: (chatID, query, opts) => window.beeper.history.searchInChat(chatID, query, opts),
     status: () => window.beeper.history.status(),
     refresh: (chatID) => window.beeper.history.refresh(chatID),
     jobs: () => window.beeper.history.jobs(),
