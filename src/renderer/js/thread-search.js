@@ -12,6 +12,11 @@
 
 import { api, call } from './api.js';
 import { upsertMessages } from './state.js';
+import { nextIndex } from './search-nav.js';
+
+// The step rule belongs to both searches, so it lives in a module of its own
+// and is re-exported here, where the check and the app have always found it.
+export { nextIndex };
 
 /** The lowercased terms of a query. An empty query has no terms. */
 export function termsOf(query) {
@@ -89,21 +94,6 @@ export function mergeHits(localHits, remoteHits) {
   }
   out.sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
   return out;
-}
-
-/**
- * The index to step to.
- *
- * Wrapping at both ends, because a search that stops at the last hit makes
- * the user press the key again to find out there is nothing more.
- */
-export function nextIndex(current, total, step) {
-  if (!total) return -1;
-  if (current < 0) return step < 0 ? total - 1 : 0;
-  const next = current + (step < 0 ? -1 : 1);
-  if (next < 0) return total - 1;
-  if (next >= total) return 0;
-  return next;
 }
 
 /** The class every mark this module makes carries. */
