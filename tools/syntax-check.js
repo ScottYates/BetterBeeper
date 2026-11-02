@@ -48,7 +48,14 @@ function isBuildOutput(name) {
  *
  * The `${...}` interpolations are replaced with a placeholder, since they are
  * deliberately not valid in the extracted text on their own.
+ *
+ * The marker has to be at the start of a line. A file can contain the marker
+ * inside a string - the launcher check writes a deliberately broken harness as
+ * a fixture, so the marker text has to appear in it - and a search that
+ * matched there would report a file as broken that is perfectly fine.
  */
+const HARNESS_DECL = /^[ \t]*const harness = /m;
+const HARNESS_OPEN = /^[ \t]*const harness = (?:String\.raw)?`/m;
 /** Replace each `${...}` with a literal, respecting nested braces and strings. */
 function blankInterpolations(text) {
   let out = '';
@@ -77,11 +84,12 @@ function blankInterpolations(text) {
 }
 
 function checkHarness(file, source) {
-  const marker = 'const harness = ';
-  const at = source.indexOf(marker);
-  if (at < 0) return null;
-  const from = source.indexOf('`', at);
-  if (from < 0) return 'harness template has no opening backtick';
+  if (!HARNESS_DECL.test(source)) return null;
+
+  const open = HARNESS_OPEN.exec(source);
+  if (!open) return 'harness template has no opening backtick';
+
+  const from = open.index + open[0].length - 1;
   const end = source.indexOf('\n  `;', from);
   if (end < 0) return 'harness template has no closing backtick';
 
@@ -121,7 +129,6 @@ function main() {
     for (const file of files) {
       const source = fs.readFileSync(file, 'utf8');
       const rel = path.relative(ROOT, file);
-      const relPosix = rel.split(path.sep).join('/');
       const ext = looksLikeEsm(source) ? '.mjs' : '.cjs';
       const staged = path.join(stage, `${rel.replace(/[\\/]/g, '_')}${ext}`);
       fs.writeFileSync(staged, source, 'utf8');
@@ -140,11 +147,14 @@ function main() {
         bad = detail;
       }
 
-      if (!bad && relPosix !== 'tools/syntax-check.js') {
-        // This file mentions the marker itself, so it would match its own rule.
+      if (!bad) {
+        // This file used to be excluded from the harness rule because it
+        // mentions the marker itself. The marker is now matched at the start
+        // of a line, so this file no longer matches its own rule and can be
+        // held to it like every other file.
         const harnessProblem = checkHarness(file, source);
         if (harnessProblem) bad = harnessProblem;
-        else if (source.includes('const harness = ')) harnesses += 1;
+        else if (HARNESS_DECL.test(source)) harnesses += 1;
       }
 
       if (bad) problems.push(`${rel}  ${bad}`);
@@ -166,4 +176,9 @@ function main() {
   process.exit(1);
 }
 
-main();
+// Run as a script, or be required for its detector. The check that guards the
+// detector requires this file, and requiring it must not start a walk of the
+// whole repository.
+if (require.main === module) main();
+
+module.exports = { checkHarness, blankInterpolations, HARNESS_DECL, HARNESS_OPEN };
