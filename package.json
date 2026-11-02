@@ -43,6 +43,7 @@
     "check:paste": "electron tools/paste-check.js",
     "check:paste-live": "node tools/paste-live.js",
     "check:notificationclick": "electron tools/notification-click-check.js",
+    "check:threadsearch": "electron tools/thread-search-check.js",
     "check:api": "node tools/api-surface-check.js",
     "check:preview": "node tools/chat-preview-check.mjs",
     "check:markallread": "node tools/mark-all-read-check.mjs",
