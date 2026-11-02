@@ -240,7 +240,34 @@ async function main() {
   }
   app.exit(0);
 
-  const cases = harnessCases;
+  // The wiring across the processes is checked against the source: a hit
+  // that only Beeper knows about has to be fetched by id, and a break in any
+  // of the three lists leaves the fetch doing nothing at all, with nothing
+  // on screen to say so.
+  //
+  // The channel name is a string on both sides of the bridge, and a typo on
+  // one side only leaves both source checks green while the feature does
+  // nothing. So the two names are read out of the source and compared.
+  const preloadSrc = fs.readFileSync(path.join(ROOT, 'src', 'preload', 'preload.js'), 'utf8');
+  const ipcSrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'ipc.js'), 'utf8');
+  const apiSrc = fs.readFileSync(path.join(ROOT, 'src', 'renderer', 'js', 'api.js'), 'utf8');
+
+  const preloadChannel = (preloadSrc.match(/get: \(chatID, messageID\) => invoke\('([^']+)'/) || [])[1];
+  const ipcChannel = (ipcSrc.match(/ipcMain\.handle\('([^']+)', handle\(async \(chatID, messageID\)/) || [])[1];
+
+  const sourceCases = [
+    ['the preload can ask for one message',
+      /get: \(chatID, messageID\) => invoke\('messages:get'/.test(preloadSrc)],
+    ['the main process has a handler for it',
+      /ipcMain\.handle\('messages:get'/.test(ipcSrc)],
+    ['and the two sides are talking about the same channel',
+      Boolean(preloadChannel) && preloadChannel === ipcChannel,
+      `the preload listens on "${preloadChannel}", the main process handles "${ipcChannel}"`],
+    ['the renderer can ask for one message',
+      /get: \(chatID, messageID\) => window\.beeper\.messages\.get\(/.test(apiSrc)],
+  ].map(([name, ok, detail]) => [name, ok, detail || '']);
+
+  const cases = harnessCases.concat(sourceCases);
   let failed = 0;
   for (const [name, ok, detail] of cases) {
     if (!ok) failed++;

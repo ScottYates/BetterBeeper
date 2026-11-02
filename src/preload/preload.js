@@ -64,6 +64,7 @@ contextBridge.exposeInMainWorld('beeper', {
     react: (chatID, messageID, key) => invoke('messages:react', chatID, messageID, key),
     unreact: (chatID, messageID, key) => invoke('messages:unreact', chatID, messageID, key),
     search: (params) => invoke('messages:search', params),
+    get: (chatID, messageID) => invoke('messages:get', chatID, messageID),
   },
   assets: {
     upload: (filePath) => invoke('assets:upload', filePath),

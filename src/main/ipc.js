@@ -302,6 +302,17 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
   ipcMain.handle('messages:unreact', handle((chatID, messageID, key) => client.removeReaction(chatID, messageID, key)));
   ipcMain.handle('messages:search', handle((params) => client.searchMessages(params || {})));
 
+  // One message, by id.
+  //
+  // A search can find a message this machine has never stored, because
+  // Beeper's own search reaches further back than the local history does.
+  // Fetching that one message by id is what turns it into a bubble in the
+  // thread rather than a line in a list.
+  ipcMain.handle('messages:get', handle(async (chatID, messageID) => {
+    if (!chatID || !messageID) return ok(null);
+    return ok(await client.getMessage(chatID, messageID));
+  }));
+
   // ---- assets -----------------------------------------------------------
 
   ipcMain.handle('assets:upload', handle(async (filePath) => client.uploadAsset(filePath)));

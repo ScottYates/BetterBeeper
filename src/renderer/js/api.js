@@ -90,6 +90,7 @@ export const api = {
     react: (chatID, messageID, key) => window.beeper.messages.react(chatID, messageID, key),
     unreact: (chatID, messageID, key) => window.beeper.messages.unreact(chatID, messageID, key),
     search: (params) => window.beeper.messages.search(params),
+    get: (chatID, messageID) => window.beeper.messages.get(chatID, messageID),
   },
 
   assets: {
