@@ -10,6 +10,8 @@
  * which is why the store gained a chat-scoped scan beside it.
  */
 
+import { api, call } from './api.js';
+
 /** The lowercased terms of a query. An empty query has no terms. */
 export function termsOf(query) {
   return String(query ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -207,5 +209,214 @@ function markTextNode(node, terms) {
   if (!count) return 0;
   if (cursor < value.length) fragment.append(doc.createTextNode(value.slice(cursor)));
   node.parentNode.replaceChild(fragment, node);
+  return count;
+}
+
+// ---------------------------------------------------------------------------
+// The interface
+// ---------------------------------------------------------------------------
+
+const DEBOUNCE_MS = 250;
+
+/**
+ * Everything the module needs from the thread, handed in rather than
+ * imported, so the dependency between the two runs one way only.
+ */
+let deps = {
+  getChatID: () => null,
+  renderAll: () => {},
+  focusComposer: () => {},
+  scrollToMessage: () => {},
+};
+
+let activeQuery = '';
+let hits = [];
+let currentIndex = -1;
+let isOpen = false;
+/** Bumped by every search, so a slow one cannot overwrite a newer one. */
+let searchToken = 0;
+let debounceTimer = null;
+
+function row() { return document.getElementById('thread-search-row'); }
+function input() { return document.getElementById('thread-search-input'); }
+function counter() { return document.getElementById('thread-search-count'); }
+function note() { return document.getElementById('thread-search-note'); }
+function messageList() { return document.getElementById('message-list'); }
+
+/** Wire the row to the app. The thread hands its own functions in. */
+export function initThreadSearch(handles) {
+  deps = { ...deps, ...(handles || {}) };
+
+  const button = document.getElementById('btn-thread-search');
+  if (button) button.addEventListener('click', openThreadSearch);
+
+  const close = document.getElementById('thread-search-close');
+  if (close) close.addEventListener('click', closeThreadSearch);
+
+  const prev = document.getElementById('thread-search-prev');
+  if (prev) prev.addEventListener('click', () => step(-1));
+
+  const next = document.getElementById('thread-search-next');
+  if (next) next.addEventListener('click', () => step(1));
+
+  const box = input();
+  if (box) {
+    box.addEventListener('input', onInput);
+    box.addEventListener('keydown', onKeyDown);
+  }
+}
+
+/** Open the row and put the cursor in it. */
+export function openThreadSearch() {
+  const box = row();
+  if (!box) return;
+  isOpen = true;
+  box.hidden = false;
+  const field = input();
+  if (field) field.focus();
+}
+
+/**
+ * Close the row, take the marks out, and give the cursor back.
+ *
+ * The marks belong to the conversation that was open, so they go when the
+ * search does.
+ */
+export function closeThreadSearch() {
+  const box = row();
+  if (box) box.hidden = true;
+  isOpen = false;
+  activeQuery = '';
+  hits = [];
+  currentIndex = -1;
+  searchToken += 1;
+  const field = input();
+  if (field) field.value = '';
+  if (counter()) counter().textContent = '';
+  if (note()) note().textContent = '';
+  clearHighlights(messageList());
+  deps.focusComposer();
+}
+
+export function isThreadSearchOpen() {
+  return isOpen;
+}
+
+/** What the check reads to see what the search is doing. */
+export function threadSearchState() {
+  return { query: activeQuery, hits: [...hits], index: currentIndex, open: isOpen };
+}
+
+function onInput() {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(runSearch, DEBOUNCE_MS);
+}
+
+function onKeyDown(event) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    step(event.shiftKey ? -1 : 1);
+    return;
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeThreadSearch();
+  }
+}
+
+/**
+ * Run the search and draw the answer.
+ *
+ * The local store answers for everything this device holds. Beeper's own
+ * search is asked as well, but only for a single word, because a multi-word
+ * query there behaves like a phrase and would return nothing.
+ */
+async function runSearch() {
+  const query = String(input()?.value || '').trim();
+  activeQuery = query;
+  const token = ++searchToken;
+
+  if (!query) {
+    hits = [];
+    currentIndex = -1;
+    if (counter()) counter().textContent = '';
+    if (note()) note().textContent = '';
+    clearHighlights(messageList());
+    return;
+  }
+
+  const chatID = deps.getChatID();
+  if (!chatID) return;
+  if (counter()) counter().textContent = 'Searching...';
+
+  const local = await call(
+    () => api.history.searchInChat(chatID, query, { limit: 500 }),
+    { context: 'conversation search', fallback: [] },
+  );
+  const remote = isSingleWord(query)
+    ? await call(
+        () => api.messages.search({ query, chatIDs: [chatID], limit: 20 }),
+        { context: 'message search', fallback: { items: [] } },
+      )
+    : { items: [] };
+
+  if (token !== searchToken) return; // a newer search superseded this one
+
+  // Beeper's hits are re-tested against the same rule the local search uses,
+  // so the counter can never count a match that is not highlighted.
+  const remoteHits = (remote.items || []).filter((hit) => matchesQuery(hit.text, query));
+  hits = mergeHits(local, remoteHits);
+  currentIndex = hits.length ? 0 : -1;
+
+  if (counter()) {
+    counter().textContent = hits.length ? `1 of ${hits.length}` : 'No matches';
+  }
+  applyThreadSearchHighlights();
+  if (hits.length) goTo(0);
+}
+
+/** Step to the next or previous hit, wrapping at both ends. */
+function step(direction) {
+  if (!hits.length) return;
+  currentIndex = nextIndex(currentIndex, hits.length, direction);
+  goTo(currentIndex);
+}
+
+/** Scroll to the current hit and mark it as the current one. */
+function goTo(index) {
+  const hit = hits[index];
+  if (!hit) return;
+  if (counter()) counter().textContent = `${index + 1} of ${hits.length}`;
+  deps.scrollToMessage(hit.id);
+  markCurrent(index);
+}
+
+/** Put the current marker on the right mark. */
+function markCurrent(index) {
+  const root = messageList();
+  if (!root) return;
+  const marks = [...root.querySelectorAll(`mark.${HIT_CLASS}`)];
+  for (const mark of marks) mark.classList.remove('is-current');
+  const hit = hits[index];
+  if (!hit) return;
+  const mark = marks.find(
+    (node) => node.closest('[data-message-id]')?.getAttribute('data-message-id') === hit.id,
+  );
+  if (mark) mark.classList.add('is-current');
+}
+
+/**
+ * Re-apply the highlights to the thread.
+ *
+ * The thread rebuilds itself whenever a message arrives, so the marks have
+ * to be put back after every render. Without this, the first message that
+ * arrived during a search would wipe every mark on screen.
+ */
+export function applyThreadSearchHighlights() {
+  const root = messageList();
+  if (!root) return 0;
+  if (!activeQuery) return 0;
+  const count = highlightIn(root, activeQuery);
+  markCurrent(currentIndex);
   return count;
 }

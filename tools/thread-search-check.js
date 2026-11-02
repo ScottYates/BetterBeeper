@@ -223,6 +223,144 @@ async function main() {
           TS.clearHighlights(root);
           return root.querySelectorAll('mark').length === 1 || 'it removed a mark it did not make';
         });
+
+        // --- the interface, driven through the wiring the app installs -----
+
+        const envelope = (data) => ({ ok: true, data });
+        const bubble = (id, ts, text, sender) => ({
+          id, chatID: 'c-note', accountID: 'a1', senderID: sender,
+          senderName: sender === 'a1' ? 'Me' : 'Them', text,
+          timestamp: ts, isSender: sender === 'a1', type: 'TEXT',
+        });
+
+        const searchCalls = [];
+        window.beeper = {
+          on: () => {},
+          chats: {
+            list: async () => envelope([]),
+            get: async () => envelope(null),
+            patch: async () => envelope({}),
+            markRead: async () => envelope(true),
+            markUnread: async () => envelope(true),
+            archive: async () => envelope(true),
+            create: async () => envelope({}),
+          },
+          messages: {
+            list: async () => envelope({ items: [], hasMore: false }),
+            search: async () => envelope({ items: [] }),
+            get: async () => envelope(null),
+          },
+          history: {
+            open: async () => envelope({
+              messages: [
+                bubble('m1', 1000, 'the battery is flat', 'a2'),
+                bubble('m2', 2000, 'nothing to see here', 'a2'),
+                bubble('m3', 3000, 'batt batt batt', 'a1'),
+              ],
+              complete: true,
+              hasMore: false,
+            }),
+            page: async () => envelope({ messages: [], hasMore: false, complete: true }),
+            upsert: async () => envelope({ written: 1 }),
+            search: async () => envelope([]),
+            searchInChat: async (chatID, query) => {
+              searchCalls.push({ chatID, query });
+              return envelope([
+                { chatID: 'c-note', id: 'm1', text: 'the battery is flat', ts: 1000 },
+                { chatID: 'c-note', id: 'm3', text: 'batt batt batt', ts: 3000 },
+              ]);
+            },
+            status: async () => envelope({ messages: 0, chats: 0, bytes: 0 }),
+            refresh: async () => envelope({ queued: true }),
+            jobs: async () => envelope({ jobs: [] }),
+          },
+        };
+
+        const S = await import(${JSON.stringify(js('state.js'))});
+        const T = await import(${JSON.stringify(js('thread.js'))});
+        T.initThread();
+        S.state.chats.set('c-note', {
+          id: 'c-note', title: 'A conversation', type: 'single',
+          participants: { items: [{ isSelf: true }, { isSelf: false }] },
+        });
+        await T.openChat('c-note');
+        await settle(150);
+
+        await add('the header has a search button', () =>
+          Boolean(document.getElementById('btn-thread-search')) || 'there is no button');
+
+        await add('the search row is hidden until the button is used', () =>
+          document.getElementById('thread-search-row').hidden === true || 'the row was already open');
+
+        await add('the button opens the row', () => {
+          document.getElementById('btn-thread-search').click();
+          return document.getElementById('thread-search-row').hidden === false || 'the row stayed shut';
+        });
+
+        await add('typing in the row searches the open chat', async () => {
+          const field = document.getElementById('thread-search-input');
+          field.value = 'batt';
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          await settle(400);
+          return TS.threadSearchState().query === 'batt' || 'the query never arrived';
+        });
+
+        await add('and it asked the store about the chat that is open', () =>
+          (searchCalls.length > 0 && searchCalls[0].chatID === 'c-note')
+          || ('the store was asked ' + JSON.stringify(searchCalls)));
+
+        await add('and the counter says how many there are', () =>
+          /of\s*\d+/.test(document.getElementById('thread-search-count').textContent)
+          || ('the counter reads ' + document.getElementById('thread-search-count').textContent));
+
+        await add('and the matches are marked in the thread', () =>
+          document.querySelectorAll('#message-list mark.ts-hit').length > 0 || 'nothing was marked');
+
+        await add('the current match is marked apart from the others', () =>
+          document.querySelectorAll('#message-list mark.ts-hit.is-current').length === 1
+          || ('there are ' + document.querySelectorAll('#message-list mark.ts-hit.is-current').length));
+
+        await add('Enter steps to the next match', async () => {
+          const before = TS.threadSearchState().index;
+          document.getElementById('thread-search-input')
+            .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+          await settle(150);
+          const after = TS.threadSearchState().index;
+          return (after !== before) || ('the index stayed at ' + after);
+        });
+
+        await add('Shift+Enter steps back', async () => {
+          const before = TS.threadSearchState().index;
+          document.getElementById('thread-search-input')
+            .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
+          await settle(150);
+          const after = TS.threadSearchState().index;
+          return (after !== before) || ('the index stayed at ' + after);
+        });
+
+        await add('clearing the query removes every mark', async () => {
+          const field = document.getElementById('thread-search-input');
+          field.value = '';
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          await settle(400);
+          return document.querySelectorAll('#message-list mark.ts-hit').length === 0
+            || 'a mark was left behind';
+        });
+
+        await add('Escape closes the row', async () => {
+          document.getElementById('btn-thread-search').click();
+          const field = document.getElementById('thread-search-input');
+          field.value = 'batt';
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          await settle(400);
+          field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          await settle(150);
+          return document.getElementById('thread-search-row').hidden === true || 'the row stayed open';
+        });
+
+        await add('CONTROL: the sidebar search is not this search', () =>
+          document.getElementById('search-input') !== document.getElementById('thread-search-input')
+          || 'the two searches share an input');
       }
     })()
   `;

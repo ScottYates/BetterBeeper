@@ -347,6 +347,33 @@ select { cursor: pointer; }
 .search-row input { flex: 1; min-width: 0; }
 .search-row select { width: auto; flex: none; font-size: 12.5px; padding: 8px 6px; }
 
+/* The conversation's own search sits under the thread header, in the same
+   shape as the sidebar's, so the app has one search idiom rather than two.
+   The row is hidden with the attribute rather than by collapsing it, so the
+   display rule has to give way to it: an author rule of display: flex beats
+   the user agent's rule for the hidden attribute. */
+.thread-search-row {
+  display: flex; gap: 6px; align-items: center;
+  padding: 0 14px 10px;
+}
+.thread-search-row[hidden] { display: none; }
+.thread-search-row input { flex: 1; min-width: 0; }
+.thread-search-count { font-size: 12.5px; color: var(--text-dim); white-space: nowrap; }
+.thread-search-note { font-size: 12.5px; color: var(--text-faint); }
+.thread-search-note:empty { display: none; }
+
+/* A match in the thread. The current one is the one the user is on. */
+mark.ts-hit {
+  background: var(--accent-soft);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+mark.ts-hit.is-current {
+  background: var(--accent);
+  color: var(--bg);
+}
+
 .filter-row {
   display: flex; gap: 5px; padding: 0 12px;
   overflow: hidden; max-height: 0; opacity: 0;

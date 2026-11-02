@@ -14,6 +14,7 @@ import {
   escapeHtml,
 } from './util.js';
 import { decodeEntities, clipText } from './entities.js';
+import { initThreadSearch, applyThreadSearchHighlights, closeThreadSearch } from './thread-search.js';
 import { api, call, callOk, FAILED } from './api.js';
 import { mediaKind } from './media-kind.js';
 import {
@@ -131,6 +132,18 @@ export function initThread() {
   // The refresh button. The work it starts is not awaited: it runs in the main
   // process and the jobs panel is how it is watched.
   $('#btn-refresh')?.addEventListener('click', () => refreshThisChat());
+
+  // The conversation's own search.
+  //
+  // The module is handed the thread's functions rather than importing the
+  // thread, so the dependency between the two runs one way only and both
+  // halves can be checked on their own.
+  initThreadSearch({
+    getChatID: () => state.activeChatID,
+    renderAll: () => renderAll(),
+    focusComposer: () => focusComposer(),
+    scrollToMessage: (id) => scrollToMessage(id),
+  });
 
   // A job's progress is the only thing that starts and stops the refresh
   // button, and it arrives as a job event rather than as anything this chat did.
@@ -327,6 +340,8 @@ export async function openChat(chatID, { focusMessageID: focusId } = {}) {
     pendingAttachments = [];
     state.replyTo = null;
     state.editing = null;
+    // The marks belong to the conversation that was open, so they go with it.
+    closeThreadSearch();
   }
 
   // A chat you have just opened always shows its newest message. `atBottom`
@@ -999,6 +1014,9 @@ function renderAll() {
     listEl.append(node);
     previous = message;
   }
+
+  // The thread rebuilds itself, so the search marks have to be put back.
+  applyThreadSearchHighlights();
 
   if (stick) scrollToBottom();
 }

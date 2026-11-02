@@ -427,6 +427,11 @@ function wireKeyboard() {
       if (state.editing) return;
       // Escape in the search box clears the search; it must not close the chat.
       if (event.target?.id === 'search-input') return;
+      // Escape in the conversation's own search closes that row and nothing
+      // else. This handler runs in the capture phase, so it sees the key
+      // before the search row's own handler does: without this guard, one
+      // Escape would close the row and the conversation behind it.
+      if (event.target?.id === 'thread-search-input') return;
       if (!state.activeChatID) return;
 
       event.preventDefault();

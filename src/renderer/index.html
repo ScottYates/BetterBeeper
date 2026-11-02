@@ -179,6 +179,14 @@
               </div>
             </div>
             <div class="thread-actions">
+              <button
+                id="btn-thread-search"
+                class="icon-btn"
+                data-tip="Search this conversation"
+                aria-label="Search this conversation"
+              >
+                ⌕
+              </button>
               <button id="btn-members" class="icon-btn" data-tip="Show everyone in this conversation" aria-label="Show participants">👥</button>
               <button id="btn-refresh" class="icon-btn" data-tip="Re-sync this chat from Beeper" aria-label="Refresh chat">↻</button>
               <button id="btn-mute" class="icon-btn" data-tip="Mute notifications" aria-label="Mute">🔔</button>
@@ -187,6 +195,22 @@
               <button id="btn-unread" class="icon-btn" data-tip="Mark as unread" aria-label="Mark unread">●</button>
             </div>
           </header>
+
+          <div class="thread-search-row" id="thread-search-row" hidden>
+            <input
+              id="thread-search-input"
+              type="search"
+              placeholder="Search this conversation"
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="Search this conversation"
+            />
+            <span class="thread-search-count" id="thread-search-count"></span>
+            <button id="thread-search-prev" class="icon-btn tiny-btn" data-tip="Previous match" aria-label="Previous match">▲</button>
+            <button id="thread-search-next" class="icon-btn tiny-btn" data-tip="Next match" aria-label="Next match">▼</button>
+            <button id="thread-search-close" class="icon-btn tiny-btn" data-tip="Close" aria-label="Close search">✕</button>
+            <span class="thread-search-note" id="thread-search-note"></span>
+          </div>
 
           <div id="message-list" class="message-list"></div>
 
