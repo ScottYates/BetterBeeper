@@ -496,14 +496,67 @@ function chatItem(chat) {
  *
  * Caching the answer lets a rebuilt avatar be constructed with the image already
  * in it, so the repaint is one frame showing the same picture it showed before.
+ *
+ * The cache is bounded. It used to grow for ever: every avatar URL the app had
+ * ever seen stayed in it until the window closed, and a map that only grows is a
+ * leak. The entries that go are the ones that have not been asked about for the
+ * longest, because the ones still in use are the ones being asked about now.
  */
+const RESOLVED_AVATARS = 200;
 const resolvedAvatars = new Map();
 
-/** The <img> for an avatar. Split out so both paths build it identically. */
-function avatarImg(url, lightbox) {
+/**
+ * The picture already resolved for a source URL, or null.
+ *
+ * A hit moves the entry to the end of the map, so the map is in order of last
+ * use and the first entry to be dropped is the one that has not been wanted for
+ * the longest.
+ */
+export function resolvedAvatar(srcURL) {
+  const url = resolvedAvatars.get(srcURL);
+  if (!url) return null;
+  resolvedAvatars.delete(srcURL);
+  resolvedAvatars.set(srcURL, url);
+  return url;
+}
+
+/** Remember a resolved picture, and drop the ones that have not been used for a long time. */
+export function rememberAvatar(srcURL, url) {
+  resolvedAvatars.delete(srcURL);
+  resolvedAvatars.set(srcURL, url);
+  while (resolvedAvatars.size > RESOLVED_AVATARS) {
+    const oldest = resolvedAvatars.keys().next().value;
+    resolvedAvatars.delete(oldest);
+  }
+}
+
+/**
+ * Forget one resolved picture.
+ *
+ * The file behind a resolved URL can be removed while the app is open - the
+ * media pruner does exactly that - and a cache that keeps handing out a
+ * picture that is not there any more shows a broken image for ever.
+ */
+export function forgetAvatar(srcURL) {
+  resolvedAvatars.delete(srcURL);
+}
+
+/** How many resolved pictures are remembered. For the check. */
+export function avatarCacheSize() {
+  return resolvedAvatars.size;
+}
+
+/**
+ * The <img> for an avatar. Split out so both paths build it identically.
+ *
+ * `onMissing` is called if the picture does not load, which is the only way to
+ * know that the file behind it has gone.
+ */
+function avatarImg(url, lightbox, onMissing) {
   return el('img', {
     src: url,
     alt: '',
+    ...(onMissing ? { onError: onMissing } : {}),
     ...(lightbox
       ? {
           onClick: (e) => {
@@ -532,30 +585,56 @@ export function avatarNode(source, name, size = '', { lightbox = true } = {}) {
     text: initials(label),
   });
 
-  const known = imgURL ? resolvedAvatars.get(imgURL) : null;
+  const known = imgURL ? resolvedAvatar(imgURL) : null;
   if (known) {
     // Already known, so the picture goes in now rather than after a round trip.
     // This is the path every rebuilt avatar takes, which is what stops the
     // repaint from being a flash.
     clear(node);
-    node.append(avatarImg(known, lightbox));
+    node.append(avatarImg(known, lightbox, () => resolveAvatarAgain(node, imgURL, lightbox)));
     return node;
   }
 
-  if (imgURL) {
-    call(() => api.assets.resolve({ srcURL: imgURL, id: imgURL }), {
-      context: 'avatar',
-      fallback: null,
-    })
-      .then((data) => data?.url || null)
-      .then((url) => {
-        if (!url) return;
-        resolvedAvatars.set(imgURL, url);
-        clear(node);
-        node.append(avatarImg(url, lightbox));
-      });
-  }
+  if (imgURL) resolveAvatarInto(node, imgURL, lightbox);
   return node;
+}
+
+/**
+ * Ask Beeper for the picture behind an avatar URL and put it in the node.
+ *
+ * A retry is a retry and not a first attempt: the picture that failed to load
+ * is not asked about a second time, so a picture that is broken on purpose
+ * cannot ask for ever.
+ */
+function resolveAvatarInto(node, imgURL, lightbox, isRetry = false) {
+  call(() => api.assets.resolve({ srcURL: imgURL, id: imgURL }), {
+    context: 'avatar',
+    fallback: null,
+  })
+    .then((data) => data?.url || null)
+    .then((url) => {
+      if (!url) return;
+      // A picture that has already failed once is not remembered. It may be
+      // the same missing file, and a cache that holds a picture that is not
+      // there shows a broken image for ever. The next rebuild asks for it
+      // again, and that answer is remembered.
+      if (!isRetry) rememberAvatar(imgURL, url);
+      clear(node);
+      node.append(avatarImg(url, lightbox, isRetry ? null : () => {
+        // The picture did not load, so the file behind it is not there. The
+        // media pruner can remove it while the app is open, and a cache that
+        // keeps handing out a picture that is not there shows a broken image
+        // for ever. So the entry is dropped and the picture is asked for
+        // again.
+        resolveAvatarAgain(node, imgURL, lightbox);
+      }));
+    });
+}
+
+/** Ask for the picture again, because the one we had did not load. */
+function resolveAvatarAgain(node, imgURL, lightbox) {
+  forgetAvatar(imgURL);
+  resolveAvatarInto(node, imgURL, lightbox, true);
 }
 
 export function renderAccountBadges() {

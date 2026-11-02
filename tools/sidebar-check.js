@@ -90,6 +90,9 @@ async function main() {
       // already has is the main-thread cost of the flashing, so it is measured
       // rather than assumed.
       let resolves = 0;
+      // A picture the browser can actually load, so an avatar that is working
+      // is not mistaken for one whose file has gone.
+      const LOADABLE = 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%2F%3E';
       const chat = (id, over) => ({
         id, title: 'Chat ' + id, network: 'Signal', type: 'single',
         imgURL: 'https://example.invalid/' + id + '.png',
@@ -101,7 +104,15 @@ async function main() {
 
       window.beeper = {
         assets: {
-          resolve: async () => { resolves++; return envelope({ url: 'beeper-file://local/x.png' }); },
+          resolve: async ({ srcURL } = {}) => {
+            resolves++;
+            // A source URL that says "gone" answers with a file that is not
+            // there, which is what the pruner leaves behind.
+            const url = String(srcURL || '').includes('gone')
+              ? 'beeper-file://local/not-there.png'
+              : LOADABLE;
+            return envelope({ url });
+          },
         },
         images: {},
         shell: { openExternal: async () => envelope(true) },
@@ -873,6 +884,58 @@ async function main() {
 
       add('a rebuilt avatar is not left holding the initials too', () =>
         rebuilt.textContent.trim() === '' || 'initials are still in the rebuilt avatar');
+
+      // The cache is bounded. It used to grow for ever, holding every avatar
+      // URL the app had ever seen until the window closed.
+      //
+      // The limit is checked through the real functions rather than by
+      // counting calls, because the number that matters is how many are
+      // remembered, not how many were asked for.
+      const fill = (prefix, howMany) => {
+        for (let i = 0; i < howMany; i++) {
+          B.rememberAvatar('https://example.invalid/' + prefix + i + '.png', 'beeper-file://local/' + prefix + i);
+        }
+      };
+
+      fill('fill-', 260);
+      add('the resolved pictures are forgotten when there are too many', () =>
+        B.avatarCacheSize() <= 200
+        || ('the cache is holding ' + B.avatarCacheSize() + ' pictures'));
+
+      // The picture that has not been wanted for the longest is the one that
+      // goes: the ones still in use are the ones being asked about now.
+      const stale = 'https://example.invalid/stale.png';
+      B.rememberAvatar(stale, 'beeper-file://local/stale');
+      fill('flood-', 260);
+      add('the least recently used picture is the one that goes', () =>
+        B.resolvedAvatar(stale) === null || 'the picture that had not been used was kept');
+
+      const inUse = 'https://example.invalid/in-use.png';
+      B.rememberAvatar(inUse, 'beeper-file://local/in-use');
+      fill('later-', 10);
+      add('a picture that is in use is not the one that goes', () =>
+        B.resolvedAvatar(inUse) !== null || 'the picture in use was dropped before it was needed again');
+
+      // A picture whose file has gone must be asked for again. The media
+      // pruner can remove the file while the app is open, and a cache that
+      // keeps handing out a picture that is not there shows a broken image
+      // for ever.
+      const goneSrc = 'https://beeper.example/avatar/gone.png';
+      const goneChat = { id: 'av2', title: 'Gone Chat', imgURL: goneSrc };
+      const resolvesBefore = resolves;
+      const goneAvatar = B.avatarNode(goneChat, 'Gone Chat');
+      await new Promise((r) => setTimeout(r, 120));
+      const goneImg = goneAvatar.querySelector('img');
+      if (goneImg) goneImg.dispatchEvent(new Event('error'));
+      await new Promise((r) => setTimeout(r, 120));
+
+      add('a picture whose file has gone is asked for again', () =>
+        resolves >= resolvesBefore + 2
+        || ('the picture was asked for ' + (resolves - resolvesBefore) + ' times, not twice'));
+
+      add('and the failed picture is not remembered', () =>
+        B.resolvedAvatar(goneSrc) === null
+        || 'the broken picture is still in the cache');
       }
     })()
   `;
