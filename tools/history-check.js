@@ -1352,20 +1352,40 @@ async function refreshAndJobsCases() {
     const PAGES = 200;
     const beeper = fakeBeeper(PAGES);
     const events = [];
+    const times = [];
     const sync = createHistorySync({
       store,
       media,
       fetchPage: beeper.fetchPage,
-      onProgress: (p) => events.push(p),
+      onProgress: (p) => { events.push(p); times.push(Date.now()); },
     });
+    const started = Date.now();
     sync.request('jp');
     await sync.drain();
+    const elapsed = Date.now() - started;
 
-    const paging = events.filter((e) => e.state === 'backfilling');
-    // Coalescing cannot promise an exact count, only that it is nowhere near
-    // one event per page.
-    return (paging.length > 0 && paging.length < PAGES / 4)
-      || `${paging.length} progress events for ${PAGES} pages`;
+    // The number of events cannot be asserted on its own: the coalescing is
+    // measured in wall-clock time, so a slow machine walks the same 200 pages
+    // over more time and announces them more often. That is not a defect, and
+    // a count bound made this case fail on a busy machine.
+    //
+    // Two things about it do not vary with the machine's speed: no two
+    // announcements are closer together than the interval, and there cannot
+    // be more of them than the time that passed allows.
+    const pagingTimes = [];
+    events.forEach((event, i) => {
+      if (event.state === 'backfilling') pagingTimes.push(times[i]);
+    });
+    let closest = Infinity;
+    for (let i = 1; i < pagingTimes.length; i++) {
+      closest = Math.min(closest, pagingTimes[i] - pagingTimes[i - 1]);
+    }
+    const allowed = Math.ceil(elapsed / 250) + 2;
+    return (pagingTimes.length > 0
+      && pagingTimes.length <= allowed
+      && (closest === Infinity || closest >= 250 - 5))
+      || `${pagingTimes.length} progress events for ${PAGES} pages in ${elapsed}ms`
+        + ` (closest ${closest}ms apart, ${allowed} allowed)`;
   });
 
   await addAsync('the counts still cover every page even when the events do not', async () => {
