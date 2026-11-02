@@ -794,10 +794,134 @@ marks", and the red proof breaks the one line that fixes it.
   interval, and there cannot be more of them than the time that passed allows.
   Setting the interval to zero still turns it red.
 
+### The arrows, in both searches
+
+The conversation's own search has had a pair of arrows since it was built, and
+the sidebar's search had none. Both step through their results now, the same
+way, and the rule they share lives in a module of its own.
+
+**The sidebar's search** draws a list of results - the chats that matched, then
+the messages that did - and the arrows step through that list. The current one
+is marked with the same soft wash and the same accent edge the conversation's
+search puts on the match it is on, it is brought into view, and the counter
+beside the box says `3 of 12`. Enter steps forward and Shift+Enter steps back,
+which is what the conversation's search already did.
+
+**Stepping does not open anything.** The results list *is* the answer to a
+sidebar search, and opening a chat would replace the list with that chat, so
+there would be nothing left to step to. Clicking a result still opens it, as
+it always did.
+
+**Enter searches for what is in the box.** The box is debounced, so a user who
+types and presses Enter straight away would otherwise be stepping through the
+results of a search they have already changed - or, with nothing on screen to
+step through, getting the answer to the previous question. If the text in the
+box is not what the results on screen came from, Enter asks for the search
+instead of stepping through stale ones.
+
+The case for that reads the counter **straight after the key, with nothing
+awaited in between**. The debounce runs the search a moment later anyway, so
+a case that waited for the results would pass with the behaviour taken out.
+A timer cannot fire in the middle of a synchronous block, so what the counter
+says at that instant is what the Enter did.
+
+**The step rule is shared.** `nextIndex` was in `thread-search.js`, which is
+the conversation's module, and the sidebar could not have used it there
+without depending on a module named after somebody else's feature. It is in
+`src/renderer/js/search-nav.js` now, and `thread-search.js` re-exports it so
+the check and the app still find it where they always did.
+
+**The buttons had never been driven by a check.** The conversation's arrows
+were on screen from the first release of that search, and the only thing ever
+exercised was the keyboard behind them - Enter and Shift+Enter. Two buttons
+that nothing had ever clicked is how a button ends up wired to the wrong
+thing. Both sets of arrows are driven now, and the cases assert the exact
+index the arrow lands on rather than that something changed.
+
+**Both arrows bring what they land on into view.** The sidebar scrolls the
+current result into the list; the conversation scrolls the current match into
+the thread. A match that is not on screen is a match the arrow did not find,
+so each side asserts it.
+
+`tools/search-nav-redproof.js` reintroduces each part of the stepping one at a
+time and asserts that the named check fails. It is not in the sweep, because
+it mutates the working tree on purpose; run it by hand after touching either
+search.
+
+### A hidden window has no layout, and a rectangle of zero is inside every pane
+
+The sidebar's check runs in a window that is never shown, and that is the right
+way to do it - a check that puts a window on the desktop is a check that
+interrupts the person running it. But a window that is not shown has no layout
+in it, and **the app shell was hidden in the harness page** because the shell
+is hidden until the app's own script connects, and the harness strips the
+scripts. So every rectangle inside it was zero.
+
+That made the check that the current result is brought into view pass without
+anything being brought into view. The assertion was "the row is inside the
+pane", and a row of zero height at a zero position is inside a pane of zero
+height at a zero position. The check was measuring nothing.
+
+Two things fixed it, and both are worth keeping:
+
+- **The shell is shown in the harness**, so the layout is real.
+- **There is a control case** - "the results list has a height to scroll in" -
+  that fails loudly if the layout ever goes back to zero. A check that cannot
+  fail is not a check, and the way to stop that is to make the thing it
+  depends on its own case.
+
+The same trap was in the conversation search, where nothing could be measured
+either. There the check watches the call to `scrollIntoView` instead: the app
+asking the browser to bring the match into view is the part that belongs to
+the app, and what the browser then does with it is the browser's business.
+
+One more thing about `scrollIntoView` and 'nearest': a row taller than the
+pane it is scrolled into gets its **top** edge aligned and the rest of it
+hangs below. So a pane one row tall cannot show that the row is in view - only
+that its top is. The pane has to be two rows tall for the question the user
+would ask to be the question the check asks.
+
+### The checks must never put a window on the desktop
+
+A check that does not parse is an uncaught exception in Electron's main
+process, and Electron answers that with an error dialog: a window that pops
+up in the middle of the desktop, looking like the app under test crashing, for
+a mistake in a file nobody was even running. That is what happened on
+2026-11-02, from a backtick inside a template literal in a check file.
+
+**Every Electron check now runs through `tools/run-check.js`.** It parses the
+file before Electron loads it, so a file that does not parse is reported in
+the terminal and the process ends - nothing is shown. It loads the check
+inside a catch, and it listens for `uncaughtException` and
+`unhandledRejection`, because the dialog appears when an exception reaches
+the top of the stack with nobody listening. A check that fails is a check that
+failed, and it belongs in the output.
+
+`npm run check:launcher` covers all of that: it runs the launcher on a file
+that does not parse and on one that throws, and it reads the npm scripts to
+be sure none of them launch Electron directly any more. It runs under plain
+node, so it cannot put a window on the screen either.
+
+**The parse step is what to do before running anything.** `npm run
+check:syntax` parses every JS file and every harness, and it is the thing to
+run first after editing a check. A harness is a template literal, so a
+backtick in one ends the string early and the file stops parsing.
+
+**The syntax check has to find a harness without finding one that is not
+there.** It looks for the declaration of the harness variable, and the
+launcher check writes a deliberately broken harness as a fixture - so the
+marker text has to appear inside a string somewhere in this repository. The
+detector searched the whole file for the marker, found that fixture, and
+reported a file that is perfectly fine as broken. The marker is matched at
+the **start of a line** now, and `npm run check:harness` holds that up:
+`tools/syntax-redproof.js` reintroduces each part of the rule and asserts the
+named case fails.
+
 ## Verification status
 
-`npm run check:all` gives **45/45 suites passed** on the tree carrying the
-2026-11-02 work, 2026-11-02. It was 44/44 on the v1.25.0 release commit and
+`npm run check:all` gives **47/47 suites passed** on the tree carrying the
+2026-11-02 work, 2026-11-02. It was 45/45 on the v1.26.0 release commit,
+44/44 on the v1.25.0 release commit and
 on the v1.24.0 release commit, 2026-10-27; 43/43 on the v1.23.0 release
 commit, 2026-10-21; 42 suites before `check:contactrefresh` was added, 41
 before `check:participants`, 40 before `check:refreshchats`, 39 before
@@ -814,6 +938,8 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:update` | 59/59, after `check:update` gained a built helper to read the PE header of |
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
 | `tools/update-redproof.js` | 17/17 mutations caught, no holes |
+| `tools/search-nav-redproof.js` | 12/12 mutations caught, no holes |
+| `tools/syntax-redproof.js` | 3/3 mutations caught, no holes |
 
 Individually measured: `check:entity` 0 failing across 31 cases,
 `check:rich` 27/27, `check:preview` 0 failing across 18 cases,
