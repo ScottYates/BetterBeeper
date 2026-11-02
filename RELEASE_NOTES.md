@@ -1,11 +1,11 @@
-Better Beeper 1.27.0
+Better Beeper 1.27.1
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.27.0-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.27.1-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,9 +17,6 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
-- docs: record the arrows in both searches, the window that never opens, and the hidden window that had no layout (`3825d14`)
-- fix: the checks must never put a window on the desktop, and must not report a good file as broken (`92453a6`)
-- feat: add up and down arrows to the sidebar search (`32cbae1`)
-- refactor: move the step rule out of the conversation search (`93441a6`)
+- docs: point the handoff at v1.27.0 (`2870317`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.
