@@ -30,27 +30,27 @@ one person's machine.
 ## Git state
 
 Branch `main`, in sync with origin. The work described under "Work done
-2026-11-02" is committed and released as **v1.26.0**. It is a minor bump,
+2026-11-02" is committed and released as **v1.27.0**. It is a minor bump,
 because `tools/release.js` derives the level from the commit subjects since
 the last tag and the `feat:` is the higher of the two.
 
-The last few commits, with the `Release 1.25.0` commit sitting on top of them:
+The last few commits, with the `Release 1.27.0` commit sitting on top of them:
 
 ```
-2fab2ac  fix: a progress-event count that depended on how fast the machine is
-2e135d9  fix: the check runner names the failing case instead of the last few lines
-a82fa56  feat: reach the rest of the conversation when searching
-93f6987  feat: search inside the conversation that is open
-c6f21bb  feat: the renderer can ask Beeper for a single message
-19a8281  feat: the search rules in a module of their own
-1b483b8  feat: the local store can search one chat by substring
-9e023a0  Release 1.25.0
+3825d14  docs: record the arrows in both searches, the window that never opens
+92453a6  fix: the checks must never put a window on the desktop
+32cbae1  feat: add up and down arrows to the sidebar search
+93441a6  refactor: move the step rule out of the conversation search
+396f145  Release 1.27.0
 ```
 
-The newest tag is **v1.26.0**, on the `Release 1.26.0` commit, so `main` is
-not left ahead of its own tag. `package.json` says 1.26.0.
+The newest tag is **v1.27.0**, on the `Release 1.27.0` commit, so `main` is
+not left ahead of its own tag. `package.json` says 1.27.0.
 
-v1.26.0 carried the in-conversation search. v1.25.0 carried the notification
+v1.27.0 carried the arrows in the sidebar's search, the check runner that
+stops a broken check from putting a window on the desktop, and the harness
+detector that stops a good file being reported as broken. v1.26.0 carried the
+in-conversation search. v1.25.0 carried the notification
 click. v1.24.0 carried the composer focus,
 the paste and drop work, and the reconnect fix. It is a minor bump, because
 `tools/release.js` derives the level from the commit subjects since the last
