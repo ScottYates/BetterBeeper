@@ -436,6 +436,52 @@ async function main() {
       });
 
       document.getElementById('modal-root')?.replaceChildren();
+
+      // --- a note chat with a long history draws all of it ------------------
+      //
+      // Measured on the live account: the note-to-self chat held thirty-odd
+      // stored messages and the thread drew one of them. The store was right -
+      // the read returned every one of them, and the thread drew all of them
+      // when they were handed to it directly - so the loss was between the
+      // store and the screen, and a chat with two messages in it would never
+      // have shown it.
+      //
+      // Thirty-one, because a list that loses everything but the newest is
+      // indistinguishable from a list that was never read.
+      const NOTE = 'n1';
+      const ST = await import(${JSON.stringify(js('state.js'))});
+      const noteMessages = Array.from({ length: 31 }, (_, i) => ({
+        id: 'n-' + i,
+        chatID: NOTE,
+        timestamp: 1000 + i,
+        text: 'note number ' + i,
+        senderID: 'me',
+        senderName: 'Me',
+        isSender: true,
+        type: 'TEXT',
+        attachments: [],
+      }));
+      ST.state.chats.set(NOTE, {
+        id: NOTE,
+        title: 'Note to self',
+        type: 'single',
+        participants: { items: [{ isSelf: true }] },
+      });
+      window.beeper.history.open = async () => {
+        asked.historyOpen++;
+        return envelope({ messages: noteMessages, complete: true, hasMore: false });
+      };
+      await T.openChat(NOTE);
+      await new Promise((r) => setTimeout(r, 150));
+      const noteRows = document.querySelectorAll('#message-list [data-message-id]');
+
+      add('a note chat draws every message it has stored', () =>
+        noteRows.length === noteMessages.length
+        || ('the thread drew ' + noteRows.length + ' of ' + noteMessages.length));
+
+      add('and the first of them is still on screen', () =>
+        (document.getElementById('message-list').textContent || '').includes('note number 0')
+        || 'the oldest stored message is not drawn');
       }
     })()
   `;
