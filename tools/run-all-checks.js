@@ -38,12 +38,16 @@ for (const suite of targets) {
     });
   } catch (err) {
     code = typeof err.status === 'number' && err.status !== 0 ? err.status : 1;
-    const tail = String(err.stdout || `${err.message}`)
-      .trim()
-      .split('\n')
-      .slice(-6)
-      .join('\n      ');
-    console.log(`FAIL  npm run ${suite}\n      ${tail}`);
+    const output = String(err.stdout || `${err.message}`).trim().split('\n');
+    // The failing cases, not the last few lines.
+    //
+    // The tail of a suite's output is its summary, which names the count but
+    // not the case that failed, so a truncated excerpt hides the one line
+    // that says what went wrong. The FAIL lines are kept, and the tail is
+    // only the fallback for a suite that died before printing any.
+    const failures = output.filter((line) => /^FAIL/.test(line.trim()));
+    const detail = (failures.length ? failures : output.slice(-6)).join('\n      ');
+    console.log(`FAIL  npm run ${suite}\n      ${detail}`);
   }
   if (code !== 0) failed += 1;
   else process.stdout.write(`PASS  ${suite}\n`);
