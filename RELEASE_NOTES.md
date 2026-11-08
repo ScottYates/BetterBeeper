@@ -1,11 +1,11 @@
-Better Beeper 1.27.2
+Better Beeper 1.27.3
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.27.2-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.27.3-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,8 +17,6 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
-- docs: record the bounded avatar cache, and the note chat measured end to end (`6128940`)
-- test: the thread draws every message a note chat has stored (`9005dcb`)
-- fix: the avatar cache forgot nothing, and remembered everything (`8f04920`)
+- docs: the design for editing a previous message from the composer (`e433203`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.
