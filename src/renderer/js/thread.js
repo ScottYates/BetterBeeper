@@ -15,6 +15,14 @@ import {
 } from './util.js';
 import { decodeEntities, clipText } from './entities.js';
 import { initThreadSearch, applyThreadSearchHighlights, closeThreadSearch } from './thread-search.js';
+import {
+  initComposerEdit,
+  handleComposerKey,
+  isEditing,
+  startEdit,
+  cancelEdit,
+  saveEdit,
+} from './composer-edit.js';
 import { api, call, callOk, FAILED } from './api.js';
 import { mediaKind } from './media-kind.js';
 import {
@@ -146,6 +154,19 @@ export function initThread() {
     loadHistoryUntil: (ts) => loadHistoryUntil(ts),
   });
 
+  // The edit session: the up arrow opens the last message that can be
+  // edited in the composer itself, and the thread hands over the functions
+  // it needs rather than the module reaching in for them.
+  initComposerEdit({
+    getChat: () => currentChat,
+    getMessages: () => state.messages.get(state.activeChatID) || [],
+    getSendOnEnter: () => state.settings.sendOnEnter !== false,
+    hasPendingAttachments: () => pendingAttachments.length > 0,
+    clearReply: () => { state.replyTo = null; updateReplyPreview(); },
+    focusComposer: () => focusComposer(),
+    renderAll: () => renderAll(),
+  });
+
   // A job's progress is the only thing that starts and stops the refresh
   // button, and it arrives as a job event rather than as anything this chat did.
   bus.on('jobs:changed', ({ chatID }) => {
@@ -158,6 +179,10 @@ export function initThread() {
   });
 
   composer.addEventListener('keydown', (event) => {
+    // The edit session gets the keys first: an edit is a send, and it must
+    // not go out as a new message.
+    if (handleComposerKey(event)) return;
+
     const sendOnEnter = state.settings.sendOnEnter !== false;
     if (event.key === 'Enter' && !event.shiftKey && (sendOnEnter || event.metaKey || event.ctrlKey)) {
       event.preventDefault();
@@ -340,7 +365,9 @@ export async function openChat(chatID, { focusMessageID: focusId } = {}) {
   if (state.activeChatID !== chatID) {
     pendingAttachments = [];
     state.replyTo = null;
-    state.editing = null;
+    // The edit belongs to the conversation it was started in. The thread is
+    // drawn again below, so the banner does not need a second redraw.
+    cancelEdit({ render: false });
     // The marks belong to the conversation that was open, so they go with it.
     closeThreadSearch();
   }
@@ -1160,9 +1187,11 @@ export function messageNode(message, previous) {
     );
   }
 
-  if (state.editing === message.id) {
-    bubbleWrap.append(editingNode(message));
-  } else {
+  // The message being edited is marked, not replaced. The text being
+  // changed is in the composer, and the bubble keeps showing what it says.
+  if (state.editing === message.id) bubbleWrap.classList.add('is-editing');
+
+  if (state.editing !== message.id) {
     if (message.linkedMessageID) bubbleWrap.append(replyQuoteNode(message));
 
     // Folded away on this device: the arrow opens it again.
@@ -2123,6 +2152,12 @@ export function shouldRestoreComposer(code) {
 }
 
 async function sendCurrent() {
+  // An open edit is a send that changes a message rather than adding one.
+  if (isEditing()) {
+    await saveEdit();
+    return;
+  }
+
   const composer = $('#composer');
   const chat = currentChat;
   if (!chat) return;

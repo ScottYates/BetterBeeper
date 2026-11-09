@@ -51,6 +51,7 @@ async function main() {
         catch (e) { ok = false; detail = e.message; }
         cases.push([name, ok, detail]);
       };
+      const settle = (ms) => new Promise((r) => setTimeout(r, ms || 60));
 
       // A throw anywhere in the body must not take the cases collected so
       // far with it: a harness that dies reports one failure and hides the
@@ -196,6 +197,250 @@ async function main() {
           const a = CE.editableMessages(chat({ edit: 2 }), messages, NOW).map((m) => m.id);
           const b = CE.editableMessages(chat({ edit: 2 }), messages, NOW).map((m) => m.id);
           return (a.length === 2 && a.join(',') === b.join(',')) || 'the list changed between calls';
+        });
+
+        // --- the session, driven through the app ---------------------------
+
+        const editCalls = [];
+        const storeCalls = [];
+
+        const envelope = (data) => ({ ok: true, data });
+        const bubble = (id, ts, text, over) => Object.assign({
+          id, chatID: 'c-edit', accountID: 'a1', senderID: 'a1', senderName: 'Me',
+          text, timestamp: ts, isSender: true, type: 'TEXT', attachments: [],
+        }, over || {});
+
+        window.beeper = {
+          on: () => {},
+          chats: {
+            list: async () => envelope([]),
+            get: async () => envelope(null),
+            patch: async () => envelope({}),
+            markRead: async () => envelope(true),
+            markUnread: async () => envelope(true),
+            archive: async () => envelope(true),
+            create: async () => envelope({}),
+          },
+          messages: {
+            list: async () => envelope({ items: [], hasMore: false }),
+            search: async () => envelope({ items: [] }),
+            get: async () => envelope(null),
+            edit: async (chatID, messageID, text) => {
+              editCalls.push({ chatID, messageID, text });
+              return envelope({ id: messageID, chatID, text });
+            },
+          },
+          assets: {
+            resolve: async () => envelope(null),
+            download: async () => envelope(null),
+            reupload: async () => envelope(null),
+            saveAs: async () => envelope(null),
+            pick: async () => envelope([]),
+            upload: async () => envelope(null),
+            uploadBytes: async () => envelope(null),
+          },
+          history: {
+            // Five messages, and the two in the middle cannot be edited:
+            // one is not mine and one has a picture. With only two eligible
+            // messages the step could never be caught skipping anything, so
+            // the skipping would be untested.
+            open: async () => envelope({
+              messages: [
+                bubble('oldest', new Date(NOW - 5000).toISOString(), 'the oldest one'),
+                bubble('theirs', new Date(NOW - 4000).toISOString(), 'not mine', { isSender: false }),
+                bubble('pictures', new Date(NOW - 3000).toISOString(), 'with a picture', { attachments: [{ mimeType: 'image/png' }] }),
+                bubble('middle', new Date(NOW - 2000).toISOString(), 'the middle one'),
+                bubble('newest', new Date(NOW - 1000).toISOString(), 'the newest one'),
+              ],
+              complete: true,
+              hasMore: false,
+            }),
+            page: async () => envelope({ messages: [], hasMore: false, complete: true }),
+            upsert: async (chatID, message) => {
+              storeCalls.push({ chatID, id: message.id, text: message.text });
+              return envelope({ written: 1 });
+            },
+            search: async () => envelope([]),
+            searchInChat: async () => envelope([]),
+            status: async () => envelope({ messages: 0, chats: 0, bytes: 0 }),
+            refresh: async () => envelope({ queued: true }),
+            jobs: async () => envelope({ jobs: [] }),
+          },
+        };
+
+        const S = await import(${JSON.stringify(js('state.js'))});
+        const T = await import(${JSON.stringify(js('thread.js'))});
+        T.initThread();
+        S.state.chats.set('c-edit', {
+          id: 'c-edit',
+          title: 'A conversation',
+          type: 'single',
+          participants: { items: [{ isSelf: true }, { isSelf: false }] },
+          capabilities: { edit: 2, editMaxCount: 10, editMaxAge: 86400 },
+        });
+        await T.openChat('c-edit');
+        await settle(150);
+
+        const composer = document.getElementById('composer');
+        const banner = document.getElementById('edit-preview');
+        const press = (key, extra) => composer.dispatchEvent(
+          new KeyboardEvent('keydown', Object.assign({ key, bubbles: true }, extra || {})),
+        );
+
+        await add('the banner exists and is hidden to begin with', () =>
+          (banner !== null && banner.hidden === true) || 'there is no banner');
+
+        await add('the up arrow on an empty composer opens an edit', () => {
+          press('ArrowUp');
+          return CE.isEditing() === true || 'no edit was opened';
+        });
+
+        await add('the composer holds the text of the message being edited', () =>
+          composer.value === 'the newest one' || ('it holds ' + composer.value));
+
+        await add('the banner says what is being edited', () =>
+          /Editing message/.test(document.getElementById('edit-preview-text').textContent)
+          || 'the banner says nothing');
+
+        await add('the composer placeholder says an edit is in progress', () =>
+          /edit/i.test(composer.placeholder) || ('it reads ' + composer.placeholder));
+
+        await add('the up arrow again steps to the older message', () => {
+          press('ArrowUp');
+          return composer.value === 'the middle one' || ('it holds ' + composer.value);
+        });
+
+        await add('CONTROL: the up arrow steps over another person\'s message and over a picture', () => {
+          press('ArrowUp');
+          return composer.value === 'the oldest one' || ('it holds ' + composer.value);
+        });
+
+        await add('CONTROL: there is nothing older to step to', () => {
+          press('ArrowUp');
+          return composer.value === 'the oldest one' || ('it holds ' + composer.value);
+        });
+
+        await add('the down arrow steps back to the newer message', () => {
+          press('ArrowDown');
+          press('ArrowDown');
+          return composer.value === 'the newest one' || ('it holds ' + composer.value);
+        });
+
+        await add('CONTROL: the up arrow does nothing when the composer has text', () => {
+          CE.cancelEdit();
+          composer.value = 'a message being written';
+          press('ArrowUp');
+          const opened = CE.isEditing();
+          composer.value = '';
+          CE.cancelEdit();
+          return opened === false || 'the arrow took over a draft';
+        });
+
+        await add('CONTROL: the up arrow does not step once the text has been changed', () => {
+          press('ArrowUp');
+          const before = composer.value;
+          composer.value = before + ' and changed';
+          press('ArrowUp');
+          const after = composer.value;
+          CE.cancelEdit();
+          return after === before + ' and changed' || ('it stepped to ' + after);
+        });
+
+        await add('Enter saves the edit', async () => {
+          press('ArrowUp');
+          composer.value = 'the newest one, corrected';
+          editCalls.length = 0;
+          press('Enter');
+          await settle(200);
+          return editCalls.length === 1 || (editCalls.length + ' calls were made');
+        });
+
+        await add('the edit goes to the message being edited', () =>
+          (editCalls[0] && editCalls[0].messageID === 'newest' && editCalls[0].chatID === 'c-edit')
+          || ('it went to ' + JSON.stringify(editCalls[0])));
+
+        await add('the edit carries the new text', () =>
+          (editCalls[0] && editCalls[0].text === 'the newest one, corrected')
+          || ('it carried ' + JSON.stringify(editCalls[0] && editCalls[0].text)));
+
+        await add('the bubble shows the new text', async () => {
+          await settle(200);
+          const node = document.querySelector('[data-message-id="newest"]');
+          return (node && node.textContent.includes('the newest one, corrected'))
+            || 'the bubble still shows the old text';
+        });
+
+        await add('the edit is written to the local store', async () => {
+          await settle(200);
+          const written = storeCalls.find((c) => c.id === 'newest');
+          return (written && written.text === 'the newest one, corrected')
+            || ('the store was told ' + JSON.stringify(storeCalls));
+        });
+
+        await add('CONTROL: the banner is hidden once the edit is saved', () =>
+          banner.hidden === true || 'the banner stayed open');
+
+        await add('CONTROL: Escape cancels the edit', () => {
+          press('ArrowUp');
+          const opened = CE.isEditing();
+          press('Escape');
+          return (opened === true && CE.isEditing() === false) || 'the edit survived';
+        });
+
+        await add('CONTROL: a cancelled edit makes no call', async () => {
+          editCalls.length = 0;
+          press('ArrowUp');
+          press('Escape');
+          await settle(150);
+          return editCalls.length === 0 || (editCalls.length + ' calls were made');
+        });
+
+        await add('CONTROL: a cancelled edit empties the composer', () => {
+          press('ArrowUp');
+          press('Escape');
+          return composer.value === '' || ('it holds ' + composer.value);
+        });
+
+        await add('CONTROL: an empty edit is not sent', async () => {
+          press('ArrowUp');
+          composer.value = '   ';
+          editCalls.length = 0;
+          press('Enter');
+          await settle(150);
+          const none = editCalls.length === 0;
+          CE.cancelEdit();
+          return none || (editCalls.length + ' calls were made');
+        });
+
+        await add('CONTROL: a read-only chat does not open an edit', () => {
+          const chat = S.state.chats.get('c-edit');
+          const was = chat.isReadOnly;
+          chat.isReadOnly = true;
+          press('ArrowUp');
+          const opened = CE.isEditing();
+          chat.isReadOnly = was;
+          CE.cancelEdit();
+          return opened === false || 'the edit opened in a read-only chat';
+        });
+
+        await add('the session says which message is being edited', () => {
+          press('ArrowUp');
+          const session = CE.editSession();
+          const ok = (session.messageID === 'newest' && session.total === 3 && session.index === 2);
+          CE.cancelEdit();
+          return ok || ('it says ' + JSON.stringify(session));
+        });
+
+        await add('CONTROL: opening another conversation cancels the edit', async () => {
+          press('ArrowUp');
+          const opened = CE.isEditing();
+          S.state.chats.set('c-other', {
+            id: 'c-other', title: 'Another conversation', type: 'single',
+            participants: { items: [{ isSelf: true }, { isSelf: false }] },
+          });
+          await T.openChat('c-other');
+          await settle(200);
+          return (opened === true && CE.isEditing() === false) || 'the edit survived the switch';
         });
       }
     })()

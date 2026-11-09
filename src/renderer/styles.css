@@ -915,6 +915,18 @@ mark.ts-hit.is-current {
 }
 #reply-preview-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* The edit banner. It sits in the reply preview's slot, so the two are
+   never on screen at once. */
+.edit-preview {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 16px; background: var(--bg-elev);
+  border-top: 1px solid var(--border-soft);
+  font-size: 12.5px; flex: none;
+}
+#edit-preview-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer.is-editing .composer-field { border-color: var(--accent); }
+.msg-bubble-wrap.is-editing .msg-bubble { outline: 1px solid var(--accent); }
+
 /* The read receipt, on the message it belongs to. */
 .msg-seen { color: var(--text-faint); white-space: nowrap; }
 
