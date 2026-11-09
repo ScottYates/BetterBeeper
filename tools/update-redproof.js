@@ -164,6 +164,42 @@ const MUTATIONS = [
     to: '            TopMost = true;\n            StartPosition = FormStartPosition.CenterScreen;',
     expect: 'the status window does not force itself to the top',
   },
+  {
+    // The empty console windows that were reported after an interrupted update
+    // were the old status window: a batch file opened with `start`, which is a
+    // console window by construction and which closed itself only when the
+    // update finished. The batch files are long gone. These four mutations
+    // put the ability to have a console back, one piece at a time, so the
+    // checks that say it cannot happen are known to be load-bearing.
+    what: 'the helper is started without the console hidden',
+    file: 'updater',
+    from: '      windowsHide: true,\n',
+    to: '',
+    expect: 'the helper is started with the console hidden',
+  },
+  {
+    what: 'the installer is started in a way that can give it a console',
+    file: 'helper',
+    from: '                CreateNoWindow = true,',
+    to: '                CreateNoWindow = false,',
+    expect: 'the installer is started without a console',
+  },
+  {
+    what: 'the installer is started through the shell',
+    file: 'helper',
+    from: '                UseShellExecute = false,',
+    to: '                UseShellExecute = true,',
+    expect: 'the installer is started without a console',
+  },
+  {
+    // Not in the updater: the rule is about the app. The check beside it only
+    // ever looked at updater.js, which is why this one goes somewhere else.
+    what: 'a batch file is used somewhere else in the app',
+    file: 'ipc',
+    from: "const { ipcMain, dialog, shell, app, BrowserWindow, clipboard, nativeImage } = require('electron');",
+    to: "const { ipcMain, dialog, shell, app, BrowserWindow, clipboard, nativeImage } = require('electron');\nconst statusScript = 'update-status.cmd';",
+    expect: 'nothing in the app runs a batch file',
+  },
 ];
 
 function runCheck() {

@@ -408,6 +408,77 @@ add('the updater writes no script at all', () => {
     || 'the batch machinery is still in updater.js';
 });
 
+add('the helper is started with the console hidden', () => {
+  // The helper is a WinExe, so it has no console of its own to flash. This is
+  // the flag that says so to the process starting it, and it is the difference
+  // between "there is no console" and "there is a console we asked not to
+  // show". Taken away by accident, the update would still work - and a console
+  // would still be possible.
+  //
+  // The comments are stripped first: the one above this flag explains what it
+  // is for, and a search that read the prose would find the word and call the
+  // rule satisfied.
+  const src = fs.readFileSync(updaterPath, 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  const start = code.indexOf('spawnProcess(');
+  if (start === -1) return 'the helper is never started';
+  const end = code.indexOf('});', start);
+  const options = code.slice(start, end === -1 ? start + 400 : end);
+  return /windowsHide:\s*true/.test(options)
+    || 'the helper is not started with the console hidden, so one can flash';
+});
+
+add('the installer is started without a console', () => {
+  // The installer is a program with its own window, but Process.Start will
+  // give a console program one if it is asked to. CreateNoWindow is what stops
+  // it, and UseShellExecute = false is what keeps the shell out of the path.
+  const src = fs.readFileSync(path.join(HELPER_PROJECT, 'Program.cs'), 'utf8');
+  const code = src.replace(/\/\/.*$/gm, '');
+  const start = code.indexOf('StartInstaller(string path)');
+  if (start === -1) return 'the helper has no way to start the installer';
+  const end = code.indexOf('private static void WaitForProcessExit', start);
+  const body = code.slice(start, end === -1 ? start + 1200 : end);
+  if (!/CreateNoWindow\s*=\s*true/.test(body)) {
+    return 'the installer is started in a way that can give it a console';
+  }
+  if (!/UseShellExecute\s*=\s*false/.test(body)) {
+    return 'the installer is started through the shell';
+  }
+  return true;
+});
+
+add('nothing in the app runs a batch file', () => {
+  // The rule that was broken before, and it is stated about the whole app
+  // rather than about the updater, because the updater is not the only thing
+  // that could reach for a shell.
+  //
+  // The empty console windows that were reported after an interrupted update
+  // were the update's own status window: a batch file opened with `start`,
+  // which is a console window by construction, and which closed itself only
+  // when the update finished - so an interrupted update left it standing. The
+  // batch files are long gone. This is the check that says they stay gone.
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.name.endsWith('.js')) continue;
+      const code = fs.readFileSync(full, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
+      if (/\.cmd\b|cmd\.exe|start\s+"|powershell/i.test(code)) {
+        offenders.push(path.relative(ROOT, full));
+      }
+    }
+  };
+  walk(path.join(ROOT, 'src'));
+  return offenders.length === 0
+    || ('a batch file is used in ' + offenders.join(', '));
+});
+
 add('the helper is passed the four things it needs', () => {
   const src = fs.readFileSync(updaterPath, 'utf8');
   return ['--installer', '--relaunch', '--result', '--pid'].every((flag) => src.includes(flag))
