@@ -21,6 +21,18 @@ const flash = require('./flash');
 const updater = require('./updater');
 const { wireSpellContextMenu } = require('./context-menu');
 const mediaPath = require('./media-path');
+const { applyProxyPolicy } = require('./proxy-config');
+
+// Chromium must not go looking for a proxy. The app has no use for one, and
+// the search is not free: Chromium's proxy auto-discovery fetches
+// `http://wpad/wpad.dat`, follows it to a redirect on a host whose
+// certificate does not cover the name, and the handshake fails with
+// `net_error -202` - which is the TLS warning that was reported from this
+// app's log. See src/main/proxy-config.js.
+//
+// This has to happen before the network stack starts, which is before
+// app.whenReady(). A switch set after that is accepted and ignored.
+applyProxyPolicy(app.commandLine);
 
 const isDev = process.argv.includes('--dev');
 

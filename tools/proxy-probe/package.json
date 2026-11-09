@@ -1,0 +1,7 @@
+{
+  "name": "betterbeeper-proxy-probe",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Starts Electron the way the app does, so a check can see what Chromium does on the network before the app says anything.",
+  "main": "main.js"
+}

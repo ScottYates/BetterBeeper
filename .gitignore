@@ -47,3 +47,8 @@ Thumbs.db
 /build/update-helper/
 /tools/update-helper/bin/
 /tools/update-helper/obj/
+
+# Net logs written by check:proxy on every run. The probe writes them, reads
+# them back, and removes them again; this is here for the case where it was
+# killed halfway through.
+/build/proxy-check/

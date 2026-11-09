@@ -32,6 +32,7 @@
     "check:ascii": "node tools/ascii-check.js",
     "check:unread": "electron tools/run-check.js tools/unread-check.js",
     "check:update": "node tools/update-check.js",
+    "check:proxy": "node tools/proxy-check.js",
     "check:spellmenu": "node tools/spellmenu-check.js",
     "check:syntax": "node tools/syntax-check.js",
     "check:harness": "node tools/harness-detect-check.js",
