@@ -495,6 +495,58 @@ async function main() {
           await settle(200);
           return (opened === true && CE.isEditing() === false) || 'the edit survived the switch';
         });
+
+        // --- one edit mode -------------------------------------------------
+
+        // The conversation is opened again first, so the menu is asked about
+        // the chat that advertises editing rather than the one the switch
+        // left behind.
+        await T.openChat('c-edit');
+        await settle(200);
+
+        await add('the menu offers Edit on an editable message', () => {
+          const message = S.state.messages.get('c-edit').find((m) => m.id === 'newest');
+          const items = T.messageMenuItems(document.body, message);
+          return items.some((i) => i.label === 'Edit') || 'there is no Edit item';
+        });
+
+        await add('CONTROL: the menu does not offer Edit on a message that cannot be edited', () => {
+          const message = S.state.messages.get('c-edit').find((m) => m.id === 'pictures');
+          const items = T.messageMenuItems(document.body, message);
+          return items.some((i) => i.label === 'Edit') === false || 'Edit was offered';
+        });
+
+        await add('CONTROL: the menu still offers Delete for everyone on a message that cannot be edited', () => {
+          const message = S.state.messages.get('c-edit').find((m) => m.id === 'pictures');
+          const items = T.messageMenuItems(document.body, message);
+          return items.some((i) => i.label === 'Delete for everyone')
+            || 'the delete item was taken away';
+        });
+
+        await add('CONTROL: the menu Edit opens the composer session', () => {
+          const message = S.state.messages.get('c-edit').find((m) => m.id === 'newest');
+          const items = T.messageMenuItems(document.body, message);
+          const edit = items.find((i) => i.label === 'Edit');
+          if (!edit) return 'there is no Edit item';
+          edit.onSelect();
+          const opened = CE.isEditing();
+          CE.cancelEdit();
+          return opened === true || 'the session did not open';
+        });
+
+        await add('CONTROL: there is no editor in the bubble any more', async () => {
+          press('ArrowUp');
+          // The thread is drawn again while the edit is open, which is when
+          // the old bubble editor would have put its textarea on screen.
+          S.upsertMessage(
+            'c-edit',
+            bubble('newest', new Date(NOW - 1000).toISOString(), 'the newest one, corrected'),
+          );
+          await settle(250);
+          const textareas = document.querySelectorAll('#message-list textarea').length;
+          CE.cancelEdit();
+          return textareas === 0 || (textareas + ' textareas are in the thread');
+        });
       }
     })()
   `;

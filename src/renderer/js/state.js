@@ -45,7 +45,7 @@ export const state = {
   view: 'chat',
   searchQuery: '',
   searchScope: 'all',
-  /** messageID currently being edited, per chat */
+  /** messageID the composer is editing, per chat */
   editing: null,
   /** accountID -> 'me', for reaction "is mine" styling */
   selfUserIDs: new Set(),

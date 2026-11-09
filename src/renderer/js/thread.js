@@ -19,6 +19,7 @@ import {
   initComposerEdit,
   handleComposerKey,
   isEditing,
+  isEditableMessage,
   startEdit,
   cancelEdit,
   saveEdit,
@@ -1643,41 +1644,6 @@ function imageElement(attachment) {
   return img;
 }
 
-function editingNode(message) {
-  const input = el('textarea', { rows: '2', style: { width: '100%' } });
-  // The editor shows the text as it reads, so it compares against the same
-  // thing: otherwise opening a message and saving it untouched would look
-  // like an edit and post the decoded text back.
-  const original = decodeEntities(message.text || '');
-  input.value = original;
-  const save = async () => {
-    const text = input.value.trim();
-    state.editing = null;
-    if (text && text !== original) {
-      await call(() => api.messages.edit(message.chatID, message.id, text), { context: 'edit message' });
-      upsertMessage(message.chatID, { ...message, text, editedTimestamp: new Date().toISOString() });
-      toast('Message edited', 'success', 1500);
-    } else {
-      onMessageUpserted();
-    }
-  };
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      save();
-    }
-    if (event.key === 'Escape') {
-      state.editing = null;
-      onMessageUpserted();
-    }
-  });
-  setTimeout(() => {
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
-  }, 0);
-  return el('div', { class: 'msg-bubble' }, input);
-}
-
 /**
  * The context menu, for the things that are not one click.
  *
@@ -1692,7 +1658,20 @@ function editingNode(message) {
  * appears on your own messages.
  */
 export function messageMenuItems(anchor, message) {
-  const canEdit = message.isSender && !message.isDeleted;
+  // Two different rules, decided separately.
+  //
+  // Editing is a capability the chat advertises, and it has an age limit:
+  // fifteen minutes on Messenger, twenty-four hours on Signal, and nothing
+  // at all on a chat that does not say. A message with an attachment cannot
+  // be edited either.
+  //
+  // Deleting is not editing. It has its own capability and its own age
+  // limit, and this feature does not touch them. One flag deciding both is
+  // what made this worth spelling out: narrowing it for Edit would quietly
+  // take away the ability to delete a message that has an attachment or has
+  // aged out of its edit window.
+  const canEdit = isEditableMessage(currentChat, message);
+  const canDelete = message.isSender && !message.isDeleted;
   return [
     { label: 'Reply', onSelect: () => setReplyTo(message) },
     { label: 'React', onSelect: () => openEmojiPicker(anchor, (e) => toggleReaction(message, e)) },
@@ -1707,8 +1686,8 @@ export function messageMenuItems(anchor, message) {
       label: item.label,
       onSelect: () => { saveAttachments(downloadableAttachments(message)); },
     })),
-    canEdit ? { label: 'Edit', onSelect: () => { state.editing = message.id; onMessageUpserted(); } } : null,
-    canEdit
+    canEdit ? { label: 'Edit', onSelect: () => { startEdit(message); } } : null,
+    canDelete
       ? { label: 'Delete for everyone', danger: true, onSelect: () => deleteMessage(message) }
       : null,
     {

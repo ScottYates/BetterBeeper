@@ -13,10 +13,49 @@
   </head>
   <body>
     <!--
-      openModal() mounts into #modal-root, so the harness needs it. The rest of
-      the app's chrome is not needed: the assertions build real message nodes
-      and read buttons off them, and open the real settings modal.
+      openModal() mounts into #modal-root, so the harness needs it.
     -->
     <div id="modal-root" hidden></div>
+
+    <!--
+      The rest of the app's chrome is here because the menu is asked about a
+      chat: which messages can be edited is a property of the chat as much as
+      of the message, so the thread has to have one open for the question to
+      mean anything. These are the elements thread.js, sidebar.js and ui.js
+      actually query, copied from the download harness, which opens a chat the
+      same way. They are empty on purpose.
+    -->
+    <div id="chat-list"></div>
+
+    <div id="thread" hidden>
+      <div id="thread-avatar"></div>
+      <div id="thread-name"></div>
+      <div id="thread-sub"></div>
+      <div id="account-badges"></div>
+      <button id="btn-pin"></button>
+      <button id="btn-mute"></button>
+      <button id="btn-archive"></button>
+      <button id="btn-unread"></button>
+      <button id="btn-refresh"></button>
+      <div id="message-list"></div>
+      <div id="attachment-chips"></div>
+      <div id="reply-preview" hidden>
+        <span id="reply-preview-text"></span>
+        <button id="btn-cancel-reply"></button>
+      </div>
+      <textarea id="composer" rows="1"></textarea>
+      <button id="btn-attach"></button>
+      <button id="btn-attach-image"></button>
+      <button id="btn-emoji"></button>
+      <button id="btn-send"></button>
+    </div>
+
+    <div id="thread-empty"></div>
+    <div id="filter-row"></div>
+    <div id="inbox-label"></div>
+    <div id="search-input"></div>
+    <div id="search-scope"></div>
+    <div id="live-status"></div>
+    <div id="toast-root"></div>
   </body>
 </html>

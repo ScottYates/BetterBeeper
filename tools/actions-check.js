@@ -42,6 +42,15 @@ async function main() {
       const T = await import(${JSON.stringify(threadURL)});
       const M = await import(${JSON.stringify(modalsURL)});
 
+      // The harness page has no preload, so window.beeper does not exist. This
+      // is the boundary: every call answers with an empty result, because the
+      // chat below has to be opened for the menu to know what it may offer.
+      window.beeper = new Proxy({}, {
+        get: (_t, ns) => new Proxy({}, {
+          get: (_t2, fn) => (...args) => Promise.resolve({ ok: true, data: {} }),
+        }),
+      });
+
       const cases = [];
       const add = (name, fn) => {
         let ok = false;
@@ -59,6 +68,22 @@ async function main() {
         text: 'hello',
         timestamp: 1700000000000,
       };
+
+      // A chat is opened before anything is asked of the menu. Which messages
+      // can be edited is a property of the chat as much as of the message -
+      // the chat advertises the capability and the age limit - so with no
+      // chat open the thread has nothing to answer with.
+      const CHAT = {
+        id: 'chat-1',
+        title: 'A conversation',
+        type: 'single',
+        participants: {},
+        unreadCount: 0,
+        lastActivity: '2026-11-08T12:00:00Z',
+      };
+      S.state.chats.set(CHAT.id, CHAT);
+      T.initThread();
+      await T.openChat(CHAT.id);
 
       const titles = (message) => {
         const node = T.messageNode(message, null);
