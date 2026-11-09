@@ -1223,10 +1223,11 @@ file in `ipc.js` to prove the walk sees it. `tools/update-redproof.js` is now
 
 ## Verification status
 
-`npm run check:all` sweeps **50 suites** on the tree carrying the 2026-11-09
-work, and 49 of them pass. The one that does not is `check:released`, which
-is red until the release is cut, because `main` is ahead of the newest tag.
-It was 49/49 on the tree carrying the 2026-11-08 work, 47/47 on the tree
+`npm run check:all` sweeps **50 suites**, and all 50 of them pass on a release
+commit. On the tree carrying the work, before the release is cut, 49 of them
+pass: the one that does not is `check:released`, which is red until the release
+is cut, because `main` is ahead of the newest tag. It was 49 suites on the
+tree carrying the 2026-11-08 work, 48 of them passing; 47/47 on the tree
 carrying the 2026-11-02 work, 2026-11-02. It was
 45/45 on the v1.26.0 release commit, 44/44 on the v1.25.0 release commit and
 on the v1.24.0 release commit, 2026-10-27; 43/43 on the v1.23.0 release
