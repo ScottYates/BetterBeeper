@@ -1098,6 +1098,42 @@ drawn again, and that is the signature's job. `check:threadopen` says so
 now, and `tools/thread-open-redproof.js` takes the line away to prove the
 case goes red without it.
 
+## Work done 2026-11-09
+
+### The composer grows to fit the message being edited
+
+The up arrow puts the text of the message into the composer, and the composer
+is one line - it has been since the auto-grow was removed, because a composer
+that grows as you type pushes the thread up and leaves the newest message
+riding at the top of the window.
+
+An edited message is a message that already exists, and read back in a
+one-line box that scrolls sideways, the end of it - and the cursor with it -
+is off the screen, and the message being edited cannot be read at all. So
+while an edit is open the box is as tall as the text needs: `field-sizing`
+lets the box be sized by what is in it, and the text wraps instead of running
+off to the right. The cap is 30vh, which is what stops a long message from
+eating the thread. The composer is one line again the moment the edit ends.
+
+The cursor is at the end of the text when the edit opens. It already was: the
+browser puts the cursor at the end when a value is assigned, and the focus
+helper puts it there for every other path into the composer. The session does
+not set it a second time - a second rule there would only ever be a rule the
+focus helper overrules.
+
+### A check that stopped working on its own
+
+The composer edit suite stopped passing on 2026-11-09, with nothing in the
+app having changed. The chat in the check advertises a twenty-four hour edit
+window, and its messages were timestamped against a fixed date - so the
+moment the clock passed that date, every message in the chat fell outside
+its window, nothing in it could be edited any more, and every case that
+needed an edit failed while every case that did not still passed.
+
+The messages are timestamped against the real clock now. A check that depends
+on a wall clock has to be dated against it, or it is a check that works for a
+day.
+
 ## Verification status
 
 `npm run check:all` sweeps **49 suites** on the tree carrying the 2026-11-08
@@ -1119,7 +1155,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | Check | Result |
 | --- | --- |
 | `check:update` | 59/59, after `check:update` gained a built helper to read the PE header of |
-| `check:composeredit` | 45/45 checks passed |
+| `check:composeredit` | 48/48 checks passed |
 | `check:composereditrules` | 26/26 checks passed, with no Electron and no window |
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
 | `tools/update-redproof.js` | 17/17 mutations caught, no holes |
@@ -1127,7 +1163,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `tools/syntax-redproof.js` | 3/3 mutations caught, no holes |
 | `tools/avatar-redproof.js` | 4/4 mutations caught, no holes |
 | `tools/history-render-redproof.js` | 2/2 mutations caught, no holes |
-| `tools/composer-edit-redproof.js` | 26/26 mutations caught, no holes |
+| `tools/composer-edit-redproof.js` | 29/29 mutations caught, no holes |
 | `tools/thread-open-redproof.js` | 7/7 mutations caught, no holes |
 
 Individually measured: `check:entity` 0 failing across 31 cases,
@@ -1150,8 +1186,8 @@ mutations caught, 1/1 neutral rewrite tolerated (new),
 neutral rewrite tolerated (new),
 `check:historyrender` 28/28 and `tools/history-render-redproof.js` 2/2
 mutations caught, 1/1 neutral rewrite tolerated (new),
-`check:composereditrules` 26/26 and `check:composeredit` 45/45 and
-`tools/composer-edit-redproof.js` 26/26
+`check:composereditrules` 26/26 and `check:composeredit` 48/48 and
+`tools/composer-edit-redproof.js` 29/29
 mutations caught, 1/1 neutral rewrite tolerated (new),
 `check:unread` 32/32, `check:layout` 13/13,
 `check:api` 136/136, `check:composer` 17/17, `check:actions` 21/21,

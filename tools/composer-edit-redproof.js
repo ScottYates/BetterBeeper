@@ -28,6 +28,7 @@ const FILES = {
   thread: path.join(ROOT, 'src', 'renderer', 'js', 'thread.js'),
   rules: path.join(ROOT, 'src', 'renderer', 'js', 'composer-edit-rules.js'),
   entities: path.join(ROOT, 'src', 'renderer', 'js', 'entities.js'),
+  css: path.join(ROOT, 'src', 'renderer', 'styles.css'),
 };
 
 // Which suite proves which file.
@@ -36,6 +37,7 @@ const SUITE = {
   thread: 'check:composeredit',
   rules: 'check:composereditrules',
   entities: 'check:composeredit',
+  css: 'check:composeredit',
 };
 
 // The suites the proof needs a baseline for. Every one of them has to be
@@ -304,6 +306,36 @@ const MUTATIONS = [
     from: "  if (text === session.original) {\n    cancelEdit();\n    return false;\n  }\n",
     to: '',
     expect: 'CONTROL: an edit that changes nothing is not sent',
+  },
+  {
+    // The composer is one line for everything else, and as tall as the text
+    // needs while a message is being edited. Without the rule the text runs
+    // off to the right in a box that shows one line of it, and the end of it
+    // - and the cursor with it - is off the screen.
+    what: 'the composer does not grow for the text being edited',
+    file: 'css',
+    from: '.composer.is-editing .composer-field textarea {\n  field-sizing: content;\n  white-space: pre-wrap;\n  height: auto;\n  max-height: 30vh;\n}\n',
+    to: '',
+    expect: 'the composer is made big enough for the text being edited',
+  },
+  {
+    // And it only grows while an edit is open. The composer is one line
+    // always, because a composer that grows as you type pushes the thread up
+    // and leaves the newest message riding at the top of the window.
+    what: 'the composer grows even when nothing is being edited',
+    file: 'css',
+    from: '.composer.is-editing .composer-field textarea {',
+    to: '.composer .composer-field textarea {',
+    expect: 'CONTROL: the composer is one line when it is not editing',
+  },
+  {
+    // The cursor belongs at the end of the text that was loaded: that is the
+    // whole message, and the cursor at its end is where the next edit starts.
+    what: 'the cursor goes to the start of the text instead of the end',
+    file: 'thread',
+    from: "  const end = String(input.value || '').length;\n  if (typeof input.setSelectionRange === 'function') {\n    input.setSelectionRange(end, end);\n  }",
+    to: "  const end = String(input.value || '').length;\n  if (typeof input.setSelectionRange === 'function') {\n    input.setSelectionRange(0, 0);\n  }",
+    expect: 'the cursor is at the end of the text being edited',
   },
   {
     // Not a bug. The same rule, written the other way round.

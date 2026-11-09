@@ -74,6 +74,16 @@ async function main() {
         // the banner, the thread, the menu and the store.
         const NOW = Date.parse('2026-11-08T12:00:00Z');
 
+        // The messages the chat holds are timestamped against the real clock.
+        //
+        // The chat's edit window is twenty-four hours, so a fixed timestamp
+        // stops being editable the moment the clock passes it - and then
+        // nothing in the chat can be edited at all, and the suite stops being
+        // about editing while every case that needs an edit still passes the
+        // ones that do not. It failed that way on 2026-11-09, a day after it
+        // was written, with nothing in the app having changed.
+        const LIVE = Date.now();
+
 
         const editCalls = [];
         const storeCalls = [];
@@ -120,11 +130,11 @@ async function main() {
             // the skipping would be untested.
             open: async () => envelope({
               messages: [
-                bubble('oldest', new Date(NOW - 5000).toISOString(), 'the oldest one'),
-                bubble('theirs', new Date(NOW - 4000).toISOString(), 'not mine', { isSender: false }),
-                bubble('pictures', new Date(NOW - 3000).toISOString(), 'with a picture', { attachments: [{ mimeType: 'image/png' }] }),
-                bubble('middle', new Date(NOW - 2000).toISOString(), 'the middle one'),
-                bubble('newest', new Date(NOW - 1000).toISOString(), 'the newest one'),
+                bubble('oldest', new Date(LIVE - 5000).toISOString(), 'the oldest one'),
+                bubble('theirs', new Date(LIVE - 4000).toISOString(), 'not mine', { isSender: false }),
+                bubble('pictures', new Date(LIVE - 3000).toISOString(), 'with a picture', { attachments: [{ mimeType: 'image/png' }] }),
+                bubble('middle', new Date(LIVE - 2000).toISOString(), 'the middle one'),
+                bubble('newest', new Date(LIVE - 1000).toISOString(), 'the newest one'),
               ],
               complete: true,
               hasMore: false,
@@ -171,6 +181,54 @@ async function main() {
 
         await add('the composer holds the text of the message being edited', () =>
           composer.value === 'the newest one' || ('it holds ' + composer.value));
+
+        await add('the cursor is at the end of the text being edited', () => {
+          // The end of the text is where the cursor belongs when a message is
+          // loaded into the composer: the text that was loaded is the whole
+          // message, and the cursor at its end is where the next edit starts.
+          //
+          // The browser puts the cursor at the end when a value is assigned,
+          // and the focus helper puts it there for every other path into the
+          // composer, so this case guards the behaviour rather than one line
+          // of code.
+          press('ArrowUp');
+          const at = composer.selectionStart;
+          const end = composer.value.length;
+          // Put the session back where the next case expects it: an edit on
+          // the newest message, with the composer holding its text.
+          CE.cancelEdit();
+          press('ArrowUp');
+          return (at === end) || ('the cursor is at ' + at + ' of ' + end);
+        });
+
+        await add('the composer is made big enough for the text being edited', () => {
+          press('ArrowUp');
+          const style = window.getComputedStyle(composer);
+          // The text has to wrap, or a long message is one line that scrolls
+          // sideways and the end of it - and the cursor with it - is off the
+          // screen.
+          const wrapping = style.whiteSpace === 'pre-wrap';
+          // And the box has to be sized by what is in it, rather than pinned
+          // to one line.
+          const sized = style.fieldSizing === 'content';
+          // And it has to stop somewhere, or a long message eats the thread.
+          const capped = parseFloat(style.maxHeight) > 0;
+          CE.cancelEdit();
+          press('ArrowUp');
+          return (wrapping && sized && capped)
+            || ('white-space ' + style.whiteSpace
+              + ', field-sizing ' + style.fieldSizing
+              + ', max-height ' + style.maxHeight);
+        });
+
+        await add('CONTROL: the composer is one line when it is not editing', () => {
+          CE.cancelEdit();
+          const style = window.getComputedStyle(composer);
+          const oneLine = style.whiteSpace === 'pre' && style.fieldSizing !== 'content';
+          press('ArrowUp');
+          return oneLine
+            || ('white-space ' + style.whiteSpace + ', field-sizing ' + style.fieldSizing);
+        });
 
         await add('the banner says what is being edited', () =>
           /Editing message/.test(document.getElementById('edit-preview-text').textContent)
@@ -290,7 +348,7 @@ async function main() {
           // open.
           S.upsertMessage(
             'c-edit',
-            bubble('oldest', new Date(NOW - 5000).toISOString(), 'the oldest one, again'),
+            bubble('oldest', new Date(LIVE - 5000).toISOString(), 'the oldest one, again'),
           );
           await settle(250);
           const after = document.querySelector('[data-message-id="newest"]');
@@ -306,7 +364,7 @@ async function main() {
           press('ArrowUp');
           S.upsertMessage(
             'c-edit',
-            bubble('oldest', new Date(NOW - 5000).toISOString(), 'the oldest one, once more'),
+            bubble('oldest', new Date(LIVE - 5000).toISOString(), 'the oldest one, once more'),
           );
           await settle(250);
           const node = document.querySelector('[data-message-id="newest"]');
@@ -516,7 +574,7 @@ async function main() {
           // the old bubble editor would have put its textarea on screen.
           S.upsertMessage(
             'c-edit',
-            bubble('newest', new Date(NOW - 1000).toISOString(), 'the newest one, corrected'),
+            bubble('newest', new Date(LIVE - 1000).toISOString(), 'the newest one, corrected'),
           );
           await settle(250);
           const textareas = document.querySelectorAll('#message-list textarea').length;
@@ -538,7 +596,7 @@ async function main() {
             senderID: 'a1',
             senderName: 'Me',
             text: 'never sent',
-            timestamp: new Date(NOW + 1000).toISOString(),
+            timestamp: new Date(LIVE + 1000).toISOString(),
             isSender: true,
             sendStatus: 'failed',
             type: 'TEXT',

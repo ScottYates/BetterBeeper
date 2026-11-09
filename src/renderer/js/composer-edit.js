@@ -249,8 +249,10 @@ export function startEdit(message) {
   deps.clearReply();
 
   composer.value = original;
-  const end = original.length;
-  if (typeof composer.setSelectionRange === 'function') composer.setSelectionRange(end, end);
+  // The cursor is not placed here on purpose. Putting it at the end of what
+  // was loaded is what the focus helper does for every other path into the
+  // composer, it runs after this, and a second rule here would only ever be
+  // a rule the helper overrules.
 
   showBanner(original);
   // The bubble being edited is marked. Only the marker moves: drawing the
