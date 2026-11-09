@@ -30,34 +30,34 @@ one person's machine.
 ## Git state
 
 Branch `main`, in sync with origin. The work described under "Work done
-2026-11-02" is committed and released as **v1.27.0**. It is a minor bump,
+2026-11-09" is committed and released as **v1.28.3**. It is a patch bump,
 because `tools/release.js` derives the level from the commit subjects since
-the last tag and the `feat:` is the higher of the two.
+the last tag and both of them are `fix:`.
 
-The last few commits, with the `Release 1.27.0` commit sitting on top of them:
+The last few commits, with the `Release 1.28.3` commit sitting on top of them:
 
 ```
-3825d14  docs: record the arrows in both searches, the window that never opens
-92453a6  fix: the checks must never put a window on the desktop
-32cbae1  feat: add up and down arrows to the sidebar search
-93441a6  refactor: move the step rule out of the conversation search
-396f145  Release 1.27.0
+8017e89  fix: the update path cannot put a console on the desktop
+de191d8  fix: Chromium does not go looking for a proxy
+73284bd  Release 1.28.2
+a17a03c  fix: the composer shows the whole message being edited
+f4cb7c5  Release 1.28.1
 ```
 
-The newest tag is **v1.27.0**, on the `Release 1.27.0` commit, so `main` is
-not left ahead of its own tag. `package.json` says 1.27.0.
+The newest tag is **v1.28.3**, on the `Release 1.28.3` commit, so `main` is
+not left ahead of its own tag. `package.json` says 1.28.3.
 
-v1.27.0 carried the arrows in the sidebar's search, the check runner that
-stops a broken check from putting a window on the desktop, and the harness
-detector that stops a good file being reported as broken. v1.26.0 carried the
-in-conversation search. v1.25.0 carried the notification
-click. v1.24.0 carried the composer focus,
-the paste and drop work, and the reconnect fix. It is a minor bump, because
-`tools/release.js` derives the level from the commit subjects since the last
-tag and the `feat:` is the higher of the two. v1.23.0 carried the contact
-refresh report, v1.22.0 the contact refresh itself, v1.21.1 a handoff
-correction, v1.21.0 the unread fix and the people list, and v1.20.0 the chat
-list refresh button.
+v1.28.3 carried the two things this file had left outstanding: the TLS
+warning, which was Chromium's proxy auto-discovery rather than anything to do
+with GitHub, and the checks that say the update path cannot put a console
+window on the desktop. v1.28.2 carried the composer growing to fit the
+message being edited. v1.28.0 carried the composer edit itself. v1.27.0
+carried the arrows in the sidebar's search. v1.26.0 carried the
+in-conversation search. v1.25.0 carried the notification click. v1.24.0
+carried the composer focus, the paste and drop work, and the reconnect fix.
+v1.23.0 carried the contact refresh report, v1.22.0 the contact refresh
+itself, v1.21.1 a handoff correction, v1.21.0 the unread fix and the people
+list, and v1.20.0 the chat list refresh button.
 
 `tools/release.js` owns the version field and derives the bump from commit
 subjects since the last tag, so do not hand-edit it.
@@ -1134,12 +1134,100 @@ The messages are timestamped against the real clock now. A check that depends
 on a wall clock has to be dated against it, or it is a check that works for a
 day.
 
+### The TLS warning was Chromium looking for a proxy
+
+The log said `handshake failed ... net_error -202`, which is
+`ERR_CERT_ALT_NAME_INVALID`: a certificate that does not cover the name it was
+asked for. The handoff had guessed "probably a different endpoint or an
+intercepting proxy". It was neither, and it was never the GitHub call -
+api.github.com serves a certificate for itself, was reachable with a plain
+`https.get` from this machine, and was never in the log.
+
+It was **Chromium's proxy auto-discovery**. Chromium looks for a WPAD file by
+fetching `http://wpad/wpad.dat`. On this machine `wpad` resolves to
+`wpad.yatesframe.com`, which is Scott's own YunoHost box. The fetch is
+answered with a redirect to `https://wpad/yunohost/admin`, and the certificate
+that answers does not cover the name `wpad`, so the handshake fails with
+-202. The net log of an Electron process started here says so in as many
+words: the name `wpad` is in it, and so are the -202 errors.
+
+The fix is `src/main/proxy-config.js`: `--proxy-server=direct://`, applied
+before `app.whenReady()`. A switch set after the network stack has started is
+accepted by Electron and ignored by Chromium, so the timing is part of the
+rule. The app has no use for a proxy - the renderer makes no network requests
+at all, and the only outbound call in the app is the GitHub release feed.
+
+**The check has a control, and the control is the point.** "No proxy lookup
+happened" is also what a Chromium that never looks would produce, on a machine
+where the lookup would have failed anyway: a check that cannot see the problem
+reports a pass and proves nothing. So `check:proxy` runs the probe twice, once
+with the app's policy and once without, and the run without it has to show the
+lookup:
+
+| run | `wpad` in the net log | `-202` errors |
+| --- | --- | --- |
+| the app's policy applied | 0 | 0 |
+| the policy left off | 52 | 12 |
+
+`tools/proxy-redproof.js` mutates the probe so that it applies the policy even
+when it is told not to, and the control case goes red - which is what makes
+the control worth having. It is 5/5 mutations caught, with its own baseline
+asserted.
+
+One trap worth recording: the first version of this check searched the net log
+for the word "wpad", case-insensitively, and failed against a log that was
+clean. The net log's own table of constants carries names like
+`WPAD_DHCP_WIN_FETCH` in every log it ever writes. The count that means
+something is a *URL* whose host is `wpad`.
+
+### The empty command windows were a batch file's status window
+
+The handoff said "Most likely orphaned consoles. Never proven." It is proven
+now, from the git history.
+
+The updater between **v1.18.0 and v1.18.3** wrote two batch files and opened
+the second one on the screen:
+
+```
+if exist "<statusScript>" start "Better Beeper Update" "<statusScript>"
+```
+
+That is a console window by construction. The status script drew a progress
+bar in ASCII in it, and it closed itself when the install finished - which is
+what the old code says it did: "the status window polls it and closes itself
+when it goes, which is what stops an orphaned window sitting there". **An
+interrupted update never cleared the flag, so the window never closed.** That
+is the empty command window: a console standing there with nothing left in
+it, after an interrupted update, on exactly the versions that had one.
+
+v1.18.4 and v1.18.5 shipped a rewrite of that line
+(`start "..." cmd.exe /v:on /c ""<path>""`) that cmd rejects outright, so in
+those two releases the window never appeared at all. v1.18.6 replaced the
+whole thing with the .NET helper.
+
+The current path cannot have a console window, and now three checks say so
+rather than the handoff saying "probably":
+
+| where | what it is |
+| --- | --- |
+| `tools/update-helper/UpdateHelper.csproj` | the helper is a `WinExe`, so Windows never allocates a console for it |
+| `src/main/updater.js` | the helper is spawned with `windowsHide: true`, so nothing is shown even if it had one |
+| `tools/update-helper/Program.cs` | the installer is started with `CreateNoWindow = true` and `UseShellExecute = false` |
+| `src/` as a whole | no batch file anywhere in the app, not just in the updater |
+
+The last one is the rule that was broken before. The old check only ever
+looked at `updater.js`, so a batch file used anywhere else in the app would
+have passed it; the new check walks `src/`, and the red proof puts a batch
+file in `ipc.js` to prove the walk sees it. `tools/update-redproof.js` is now
+21/21, up from 17.
+
 ## Verification status
 
-`npm run check:all` sweeps **49 suites** on the tree carrying the 2026-11-08
-work, and 48 of them pass. The one that does not is `check:released`, which
+`npm run check:all` sweeps **50 suites** on the tree carrying the 2026-11-09
+work, and 49 of them pass. The one that does not is `check:released`, which
 is red until the release is cut, because `main` is ahead of the newest tag.
-It was 47/47 on the tree carrying the 2026-11-02 work, 2026-11-02. It was
+It was 49/49 on the tree carrying the 2026-11-08 work, 47/47 on the tree
+carrying the 2026-11-02 work, 2026-11-02. It was
 45/45 on the v1.26.0 release commit, 44/44 on the v1.25.0 release commit and
 on the v1.24.0 release commit, 2026-10-27; 43/43 on the v1.23.0 release
 commit, 2026-10-21; 42 suites before `check:contactrefresh` was added, 41
@@ -1154,11 +1242,13 @@ working, not a defect, and it is why a docs-only push still gets a release.
 
 | Check | Result |
 | --- | --- |
-| `check:update` | 59/59, after `check:update` gained a built helper to read the PE header of |
+| `check:update` | 62/62, after `check:update` gained a built helper to read the PE header of |
+| `check:proxy` | 5/5 checks passed, with a control run that has to show the proxy lookup |
 | `check:composeredit` | 48/48 checks passed |
 | `check:composereditrules` | 26/26 checks passed, with no Electron and no window |
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
-| `tools/update-redproof.js` | 17/17 mutations caught, no holes |
+| `tools/update-redproof.js` | 21/21 mutations caught, no holes |
+| `tools/proxy-redproof.js` | 5/5 mutations caught, no holes |
 | `tools/search-nav-redproof.js` | 12/12 mutations caught, no holes |
 | `tools/syntax-redproof.js` | 3/3 mutations caught, no holes |
 | `tools/avatar-redproof.js` | 4/4 mutations caught, no holes |
@@ -1235,16 +1325,32 @@ is what would have caught the unused condition.
 
 ## Still outstanding
 
-1. **TLS warnings.** A log showed `handshake failed ... net_error -202`
-   (`ERR_CERT_ALT_NAME_INVALID`). The update prompt did appear, so the GitHub API
-   call worked. Probably a different endpoint or an intercepting proxy.
-   Unresolved.
-2. **Empty command windows** appeared after one interrupted update. Most likely
-   orphaned consoles. Never proven.
-3. **This file is now tracked**, which cuts both ways. Its git state section goes
+Both of the two that were here are closed, and what was found is worth
+keeping:
+
+1. **The TLS warning was Chromium looking for a proxy, not a bad certificate
+   on the GitHub call.** Closed in v1.28.3 - see "The TLS warning was Chromium
+   looking for a proxy" above. The cause is fixed in the app. The *root* cause
+   is still on the server: the DNS record `wpad.yatesframe.com`, and the
+   `wpad` alias in front of it, point at the YunoHost box, where no vhost
+   serves that name - so the host answers with a redirect to the admin login
+   over HTTPS with a certificate that covers `yatesframe.com` and not `wpad`.
+   The app no longer goes looking, so the app is quiet about it. **A browser
+   that auto-discovers a proxy will still find it.** That is a DNS record to
+   delete, on the DNS, and it is not in this repository.
+2. **The empty command windows were the old status window.** Closed in
+   v1.28.3 - see "The empty command windows were a batch file's status window"
+   above. The update path cannot have a console window now, and the checks say
+   so.
+3. **Legacy `update-apply.cmd` and `update-status.cmd` are still on disk** for
+   anyone who last ran v1.18.0 to v1.18.5. Nothing runs them - the app has not
+   looked for them since v1.18.6 - so they are inert. The one-time startup
+   cleanup that would delete them was proposed and not taken; it is still an
+   option, and it is a few lines in `main.js`.
+4. **This file is now tracked**, which cuts both ways. Its git state section goes
    stale silently, which is exactly how two earlier versions of it misled the
    reader. Refresh it as part of finishing a task rather than when someone
-   notices it is wrong.
+   notices it is wrong. It was last refreshed with the v1.28.3 work.
 
 Not outstanding any more, but still true and easy to trip over: the updater
 asks GitHub for a **Release**, not for a commit. It calls `releases/latest` and
