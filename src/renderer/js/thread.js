@@ -1191,45 +1191,43 @@ export function messageNode(message, previous) {
   // changed is in the composer, and the bubble keeps showing what it says.
   if (state.editing === message.id) bubbleWrap.classList.add('is-editing');
 
-  if (state.editing !== message.id) {
-    if (message.linkedMessageID) bubbleWrap.append(replyQuoteNode(message));
+  if (message.linkedMessageID) bubbleWrap.append(replyQuoteNode(message));
 
-    // Folded away on this device: the arrow opens it again.
-    if (isMessageHidden(message.id)) {
-      bubbleWrap.append(collapsedNode(message));
-      return wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap);
-    }
-
-    const bubble = el('div', { class: 'msg-bubble' });
-
-    if (message.attachments?.length) bubble.append(attachmentsNode(message));
-
-    const inner = el('div', { class: 'bubble-inner' });
-
-    if (!message.isDeleted && message.text) {
-      inner.append(el('div', { class: 'bubble-text', html: renderRichText(message.text) }));
-    } else if (message.isDeleted) {
-      inner.append(el('div', { class: 'bubble-text muted', text: 'This message was deleted' }));
-    } else if (!message.attachments?.length) {
-      inner.append(
-        el('div', { class: 'bubble-text muted', text: message.type ? `[${message.type.toLowerCase()}]` : '' }),
-      );
-    }
-
-    // Beeper tucks the timestamp inside the bubble at the trailing edge.
-    inner.append(
-      el('span', {
-        class: 'bubble-time',
-        text: messageTime(message.timestamp),
-        title: fullTime(message.timestamp),
-      }),
-    );
-    bubble.append(inner);
-
-    if (message.reactions?.length) bubble.append(reactionsNode(message, selfID));
-
-    bubbleWrap.append(bubble);
+  // Folded away on this device: the arrow opens it again.
+  if (isMessageHidden(message.id)) {
+    bubbleWrap.append(collapsedNode(message));
+    return wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap);
   }
+
+  const bubble = el('div', { class: 'msg-bubble' });
+
+  if (message.attachments?.length) bubble.append(attachmentsNode(message));
+
+  const inner = el('div', { class: 'bubble-inner' });
+
+  if (!message.isDeleted && message.text) {
+    inner.append(el('div', { class: 'bubble-text', html: renderRichText(message.text) }));
+  } else if (message.isDeleted) {
+    inner.append(el('div', { class: 'bubble-text muted', text: 'This message was deleted' }));
+  } else if (!message.attachments?.length) {
+    inner.append(
+      el('div', { class: 'bubble-text muted', text: message.type ? `[${message.type.toLowerCase()}]` : '' }),
+    );
+  }
+
+  // Beeper tucks the timestamp inside the bubble at the trailing edge.
+  inner.append(
+    el('span', {
+      class: 'bubble-time',
+      text: messageTime(message.timestamp),
+      title: fullTime(message.timestamp),
+    }),
+  );
+  bubble.append(inner);
+
+  if (message.reactions?.length) bubble.append(reactionsNode(message, selfID));
+
+  bubbleWrap.append(bubble);
 
   if (message.editedTimestamp || (message.isSender && message.sendStatus)
     || message.links?.length || hasSeenIndicator(message)) {
@@ -1992,6 +1990,10 @@ function scrollToMessage(messageID) {
 // ---------------------------------------------------------------------------
 
 function setReplyTo(message) {
+  // A reply and an edit cannot both be pending, and the newest action
+  // wins. The other direction already follows this rule: starting an edit
+  // clears the reply.
+  cancelEdit();
   state.replyTo = { id: message.id, text: message.text || message.type || '' };
   updateReplyPreview();
   $('#composer').focus();

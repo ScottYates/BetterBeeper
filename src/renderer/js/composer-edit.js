@@ -141,7 +141,14 @@ let deps = {
 };
 
 let session = null;
-/** The placeholder the composer had before an edit started. */
+/**
+ * The placeholder the composer had before an edit started.
+ *
+ * Captured when the edit starts rather than when the module is wired up,
+ * because the thread sets the placeholder to the chat's name every time it
+ * draws the header, and a value taken at startup would be the markup's
+ * generic one by the time the first edit began.
+ */
 let defaultPlaceholder = '';
 /** The tooltip the send button had before an edit started. */
 let defaultSendTip = '';
@@ -155,9 +162,6 @@ function sendEl() { return document.getElementById('btn-send'); }
 /** Wire the banner to the app. The thread hands its own functions in. */
 export function initComposerEdit(handles) {
   deps = { ...deps, ...(handles || {}) };
-
-  const composer = composerEl();
-  if (composer && !defaultPlaceholder) defaultPlaceholder = composer.placeholder;
 
   const send = sendEl();
   if (send && !defaultSendTip) {
@@ -309,6 +313,13 @@ export function startEdit(message) {
   const composer = composerEl();
   if (!composer) return false;
 
+  // The placeholder to put back when the edit ends is the one the
+  // composer had when the edit began, which is the chat's name. Only a
+  // fresh session captures it: stepping to another message keeps the
+  // first capture, or the edit placeholder would be captured as the one
+  // to restore.
+  if (!session) defaultPlaceholder = composer.placeholder;
+
   const original = decodeEntities(message.text || '');
   session = {
     messageID: message.id,
@@ -326,6 +337,9 @@ export function startEdit(message) {
   if (typeof composer.setSelectionRange === 'function') composer.setSelectionRange(end, end);
 
   showBanner(original);
+  // The bubble being edited is marked, and the marker is only on screen
+  // once the thread has been drawn again.
+  deps.renderAll();
   deps.focusComposer();
   return true;
 }
@@ -356,15 +370,22 @@ export function stepEdit(delta) {
  */
 export function cancelEdit({ render = true } = {}) {
   const had = Boolean(session);
+  // The old bubble editor marked a message as being edited without
+  // opening a session here, so the marker can be up even when there is no
+  // session to end.
+  const marked = Boolean(state.editing);
   session = null;
   state.editing = null;
 
   if (had) {
     const composer = composerEl();
     if (composer) composer.value = '';
+    hideBanner();
   }
-  hideBanner();
-  if (render) deps.renderAll();
+  // The thread is redrawn for the marker, so there is nothing to redraw
+  // when there was no edit and no marker: a reply would otherwise rebuild
+  // the whole thread for nothing.
+  if (render && (had || marked)) deps.renderAll();
 }
 
 /**
@@ -379,6 +400,14 @@ export async function saveEdit() {
   const text = String(composer?.value || '').trim();
   if (!text) {
     toast('A message cannot be empty', 'error');
+    return false;
+  }
+
+  // An edit that changes nothing is not an edit. The bubble editor this
+  // replaces compared the text first and only saved when it had actually
+  // changed, so the session ends here and the message is left alone.
+  if (text === session.original) {
+    cancelEdit();
     return false;
   }
 

@@ -346,6 +346,59 @@ async function main() {
           return after === before + ' and changed' || ('it stepped to ' + after);
         });
 
+        await add('the message being edited stays in the thread while the edit is open', async () => {
+          press('ArrowUp');
+          const before = document.querySelector('[data-message-id="newest"]');
+          // An upsert of the message is what makes the thread rebuild, and
+          // the rebuild is when a bubble being edited could go missing.
+          const stored = S.state.messages.get('c-edit') || [];
+          const message = stored.find((m) => m.id === 'newest');
+          S.upsertMessage('c-edit', { ...message });
+          await settle(200);
+          const after = document.querySelector('[data-message-id="newest"]');
+          const kept = after && after.textContent.includes('the newest one');
+          const rebuilt = after !== before;
+          CE.cancelEdit();
+          return (kept && rebuilt)
+            || ('the bubble ' + (kept ? 'was not rebuilt' : 'went missing'));
+        });
+
+        await add('CONTROL: the composer placeholder goes back to the chat after the edit', () => {
+          press('ArrowUp');
+          const during = composer.placeholder;
+          CE.cancelEdit();
+          const after = composer.placeholder;
+          return (/edit/i.test(during) && after === 'A conversation')
+            || ('it says ' + after);
+        });
+
+        await add('CONTROL: a reply cancels an open edit', () => {
+          press('ArrowUp');
+          const opened = CE.isEditing();
+          const stored = S.state.messages.get('c-edit') || [];
+          const message = stored.find((m) => m.id === 'newest');
+          const items = T.messageMenuItems(null, message);
+          const reply = items.find((item) => item.label === 'Reply');
+          reply.onSelect();
+          const closed = CE.isEditing() === false;
+          const bannerHidden = banner.hidden === true;
+          const replyShown = document.getElementById('reply-preview').hidden === false;
+          return (opened && closed && bannerHidden && replyShown)
+            || ('the edit and the reply were both up: ' + closed + '/' + bannerHidden + '/' + replyShown);
+        });
+
+        await add('CONTROL: an edit that changes nothing is not sent', async () => {
+          press('ArrowUp');
+          editCalls.length = 0;
+          press('Enter');
+          await settle(150);
+          const none = editCalls.length === 0;
+          const closed = CE.isEditing() === false;
+          CE.cancelEdit();
+          return (none && closed)
+            || (editCalls.length + ' calls were made, still editing: ' + !closed);
+        });
+
         await add('Enter saves the edit', async () => {
           press('ArrowUp');
           composer.value = 'the newest one, corrected';
