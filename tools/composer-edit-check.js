@@ -302,6 +302,18 @@ async function main() {
           /Editing message/.test(document.getElementById('edit-preview-text').textContent)
           || 'the banner says nothing');
 
+        await add('the message being edited is marked in the thread', () => {
+          // The bubble is marked, not replaced: the text being changed is in
+          // the composer, and the bubble keeps showing what it says. The
+          // marker is on the wrap the thread draws, and the wrap is what the
+          // stylesheet outlines.
+          const session = CE.editSession();
+          const node = document.querySelector('[data-message-id="' + session.messageID + '"]');
+          const wrap = node && node.querySelector('.msg-bubble-wrap');
+          return (wrap && wrap.classList.contains('is-editing'))
+            || 'the bubble of the message being edited is not marked';
+        });
+
         await add('the composer placeholder says an edit is in progress', () =>
           /edit/i.test(composer.placeholder) || ('it reads ' + composer.placeholder));
 

@@ -154,6 +154,16 @@ const MUTATIONS = [
     expect: 'CONTROL: there is no editor in the bubble any more',
   },
   {
+    // The bubble being edited is marked, so the reader can see which
+    // message the composer is about to change. The marker is the only
+    // thing on screen that says so.
+    what: 'the message being edited is not marked in the thread',
+    file: 'thread',
+    from: "  if (state.editing === message.id) bubbleWrap.classList.add('is-editing');",
+    to: '',
+    expect: 'the message being edited is marked in the thread',
+  },
+  {
     what: 'the menu offers Edit on a message that cannot be edited',
     file: 'thread',
     from: "  const canEdit = isEditableMessage(currentChat, message);",
