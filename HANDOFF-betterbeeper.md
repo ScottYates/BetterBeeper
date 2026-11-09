@@ -30,29 +30,41 @@ one person's machine.
 ## Git state
 
 Branch `main`, in sync with origin. The work described under "Work done
-2026-11-09" is committed and released as **v1.28.3**. It is a patch bump,
-because `tools/release.js` derives the level from the commit subjects since
-the last tag and both of them are `fix:`.
+2026-11-09" is committed and released.
 
-The last few commits, with the `Release 1.28.3` commit sitting on top of them:
+**This section does not name a version, on purpose.** `git describe --tags
+--abbrev=0` names it, and the `Release x.y.z` commit at the top of the list
+below carries the version in its own subject. A handoff that says "1.28.3" is
+wrong the moment the next release is cut, and that is exactly how two earlier
+versions of this file misled the reader: a number that was true when it was
+written and false by the time it was read, with nothing to say so. The
+complaint in "Still outstanding" about this file going stale is a complaint
+about this section, and the fix is to stop pinning a version in prose.
+
+The last few commits, most recent first. The commit that carries this
+paragraph is above them:
 
 ```
+8531761  Release 1.28.4
+5a95c18  docs: correct the suite count in the verification history
+d7b9f9f  Release 1.28.3
+6e40f87  docs: the TLS warning was a proxy lookup, and the console windows were a batch file
 8017e89  fix: the update path cannot put a console on the desktop
 de191d8  fix: Chromium does not go looking for a proxy
 73284bd  Release 1.28.2
-a17a03c  fix: the composer shows the whole message being edited
-f4cb7c5  Release 1.28.1
 ```
 
-The newest tag is **v1.28.3**, on the `Release 1.28.3` commit, so `main` is
-not left ahead of its own tag. `package.json` says 1.28.3.
+The newest tag is on the topmost `Release` commit, so `main` is not left
+ahead of its own tag, and `package.json` agrees with it.
 
-v1.28.3 carried the two things this file had left outstanding: the TLS
+**v1.28.3** carried the two things this file had left outstanding: the TLS
 warning, which was Chromium's proxy auto-discovery rather than anything to do
 with GitHub, and the checks that say the update path cannot put a console
-window on the desktop. v1.28.2 carried the composer growing to fit the
-message being edited. v1.28.0 carried the composer edit itself. v1.27.0
-carried the arrows in the sidebar's search. v1.26.0 carried the
+window on the desktop. It was a patch bump, because `tools/release.js`
+derives the level from the commit subjects since the last tag and both of the
+commits it carried were `fix:`. **v1.28.2** carried the composer growing to
+fit the message being edited. **v1.28.0** carried the composer edit itself.
+v1.27.0 carried the arrows in the sidebar's search. v1.26.0 carried the
 in-conversation search. v1.25.0 carried the notification click. v1.24.0
 carried the composer focus, the paste and drop work, and the reconnect fix.
 v1.23.0 carried the contact refresh report, v1.22.0 the contact refresh
@@ -1351,7 +1363,9 @@ keeping:
 4. **This file is now tracked**, which cuts both ways. Its git state section goes
    stale silently, which is exactly how two earlier versions of it misled the
    reader. Refresh it as part of finishing a task rather than when someone
-   notices it is wrong. It was last refreshed with the v1.28.3 work.
+   notices it is wrong. The git state section no longer names a version, so the
+   part of it that used to go stale on every release now cannot. The rest of
+   the file still has to be refreshed by hand.
 
 Not outstanding any more, but still true and easy to trip over: the updater
 asks GitHub for a **Release**, not for a commit. It calls `releases/latest` and
