@@ -1,11 +1,11 @@
-Better Beeper 1.28.3
+Better Beeper 1.28.4
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.28.3-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.28.4-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,8 +17,6 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
-- docs: the TLS warning was a proxy lookup, and the console windows were a batch file (`6e40f87`)
-- fix: the update path cannot put a console on the desktop (`8017e89`)
-- fix: Chromium does not go looking for a proxy (`de191d8`)
+- docs: correct the suite count in the verification history (`5a95c18`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.
