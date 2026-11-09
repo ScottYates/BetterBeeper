@@ -1032,10 +1032,65 @@ not touch, and because narrowing the shared flag would have quietly taken
 away the ability to delete a message that has a picture or has aged out of
 its edit window.
 
+### What the review caught, and what was changed
+
+A review of the whole branch found five things that had to be fixed before
+the feature could ship. They are fixed, and each one has a named case that
+goes red when the fix is taken out again.
+
+**The up arrow could land on a message that was never sent.** The app puts
+an optimistic bubble on screen before the send round trip comes back, and
+leaves it at "failed" when the send does not go through. It is your own
+message and it is the newest one, so it passed every rule and the arrow
+stepped straight onto it. Enter then asked Beeper to edit an id Beeper had
+never heard of. A message the bridge has not confirmed is not editable any
+more.
+
+**Every arrow step redrew the whole thread.** That detached every image in
+it, which restarts an animated GIF, and it threw away where the reader was.
+The marker is moved on its own now, the thread is drawn again only when the
+text really has changed, and the signature that decides whether a redraw is
+needed follows the marker.
+
+**The rules could not be checked without a window.** They lived in the same
+module as the session, which imports the UI for its toasts, and the UI
+reaches for `document` the moment it is loaded, so a plain Node import threw
+`ReferenceError: document is not defined`. The rules are in
+`composer-edit-rules.js` now, which imports nothing but the utility
+helpers, and `npm run check:composereditrules` checks them with no Electron
+and no window at all.
+
+**The store was given the decoded text.** The convention in `entities.js` is
+that decoding happens where the text is shown and never in the stored
+message, so storing the decoded value lost one level of entity resolution:
+in the bubble at once, and on disk for good. The store is given the encoded
+text now, and Beeper is still given the text as it was typed.
+
+The one trade-off: `<` and `>` are encoded too, so an edit to a message that
+arrived as literal HTML (a Matrix room, a bot) is stored escaped, and the
+app shows the markup as text instead of rendering it. That is the honest
+reading of the convention, and it only shows after an edit.
+
+**The red proof could have been green for the wrong reason.** It printed a
+baseline and asserted nothing, so a mutation could be reported as caught
+against a case that was already failing. The baseline is asserted now, and
+every named case has to be PASS in it, or the proof refuses to run.
+
+Two things the review left open, neither of them part of this feature:
+
+- `state.js` publishes a change to the thread before it puts the message in
+  the list, so a message arriving in a chat with no history is not drawn
+  until the next one is. It was measured on the tree before this feature as
+  well, so this feature did not cause it.
+- The line that keeps the redraw signature up to date has no case of its
+  own: every redraw is preceded by an update that has already set the same
+  value, so nothing can be seen to depend on it. It is recorded as unproven
+  rather than covered by a case that cannot fail.
+
 ## Verification status
 
-`npm run check:all` sweeps **48 suites** on the tree carrying the 2026-11-08
-work, and 47 of them pass. The one that does not is `check:released`, which
+`npm run check:all` sweeps **49 suites** on the tree carrying the 2026-11-08
+work, and 48 of them pass. The one that does not is `check:released`, which
 is red until the release is cut, because `main` is ahead of the newest tag.
 It was 47/47 on the tree carrying the 2026-11-02 work, 2026-11-02. It was
 45/45 on the v1.26.0 release commit, 44/44 on the v1.25.0 release commit and
@@ -1053,14 +1108,15 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | Check | Result |
 | --- | --- |
 | `check:update` | 59/59, after `check:update` gained a built helper to read the PE header of |
-| `check:composeredit` | 61/61 checks passed |
+| `check:composeredit` | 45/45 checks passed |
+| `check:composereditrules` | 26/26 checks passed, with no Electron and no window |
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
 | `tools/update-redproof.js` | 17/17 mutations caught, no holes |
 | `tools/search-nav-redproof.js` | 12/12 mutations caught, no holes |
 | `tools/syntax-redproof.js` | 3/3 mutations caught, no holes |
 | `tools/avatar-redproof.js` | 4/4 mutations caught, no holes |
 | `tools/history-render-redproof.js` | 2/2 mutations caught, no holes |
-| `tools/composer-edit-redproof.js` | 19/19 mutations caught, no holes |
+| `tools/composer-edit-redproof.js` | 26/26 mutations caught, no holes |
 
 Individually measured: `check:entity` 0 failing across 31 cases,
 `check:rich` 27/27, `check:preview` 0 failing across 18 cases,
@@ -1081,7 +1137,8 @@ mutations caught, 1/1 neutral rewrite tolerated (new),
 neutral rewrite tolerated (new),
 `check:historyrender` 28/28 and `tools/history-render-redproof.js` 2/2
 mutations caught, 1/1 neutral rewrite tolerated (new),
-`check:composeredit` 61/61 and `tools/composer-edit-redproof.js` 19/19
+`check:composereditrules` 26/26 and `check:composeredit` 45/45 and
+`tools/composer-edit-redproof.js` 26/26
 mutations caught, 1/1 neutral rewrite tolerated (new),
 `check:unread` 32/32, `check:layout` 13/13,
 `check:api` 136/136, `check:composer` 17/17, `check:actions` 21/21,
