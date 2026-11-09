@@ -13,6 +13,15 @@
  * The last one is the other direction: a neutral rewrite that must stay green.
  * The check measures the screen, so it has to survive the code changing shape.
  *
+ * Two of the mutations below are about the thread not being drawn when
+ * nothing changed: the signature that decides it has to describe what is on
+ * screen, and a message has to be in the store before the change is
+ * announced, or the thread is told about a message it cannot see.
+ *
+ * The baseline is asserted. A mutation "caught" against a case that was
+ * already red proves nothing, so the suite has to be green and every named
+ * case has to be PASS in it, or the proof refuses to run.
+ *
  * Every file is restored in a finally, verified by content hash.
  *
  * Run with: node tools/thread-open-redproof.js
@@ -25,6 +34,7 @@ const { execFileSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const FILES = {
   thread: path.join(ROOT, 'src', 'renderer', 'js', 'thread.js'),
+  state: path.join(ROOT, 'src', 'renderer', 'js', 'state.js'),
 };
 
 const hash = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -78,6 +88,30 @@ const MUTATIONS = [
     expect: 'messages the store returned are drawn once the read answers',
   },
   {
+    // The signature is what decides that the thread does not have to be
+    // drawn again. After a draw it has to describe what is on screen, or
+    // the next event that changes nothing computes a different signature
+    // and the thread is drawn again - detaching every image in it, which
+    // restarts an animated GIF.
+    what: 'the signature is left describing what was on screen before the last draw',
+    file: 'thread',
+    from: '  lastThreadSignature = threadSignature(messages);\n}',
+    to: '}',
+    expect: 'the same messages arriving again do not draw the thread again',
+  },
+  {
+    // The message has to be in the store before the change is announced. A
+    // chat this window has never opened has no list yet, so the array the
+    // message goes into would only reach the store after the announcement:
+    // the thread would be told about a message it could not see, and the
+    // first message in a chat would not be drawn.
+    what: 'a message is announced before it is in the store',
+    file: 'state',
+    from: '  let list = state.messages.get(chatID);\n  if (!list) {\n    list = [];\n    state.messages.set(chatID, list);\n  }\n  applyMessage(list, message);\n  sortForDisplay(list);\n  publish(chatID, message);',
+    to: '  const list = state.messages.get(chatID) || [];\n  applyMessage(list, message);\n  sortForDisplay(list);\n  publish(chatID, message);\n  state.messages.set(chatID, list);',
+    expect: 'a message arriving in a chat with no history is drawn',
+  },
+  {
     // Not a bug. The cached messages are worked out by calling the shared
     // filter directly instead of the one-line wrapper that calls it, which is
     // the same thing, so this must stay green.
@@ -89,10 +123,10 @@ const MUTATIONS = [
   },
 ];
 
-function runCheck() {
+function runCheck(suite) {
   try {
-    const out = execFileSync('npm', ['run', 'check:threadopen', '--silent'], {
-      cwd: ROOT, encoding: 'utf8', timeout: 300000, shell: true,
+    const out = execFileSync('npm.cmd', ['run', suite, '--silent'], {
+      cwd: ROOT, encoding: 'utf8', timeout: 600000, shell: true, windowsHide: true,
     });
     return { code: 0, out };
   } catch (err) {
@@ -116,17 +150,60 @@ function verdictFor(out, name) {
   return null;
 }
 
+/** The suite a mutation is judged by. */
+const suiteFor = (m) => m.suite || 'check:threadopen';
+
 const before = {};
 for (const [k, p] of Object.entries(FILES)) before[k] = hash(p);
 
-let caught = 0;
-let tolerated = 0;
 const holes = [];
-const expected = MUTATIONS.filter((m) => !m.expectGreen).length;
-console.log(`baseline: ${runCheck().out.match(/(\d+\/\d+) checks passed/)?.[1] || '?'}\n`);
+
+// ---------------------------------------------------------------------------
+// The baseline
+//
+// A mutation "caught" against a case that was already red proves nothing, so
+// the baseline has to be green and every named case has to be in it, PASS.
+// ---------------------------------------------------------------------------
+
+const BASELINE_SUITES = ['check:threadopen'];
+
+const baseline = {};
+for (const suite of BASELINE_SUITES) {
+  const { code, out } = runCheck(suite);
+  const counts = out.match(/(\d+)\/(\d+) checks passed/);
+  if (!counts) {
+    console.log(`BASELINE FAILED  ${suite}\n      the suite did not print a count`);
+    process.exit(1);
+  }
+  if (code !== 0 || counts[1] !== counts[2]) {
+    console.log(`BASELINE FAILED  ${suite}\n      it printed ${counts[1]}/${counts[2]} checks passed`);
+    process.exit(1);
+  }
+  baseline[suite] = { out, passed: counts[1], total: counts[2] };
+  console.log(`baseline  ${suite}  ${counts[1]}/${counts[2]} checks passed`);
+}
 
 for (const m of MUTATIONS) {
-  const target = FILES.thread;
+  const verdict = verdictFor(baseline[suiteFor(m)].out, m.expect);
+  if (verdict === 'PASS') continue;
+  const state = verdict === null ? 'not in the baseline' : 'already ' + verdict;
+  holes.push(`${m.what} -- "${m.expect}" is ${state}`);
+  console.log(`HOLE  ${m.what}\n      "${m.expect}" is ${state}`);
+}
+
+if (holes.length) {
+  console.log('\nThe baseline does not prove these mutations, so the proof cannot run.');
+  process.exit(1);
+}
+console.log('');
+
+let caught = 0;
+let tolerated = 0;
+const expected = MUTATIONS.filter((m) => !m.expectGreen).length;
+
+for (const m of MUTATIONS) {
+  const key = m.file || 'thread';
+  const target = FILES[key];
   const original = fs.readFileSync(target, 'utf8');
   let applied = false;
   try {
@@ -139,7 +216,7 @@ for (const m of MUTATIONS) {
     fs.writeFileSync(target, edit.text, 'utf8');
     applied = true;
 
-    const { out } = runCheck();
+    const { out } = runCheck(suiteFor(m));
     const verdict = verdictFor(out, m.expect);
     if (verdict === null) {
       holes.push(`${m.what} -- "${m.expect}" never printed`);
@@ -162,7 +239,7 @@ for (const m of MUTATIONS) {
   } finally {
     if (applied) fs.writeFileSync(target, original, 'utf8');
     const now = hash(target);
-    if (now !== before.thread) {
+    if (now !== before[key]) {
       console.log(`\nRESTORE FAILED for ${path.basename(target)}`);
       process.exit(1);
     }

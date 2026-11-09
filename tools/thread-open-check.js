@@ -163,6 +163,33 @@ async function main() {
           return T.openChat(id);
         };
 
+        // --- the signature has to describe what is on screen -----------------
+        //
+        // This window already has c-cached, and the store read answers with
+        // nothing: the renderer can hold messages the main process has not
+        // got yet, so a read that brings nothing back is not a sign that the
+        // messages are gone.
+        //
+        // The thread is drawn from what is here. When the same messages
+        // arrive again - the background sync walking the store a second
+        // time - nothing about the thread has changed, so it must not be
+        // drawn again. What decides that is the signature, so the signature
+        // has to describe what is on screen rather than what was on screen
+        // when the last event came in.
+        plan = give({ messages: [], hasMore: false, complete: true });
+        await open('c-cached');
+        await settle();
+
+        const drawnRow = listEl.querySelector('[data-message-id="k1"]');
+        const same = (S.state.messages.get('c-cached') || []).map((m) => Object.assign({}, m));
+        S.upsertMessages('c-cached', same);
+        await settle();
+        const rowAgain = listEl.querySelector('[data-message-id="k1"]');
+
+        add('the same messages arriving again do not draw the thread again', () =>
+          (drawnRow && rowAgain && drawnRow === rowAgain)
+          || 'the thread was drawn again');
+
         // --- a store that does report more on disk --------------------------
         // Baseline for the scroll-back case below: hasMore really does draw the
         // affordance, so its absence afterwards means something.
@@ -280,6 +307,23 @@ async function main() {
 
         add('a failed read with nothing cached does say so', () =>
           failedNote() || ('thread shows ' + JSON.stringify(listEl.textContent || '').slice(0, 80)));
+
+        // --- the first message in a chat -------------------------------------
+        //
+        // c-broken is open and this window has nothing for it yet, so it has
+        // no list in the store. A message arriving in it has to be drawn:
+        // the thread is told about the change, and the message has to be in
+        // the store by then, or the thread is told about something it cannot
+        // see and draws nothing.
+        //
+        // This is the first message in a chat - your own, on a chat you have
+        // just opened - and it did not appear until the next thing happened.
+        S.upsertMessage('c-broken', msg('b1', 'c-broken', 'the first message here', 5000));
+        await settle();
+
+        add('a message arriving in a chat with no history is drawn', () =>
+          rowIDs().includes('b1')
+          || ('rows on screen: ' + JSON.stringify(rowIDs())));
 
         // --- and the read is still asked for ---------------------------------
         add('the store is still read once per open, not skipped', () =>

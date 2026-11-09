@@ -1076,16 +1076,27 @@ baseline and asserted nothing, so a mutation could be reported as caught
 against a case that was already failing. The baseline is asserted now, and
 every named case has to be PASS in it, or the proof refuses to run.
 
-Two things the review left open, neither of them part of this feature:
+Two things the review left open have been dealt with since.
 
-- `state.js` publishes a change to the thread before it puts the message in
-  the list, so a message arriving in a chat with no history is not drawn
-  until the next one is. It was measured on the tree before this feature as
-  well, so this feature did not cause it.
-- The line that keeps the redraw signature up to date has no case of its
-  own: every redraw is preceded by an update that has already set the same
-  value, so nothing can be seen to depend on it. It is recorded as unproven
-  rather than covered by a case that cannot fail.
+**A message arriving in a chat with no history is now drawn.** `state.js`
+announced a change to the thread before it put the message in the store, so
+for a chat this window had never opened there was no list to put it in yet:
+the thread was told about a message it could not see, drew nothing, and the
+message did not appear until whatever came next. For the first message in a
+chat that is your own message, sitting there not drawn while Beeper is still
+answering. The list goes into the store before the change is announced. It
+was measured on the tree before this feature as well, so this feature never
+caused it.
+
+**The redraw signature is proved, not assumed.** The line that keeps the
+signature describing what is on screen had no case of its own, because every
+redraw in the app is preceded by an update that has already set the same
+value. There is a way to see it: a chat this window already has, whose store
+read answers with nothing, and whose messages arrive again from the
+background sync. Nothing about the thread has changed, so it must not be
+drawn again, and that is the signature's job. `check:threadopen` says so
+now, and `tools/thread-open-redproof.js` takes the line away to prove the
+case goes red without it.
 
 ## Verification status
 
@@ -1117,6 +1128,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `tools/avatar-redproof.js` | 4/4 mutations caught, no holes |
 | `tools/history-render-redproof.js` | 2/2 mutations caught, no holes |
 | `tools/composer-edit-redproof.js` | 26/26 mutations caught, no holes |
+| `tools/thread-open-redproof.js` | 7/7 mutations caught, no holes |
 
 Individually measured: `check:entity` 0 failing across 31 cases,
 `check:rich` 27/27, `check:preview` 0 failing across 18 cases,
@@ -1127,7 +1139,8 @@ Individually measured: `check:entity` 0 failing across 31 cases,
 `check:contactrefresh` 71/71 and `tools/contact-refresh-redproof.js` 19/19
 mutations caught, 2/2 neutral rewrites tolerated (new),
 `check:paste` 52/52 (rewritten, new),
-`check:threadopen` 16/16,
+`check:threadopen` 18/18 and `tools/thread-open-redproof.js` 7/7 mutations
+caught, 1/1 neutral rewrite tolerated (new),
 `check:notificationclick` 20/20 and
 `tools/notification-click-redproof.js` 12/12 mutations caught, 1/1 neutral
 rewrite tolerated (new),

@@ -164,11 +164,25 @@ export function networkMeta(source) {
  */
 export function upsertMessage(chatID, message) {
   if (!message?.id) return;
-  const list = state.messages.get(chatID) || [];
+  // The list has to be in the store before the change is announced.
+  //
+  // A chat this window has never opened has no list yet, and the array the
+  // message goes into would only reach the store after the announcement. So
+  // the thread was told about a message that was not in the store yet, drew
+  // nothing, and the message did not appear until whatever came next - which
+  // for the first message in a chat is your own message, sitting there not
+  // drawn while Beeper is still answering.
+  //
+  // The list is put in the store first, and it is the same array that is
+  // updated below, so the announcement sees the message.
+  let list = state.messages.get(chatID);
+  if (!list) {
+    list = [];
+    state.messages.set(chatID, list);
+  }
   applyMessage(list, message);
   sortForDisplay(list);
   publish(chatID, message);
-  state.messages.set(chatID, list);
 }
 
 /**
