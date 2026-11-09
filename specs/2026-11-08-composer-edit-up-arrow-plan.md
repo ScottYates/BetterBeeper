@@ -1358,8 +1358,10 @@ edit that changed nothing was still sent - and fixing them added four more
 cases: `the message being edited stays in the thread while the edit is open`,
 `CONTROL: the composer placeholder goes back to the chat after the edit`,
 `CONTROL: a reply cancels an open edit` and
-`CONTROL: an edit that changes nothing is not sent`. The suite is therefore
-`55/55` after the fix, not `51/51`.
+`CONTROL: an edit that changes nothing is not sent`. The red proof added a
+mutation for each of them, and the last task added one more case and mutation
+for the marker class itself, so the suite is `61/61` and the red proof catches
+`19/19`, not the `51/51` this step first expected.
 
 If the app cases fail, the likely causes are: the harness needs the `settle` helper added next to `add` (Step 3 says where); or `openChat` did not draw the messages because the stub is missing a method the thread calls.
 
@@ -1548,7 +1550,7 @@ with:
 - [ ] **Step 5: Run the check and watch it pass**
 
 Run: `npm run check:syntax` then `npm run check:composeredit` then `npm run check:ascii`
-Expected: `check:composeredit` prints `60/60 checks passed`; the ASCII check is clean.
+Expected: `check:composeredit` prints `61/61 checks passed`; the ASCII check is clean.
 
 - [ ] **Step 6: Run the whole suite**
 
@@ -1965,11 +1967,11 @@ its edit window.
 Then add two rows to the verification table in `## Verification status`:
 
 ```
-| `check:composeredit` | 60/60 checks passed |
-| `tools/composer-edit-redproof.js` | 14/14 mutations caught, no holes |
+| `check:composeredit` | 61/61 checks passed |
+| `tools/composer-edit-redproof.js` | 19/19 mutations caught, no holes |
 ```
 
-Record the counts the run actually printed. They should be 60/60 and 14/14;
+Record the counts the run actually printed. They should be 61/61 and 19/19;
 if they differ, a case was added or lost on the way, and that difference has
 to be accounted for before the release is cut.
 
