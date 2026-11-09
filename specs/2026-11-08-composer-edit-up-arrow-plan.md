@@ -859,7 +859,14 @@ let deps = {
 };
 
 let session = null;
-/** The placeholder the composer had before an edit started. */
+/**
+ * The placeholder the composer had before an edit started.
+ *
+ * Captured when the edit starts rather than when the module is wired up,
+ * because the thread sets the placeholder to the chat's name every time it
+ * draws the header, and a value taken at startup would be the markup's
+ * generic one by the time the first edit began.
+ */
 let defaultPlaceholder = '';
 /** The tooltip the send button had before an edit started. */
 let defaultSendTip = '';
@@ -873,9 +880,6 @@ function sendEl() { return document.getElementById('btn-send'); }
 /** Wire the banner to the app. The thread hands its own functions in. */
 export function initComposerEdit(handles) {
   deps = { ...deps, ...(handles || {}) };
-
-  const composer = composerEl();
-  if (composer && !defaultPlaceholder) defaultPlaceholder = composer.placeholder;
 
   const send = sendEl();
   if (send && !defaultSendTip) {
@@ -1027,6 +1031,13 @@ export function startEdit(message) {
   const composer = composerEl();
   if (!composer) return false;
 
+  // The placeholder to put back when the edit ends is the one the
+  // composer had when the edit began, which is the chat's name. Only a
+  // fresh session captures it: stepping to another message keeps the
+  // first capture, or the edit placeholder would be captured as the one
+  // to restore.
+  if (!session) defaultPlaceholder = composer.placeholder;
+
   const original = decodeEntities(message.text || '');
   session = {
     messageID: message.id,
@@ -1044,6 +1055,9 @@ export function startEdit(message) {
   if (typeof composer.setSelectionRange === 'function') composer.setSelectionRange(end, end);
 
   showBanner(original);
+  // The bubble being edited is marked, and the marker is only on screen
+  // once the thread has been drawn again.
+  deps.renderAll();
   deps.focusComposer();
   return true;
 }
@@ -1074,15 +1088,22 @@ export function stepEdit(delta) {
  */
 export function cancelEdit({ render = true } = {}) {
   const had = Boolean(session);
+  // The old bubble editor marked a message as being edited without
+  // opening a session here, so the marker can be up even when there is no
+  // session to end.
+  const marked = Boolean(state.editing);
   session = null;
   state.editing = null;
 
   if (had) {
     const composer = composerEl();
     if (composer) composer.value = '';
+    hideBanner();
   }
-  hideBanner();
-  if (render) deps.renderAll();
+  // The thread is redrawn for the marker, so there is nothing to redraw
+  // when there was no edit and no marker: a reply would otherwise rebuild
+  // the whole thread for nothing.
+  if (render && (had || marked)) deps.renderAll();
 }
 
 /**
@@ -1097,6 +1118,14 @@ export async function saveEdit() {
   const text = String(composer?.value || '').trim();
   if (!text) {
     toast('A message cannot be empty', 'error');
+    return false;
+  }
+
+  // An edit that changes nothing is not an edit. The bubble editor this
+  // replaces compared the text first and only saved when it had actually
+  // changed, so the session ends here and the message is left alone.
+  if (text === session.original) {
+    cancelEdit();
     return false;
   }
 
@@ -1264,51 +1293,73 @@ async function sendCurrent() {
   // changed is in the composer, and the bubble keeps showing what it says.
   if (state.editing === message.id) bubbleWrap.classList.add('is-editing');
 
-  if (state.editing !== message.id) {
-    if (message.linkedMessageID) bubbleWrap.append(replyQuoteNode(message));
+  if (message.linkedMessageID) bubbleWrap.append(replyQuoteNode(message));
 
-    // Folded away on this device: the arrow opens it again.
-    if (isMessageHidden(message.id)) {
-      bubbleWrap.append(collapsedNode(message));
-      return wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap);
-    }
-
-    const bubble = el('div', { class: 'msg-bubble' });
-
-    if (message.attachments?.length) bubble.append(attachmentsNode(message));
-
-    const inner = el('div', { class: 'bubble-inner' });
-
-    if (!message.isDeleted && message.text) {
-      inner.append(el('div', { class: 'bubble-text', html: renderRichText(message.text) }));
-    } else if (message.isDeleted) {
-      inner.append(el('div', { class: 'bubble-text muted', text: 'This message was deleted' }));
-    } else if (!message.attachments?.length) {
-      inner.append(
-        el('div', { class: 'bubble-text muted', text: message.type ? `[${message.type.toLowerCase()}]` : '' }),
-      );
-    }
-
-    // Beeper tucks the timestamp inside the bubble at the trailing edge.
-    inner.append(
-      el('span', {
-        class: 'bubble-time',
-        text: messageTime(message.timestamp),
-        title: fullTime(message.timestamp),
-      }),
-    );
-    bubble.append(inner);
-
-    if (message.reactions?.length) bubble.append(reactionsNode(message, selfID));
-
-    bubbleWrap.append(bubble);
+  // Folded away on this device: the arrow opens it again.
+  if (isMessageHidden(message.id)) {
+    bubbleWrap.append(collapsedNode(message));
+    return wrapMessageRow(message, isOut, isFirst, isLast, bubbleWrap);
   }
+
+  const bubble = el('div', { class: 'msg-bubble' });
+
+  if (message.attachments?.length) bubble.append(attachmentsNode(message));
+
+  const inner = el('div', { class: 'bubble-inner' });
+
+  if (!message.isDeleted && message.text) {
+    inner.append(el('div', { class: 'bubble-text', html: renderRichText(message.text) }));
+  } else if (message.isDeleted) {
+    inner.append(el('div', { class: 'bubble-text muted', text: 'This message was deleted' }));
+  } else if (!message.attachments?.length) {
+    inner.append(
+      el('div', { class: 'bubble-text muted', text: message.type ? `[${message.type.toLowerCase()}]` : '' }),
+    );
+  }
+
+  // Beeper tucks the timestamp inside the bubble at the trailing edge.
+  inner.append(
+    el('span', {
+      class: 'bubble-time',
+      text: messageTime(message.timestamp),
+      title: fullTime(message.timestamp),
+    }),
+  );
+  bubble.append(inner);
+
+  if (message.reactions?.length) bubble.append(reactionsNode(message, selfID));
+
+  bubbleWrap.append(bubble);
+```
+
+7. In `setReplyTo`, cancel an open edit before setting the reply:
+
+```js
+function setReplyTo(message) {
+  // A reply and an edit cannot both be pending, and the newest action
+  // wins. The other direction already follows this rule: starting an edit
+  // clears the reply.
+  cancelEdit();
+  state.replyTo = { id: message.id, text: message.text || message.type || '' };
+  updateReplyPreview();
+  $('#composer').focus();
+}
 ```
 
 - [ ] **Step 7: Run the check and watch it pass**
 
 Run: `npm run check:syntax` then `npm run check:composeredit`
-Expected: `check:syntax` passes; `check:composeredit` prints `51/51 checks passed`.
+Expected: `check:syntax` passes; `check:composeredit` prints `51/51 checks passed` (27 from Task 1 and the 24 cases above).
+
+The review of this task found four defects in the code above - the edited
+message was removed from the thread instead of marked, a reply and an edit
+could both be pending, the composer placeholder was captured too early, and an
+edit that changed nothing was still sent - and fixing them added four more
+cases: `the message being edited stays in the thread while the edit is open`,
+`CONTROL: the composer placeholder goes back to the chat after the edit`,
+`CONTROL: a reply cancels an open edit` and
+`CONTROL: an edit that changes nothing is not sent`. The suite is therefore
+`55/55` after the fix, not `51/51`.
 
 If the app cases fail, the likely causes are: the harness needs the `settle` helper added next to `add` (Step 3 says where); or `openChat` did not draw the messages because the stub is missing a method the thread calls.
 
@@ -1497,7 +1548,7 @@ with:
 - [ ] **Step 5: Run the check and watch it pass**
 
 Run: `npm run check:syntax` then `npm run check:composeredit` then `npm run check:ascii`
-Expected: `check:composeredit` prints `56/56 checks passed`; the ASCII check is clean.
+Expected: `check:composeredit` prints `60/60 checks passed`; the ASCII check is clean.
 
 - [ ] **Step 6: Run the whole suite**
 
@@ -1914,11 +1965,11 @@ its edit window.
 Then add two rows to the verification table in `## Verification status`:
 
 ```
-| `check:composeredit` | 56/56 checks passed |
+| `check:composeredit` | 60/60 checks passed |
 | `tools/composer-edit-redproof.js` | 14/14 mutations caught, no holes |
 ```
 
-Record the counts the run actually printed. They should be 56/56 and 14/14;
+Record the counts the run actually printed. They should be 60/60 and 14/14;
 if they differ, a case was added or lost on the way, and that difference has
 to be accounted for before the release is cut.
 
