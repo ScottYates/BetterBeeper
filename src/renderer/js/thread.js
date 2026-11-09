@@ -166,6 +166,7 @@ export function initThread() {
     clearReply: () => { state.replyTo = null; updateReplyPreview(); },
     focusComposer: () => focusComposer(),
     renderAll: () => renderAll(),
+    markEditing: (messageID) => markEditing(messageID),
   });
 
   // A job's progress is the only thing that starts and stops the refresh
@@ -1024,30 +1025,61 @@ function renderAll() {
   const messages = renderableMessages(state.activeChatID);
   if (!messages.length) {
     listEl.append(el('div', { class: 'empty-note', text: 'No messages here yet.' }));
-    return;
-  }
-
-  let lastDay = null;
-  let previous = null;
-  // One claim per attachment per pass; see the note above imageCache.
-  resetImageClaims();
-  for (const message of messages) {
-    const day = dayKey(message.timestamp);
-    if (day !== lastDay) {
-      listEl.append(el('div', { class: 'day-divider', text: dayLabel(message.timestamp) }));
-      lastDay = day;
-      previous = null;
+  } else {
+    let lastDay = null;
+    let previous = null;
+    // One claim per attachment per pass; see the note above imageCache.
+    resetImageClaims();
+    for (const message of messages) {
+      const day = dayKey(message.timestamp);
+      if (day !== lastDay) {
+        listEl.append(el('div', { class: 'day-divider', text: dayLabel(message.timestamp) }));
+        lastDay = day;
+        previous = null;
+      }
+      const node = messageNode(message, previous);
+      renderedNodes.set(message.id, node);
+      listEl.append(node);
+      previous = message;
     }
-    const node = messageNode(message, previous);
-    renderedNodes.set(message.id, node);
-    listEl.append(node);
-    previous = message;
+
+    // The thread rebuilds itself, so the search marks have to be put back.
+    applyThreadSearchHighlights();
+
+    if (stick) scrollToBottom();
   }
+  // The thread has just been drawn, so the signature says what is on
+  // screen. Leaving it stale made the next event that changed nothing
+  // visible rebuild the whole thread again, which detaches every image in
+  // it and restarts an animated GIF.
+  lastThreadSignature = threadSignature(messages);
+}
 
-  // The thread rebuilds itself, so the search marks have to be put back.
-  applyThreadSearchHighlights();
-
-  if (stick) scrollToBottom();
+/**
+ * Move the "being edited" marker to one message, without drawing the thread
+ * again.
+ *
+ * Drawing the thread again detaches every image in it, which restarts an
+ * animated GIF, and it throws away where the reader was. The marker is the
+ * only thing that changes when the arrow steps, so it is moved on its own.
+ *
+ * The class belongs on the wrap inside the row: that is what the stylesheet
+ * outlines and what `messageNode` puts it on. Every other row is cleared, so
+ * stepping moves the marker rather than leaving two of them behind.
+ */
+export function markEditing(messageID) {
+  for (const [id, row] of renderedNodes) {
+    const wrap = row.querySelector('.msg-bubble-wrap');
+    if (!wrap) continue;
+    if (id === messageID) wrap.classList.add('is-editing');
+    else wrap.classList.remove('is-editing');
+  }
+  // The drawn thread now says what the state says, so the signature has to
+  // say it too. Otherwise the next event that changes nothing visible - a
+  // typing indicator, a read receipt - computes a different signature,
+  // rebuilds the whole thread, and restarts the GIFs all over again: the
+  // same bug through a different door.
+  lastThreadSignature = threadSignature(renderableMessages(state.activeChatID));
 }
 
 /**

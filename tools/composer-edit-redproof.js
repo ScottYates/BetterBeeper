@@ -8,6 +8,11 @@
  *
  * The last one is the other direction: a neutral rewrite that must stay green.
  *
+ * The baseline is asserted before anything is touched. A named case that is
+ * already red in the baseline proves nothing when a mutation makes it red
+ * again, so the proof refuses to run against a baseline that is not green or
+ * that does not print the case at all.
+ *
  * Every file is restored in a finally, verified by content hash.
  *
  * Run with: node tools/composer-edit-redproof.js
@@ -21,13 +26,21 @@ const ROOT = path.join(__dirname, '..');
 const FILES = {
   edit: path.join(ROOT, 'src', 'renderer', 'js', 'composer-edit.js'),
   thread: path.join(ROOT, 'src', 'renderer', 'js', 'thread.js'),
+  rules: path.join(ROOT, 'src', 'renderer', 'js', 'composer-edit-rules.js'),
+  entities: path.join(ROOT, 'src', 'renderer', 'js', 'entities.js'),
 };
 
 // Which suite proves which file.
 const SUITE = {
   edit: 'check:composeredit',
   thread: 'check:composeredit',
+  rules: 'check:composereditrules',
+  entities: 'check:composeredit',
 };
+
+// The suites the proof needs a baseline for. Every one of them has to be
+// green before a single byte is changed.
+const BASELINE_SUITES = ['check:composereditrules', 'check:composeredit'];
 
 const hash = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 
@@ -36,13 +49,19 @@ const hash = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).diges
  *
  * The repository is mostly LF with a few CRLF files, so a literal written
  * with \n would silently not match a CRLF file, every mutation would report
- * SKIP, and the suite would look green for the wrong reason.
+ * SKIP, and the suite would look green for the wrong reason. The replacement
+ * is given the same line endings as the file it goes into, so a mutated file
+ * stays a file the next pattern can match.
  */
 function replaceOnce(original, from, to) {
   for (const pattern of [from, from.replace(/\n/g, '\r\n')]) {
     if (pattern !== from && !original.includes('\r\n')) continue;
+    const crlf = pattern !== from;
     const count = original.split(pattern).length - 1;
-    if (count === 1) return { ok: true, text: original.replace(pattern, to) };
+    if (count === 1) {
+      const replacement = crlf ? to.replace(/\n/g, '\r\n') : to;
+      return { ok: true, text: original.replace(pattern, replacement) };
+    }
     if (count > 1) return { ok: false, why: 'pattern appears ' + count + ' times' };
   }
   return { ok: false, why: 'pattern not found' };
@@ -92,38 +111,76 @@ const MUTATIONS = [
   },
   {
     what: 'a chat with no capabilities object is refused',
-    file: 'edit',
+    file: 'rules',
     from: "  if (!caps || typeof caps !== 'object') return true;",
     to: "  if (!caps || typeof caps !== 'object') return false;",
     expect: 'a chat with no capabilities object may be edited',
   },
   {
     what: 'a chat whose capabilities have no edit key is allowed',
-    file: 'edit',
+    file: 'rules',
     from: "  if (level === undefined || level === null) return false;",
     to: "  if (level === undefined || level === null) return true;",
     expect: 'a chat whose capabilities have no edit key may not be edited',
   },
   {
     what: 'the edit window is ignored',
-    file: 'edit',
+    file: 'rules',
     from: "    if (now - sent > maxAge * 1000) return false;",
     to: "    if (false) return false;",
     expect: 'CONTROL: a message past the edit window cannot be edited',
   },
   {
     what: 'a message with an attachment can be edited',
-    file: 'edit',
+    file: 'rules',
     from: "  if ((message.attachments || []).length) return false;",
     to: '',
     expect: 'a message with an attachment cannot be edited',
   },
   {
     what: 'somebody else\'s message can be edited',
-    file: 'edit',
+    file: 'rules',
     from: "  if (!message.isSender) return false;",
     to: '',
     expect: 'CONTROL: somebody else\'s message cannot be edited',
+  },
+  {
+    // A message that only exists on this device is not a message Beeper has.
+    // Without the rule the up arrow lands on the optimistic bubble, and Enter
+    // then asks Beeper to edit an id it has never heard of.
+    what: 'a message that has not been sent yet can be edited',
+    file: 'rules',
+    from: "  if (!confirmedByBeeper(message)) return false;",
+    to: '',
+    expect: 'a message that has not been sent yet cannot be edited',
+  },
+  {
+    // The rules have to be loadable without a window, or they cannot be
+    // checked at all: the module they live in reached for `document` the
+    // moment it was imported.
+    what: 'the rules need a window to be loaded',
+    file: 'rules',
+    from: "import { parseTs } from './util.js';",
+    to: "import { parseTs } from './util.js';\n\ndocument.addEventListener('DOMContentLoaded', () => {});",
+    expect: 'the rules can be checked without a window',
+  },
+  {
+    // The stored message keeps its references. Storing the decoded text
+    // loses one level of entity resolution, in the bubble and on disk.
+    what: 'the stored text is not encoded',
+    file: 'entities',
+    from: `export function encodeEntities(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}`,
+    to: `export function encodeEntities(value) {
+  return String(value ?? '');
+}`,
+    expect: 'an edited character reference is shown once and stored encoded',
   },
   {
     // Enter has to save the edit. The thread's own send path knows about an
@@ -139,9 +196,46 @@ const MUTATIONS = [
   {
     what: 'the edit is not written to the local store',
     file: 'edit',
-    from: "  await call(() => api.history.upsert(chatID, updated), { context: 'history', fallback: null });",
+    from: "  await call(() => api.history.upsert(chatID, stored), { context: 'history', fallback: null });",
     to: '',
     expect: 'the edit is written to the local store',
+  },
+  {
+    // The thread is not drawn again for the marker. Drawing it again
+    // detaches every image in it, which restarts an animated GIF.
+    what: 'the arrow draws the whole thread again',
+    file: 'edit',
+    from: "  deps.markEditing(message.id);",
+    to: "  deps.renderAll();",
+    expect: 'stepping does not rebuild the thread',
+  },
+  {
+    // The marker is put on the bubble when the edit opens. Without it the
+    // reader is not told which message the composer is about to change.
+    what: 'the marker is never put on the bubble',
+    file: 'edit',
+    from: "  deps.markEditing(message.id);\n",
+    to: '',
+    expect: 'the message being edited is marked in the thread',
+  },
+  {
+    // The marker moves with the edit. Leaving it behind would show two
+    // bubbles marked as being edited.
+    what: 'the marker is left on the message stepped away from',
+    file: 'thread',
+    from: "    if (id === messageID) wrap.classList.add('is-editing');\n    else wrap.classList.remove('is-editing');",
+    to: "    if (id === messageID) wrap.classList.add('is-editing');",
+    expect: 'the marker moves to the message being edited',
+  },
+  {
+    // The drawn thread has to say what the state says, or the next event
+    // that changes nothing visible rebuilds the thread and restarts the
+    // GIFs all over again.
+    what: 'the signature is left stale when the marker moves',
+    file: 'thread',
+    from: "  lastThreadSignature = threadSignature(renderableMessages(state.activeChatID));",
+    to: '',
+    expect: 'an upsert that changes nothing visible does not rebuild the thread',
   },
   {
     // The rule as it stands: every message is drawn as a bubble, and the one
@@ -156,12 +250,13 @@ const MUTATIONS = [
   {
     // The bubble being edited is marked, so the reader can see which
     // message the composer is about to change. The marker is the only
-    // thing on screen that says so.
+    // thing on screen that says so, and it is drawn with the bubble: a
+    // thread that is drawn again while the edit is open comes back with it.
     what: 'the message being edited is not marked in the thread',
     file: 'thread',
     from: "  if (state.editing === message.id) bubbleWrap.classList.add('is-editing');",
     to: '',
-    expect: 'the message being edited is marked in the thread',
+    expect: 'the message being edited is still marked after the thread is drawn again',
   },
   {
     what: 'the menu offers Edit on a message that cannot be edited',
@@ -224,7 +319,7 @@ const MUTATIONS = [
 function runCheck(suite) {
   try {
     const out = execFileSync('npm.cmd', ['run', suite, '--silent'], {
-      cwd: ROOT, encoding: 'utf8', timeout: 600000, shell: true,
+      cwd: ROOT, encoding: 'utf8', timeout: 600000, shell: true, windowsHide: true,
     });
     return { code: 0, out };
   } catch (err) {
@@ -248,14 +343,54 @@ function verdictFor(out, name) {
   return null;
 }
 
+/** The suite a mutation is judged by. */
+const suiteFor = (m) => m.suite || SUITE[m.file];
+
 const before = {};
 for (const [k, p] of Object.entries(FILES)) before[k] = hash(p);
 
+const holes = [];
+
+// ---------------------------------------------------------------------------
+// The baseline
+//
+// A mutation "caught" against a case that was already red proves nothing, so
+// the baseline has to be green and every named case has to be in it, PASS.
+// ---------------------------------------------------------------------------
+
+const baseline = {};
+for (const suite of BASELINE_SUITES) {
+  const { code, out } = runCheck(suite);
+  const counts = out.match(/(\d+)\/(\d+) checks passed/);
+  if (!counts) {
+    console.log(`BASELINE FAILED  ${suite}\n      the suite did not print a count`);
+    process.exit(1);
+  }
+  if (code !== 0 || counts[1] !== counts[2]) {
+    console.log(`BASELINE FAILED  ${suite}\n      it printed ${counts[1]}/${counts[2]} checks passed`);
+    process.exit(1);
+  }
+  baseline[suite] = { out, passed: counts[1], total: counts[2] };
+  console.log(`baseline  ${suite}  ${counts[1]}/${counts[2]} checks passed`);
+}
+
+for (const m of MUTATIONS) {
+  const suite = suiteFor(m);
+  const verdict = verdictFor(baseline[suite].out, m.expect);
+  if (verdict === 'PASS') continue;
+  holes.push(`${m.what} -- "${m.expect}" is ${verdict === null ? 'not in the baseline' : verdict}`);
+  console.log(`HOLE  ${m.what}\n      "${m.expect}" is ${verdict === null ? 'not in the baseline' : 'already ' + verdict}`);
+}
+
+if (holes.length) {
+  console.log('\nThe baseline does not prove these mutations, so the proof cannot run.');
+  process.exit(1);
+}
+console.log('');
+
 let caught = 0;
 let tolerated = 0;
-const holes = [];
 const expected = MUTATIONS.filter((m) => !m.expectGreen).length;
-console.log(`baseline: ${runCheck('check:composeredit').out.match(/(\d+\/\d+) checks passed/)?.[1] || '?'}\n`);
 
 for (const m of MUTATIONS) {
   const target = FILES[m.file];
@@ -271,7 +406,7 @@ for (const m of MUTATIONS) {
     fs.writeFileSync(target, edit.text, 'utf8');
     applied = true;
 
-    const { out } = runCheck(SUITE[m.file]);
+    const { out } = runCheck(suiteFor(m));
     const verdict = verdictFor(out, m.expect);
     if (verdict === null) {
       holes.push(`${m.what} -- "${m.expect}" never printed`);
@@ -298,6 +433,15 @@ for (const m of MUTATIONS) {
       console.log(`\nRESTORE FAILED for ${path.basename(target)}`);
       process.exit(1);
     }
+  }
+}
+
+// Every file the proof touched has to be back where it started, not just the
+// one the last mutation happened to be in.
+for (const [k, p] of Object.entries(FILES)) {
+  if (hash(p) !== before[k]) {
+    console.log(`\nRESTORE FAILED for ${path.basename(p)}`);
+    process.exit(1);
   }
 }
 

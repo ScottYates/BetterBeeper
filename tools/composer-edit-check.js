@@ -66,140 +66,14 @@ async function main() {
       async function body() {
         const CE = await import(${JSON.stringify(js('composer-edit.js'))});
 
-        // --- the chat's capability -----------------------------------------
-
-        const chat = (caps) => ({ id: 'c1', title: 'A chat', capabilities: caps });
-        const NOW = Date.parse('2026-11-08T12:00:00Z');
-        const own = (over) => Object.assign({
-          id: 'm1',
-          chatID: 'c1',
-          isSender: true,
-          isDeleted: false,
-          type: 'TEXT',
-          text: 'hello',
-          timestamp: new Date(NOW - 1000).toISOString(),
-        }, over || {});
-
-        await add('a chat with no capabilities object may be edited', () =>
-          CE.chatAllowsEdit(chat(undefined)) === true || 'it was refused');
-
-        await add('CONTROL: a chat that says editing is full may be edited', () =>
-          CE.chatAllowsEdit(chat({ edit: 2 })) === true || 'it was refused');
-
-        await add('a chat that says editing is partial may be edited', () =>
-          CE.chatAllowsEdit(chat({ edit: 1 })) === true || 'it was refused');
-
-        await add('a chat that says editing is unsupported may not be edited', () =>
-          CE.chatAllowsEdit(chat({ edit: 0 })) === false || 'it was allowed');
-
-        await add('a chat that says editing is rejected may not be edited', () =>
-          CE.chatAllowsEdit(chat({ edit: -2 })) === false || 'it was allowed');
-
-        await add('a chat whose capabilities have no edit key may not be edited', () =>
-          CE.chatAllowsEdit(chat({ attachments: {}, maxTextLength: 160 })) === false
-          || 'it was allowed');
-
-        await add('CONTROL: no capabilities object is not the same as no edit key', () =>
-          (CE.chatAllowsEdit(chat(undefined)) === true
-            && CE.chatAllowsEdit(chat({ maxTextLength: 160 })) === false)
-          || 'the two states were treated the same');
-
-        await add('the edit window is read in seconds', () =>
-          CE.editMaxAgeSeconds(chat({ edit: 2, editMaxAge: 900 })) === 900
-          || ('it read ' + CE.editMaxAgeSeconds(chat({ edit: 2, editMaxAge: 900 }))));
-
-        await add('CONTROL: a chat with no edit window has no age limit', () =>
-          CE.editMaxAgeSeconds(chat({ edit: 2 })) === null
-          || ('it read ' + CE.editMaxAgeSeconds(chat({ edit: 2 }))));
-
-        // --- the message ---------------------------------------------------
-
-        await add('your own message can be edited', () =>
-          CE.isEditableMessage(chat({ edit: 2 }), own(), NOW) === true || 'it was refused');
-
-        await add('CONTROL: somebody else\'s message cannot be edited', () =>
-          CE.isEditableMessage(chat({ edit: 2 }), own({ isSender: false }), NOW) === false
-          || 'it was allowed');
-
-        await add('a deleted message cannot be edited', () =>
-          CE.isEditableMessage(chat({ edit: 2 }), own({ isDeleted: true }), NOW) === false
-          || 'it was allowed');
-
-        await add('a hidden message cannot be edited', () =>
-          CE.isEditableMessage(chat({ edit: 2 }), own({ isHidden: true }), NOW) === false
-          || 'it was allowed');
-
-        await add('a message with an attachment cannot be edited', () =>
-          CE.isEditableMessage(
-            chat({ edit: 2 }), own({ attachments: [{ mimeType: 'image/png' }] }), NOW,
-          ) === false || 'it was allowed');
-
-        await add('a message inside the edit window can be edited', () =>
-          CE.isEditableMessage(
-            chat({ edit: 2, editMaxAge: 900 }),
-            own({ timestamp: new Date(NOW - 600000).toISOString() }),
-            NOW,
-          ) === true || 'it was refused');
-
-        await add('CONTROL: a message past the edit window cannot be edited', () =>
-          CE.isEditableMessage(
-            chat({ edit: 2, editMaxAge: 900 }),
-            own({ timestamp: new Date(NOW - 1000000).toISOString() }),
-            NOW,
-          ) === false || 'it was allowed');
-
-        await add('CONTROL: a chat with no edit window has no age limit', () =>
-          CE.isEditableMessage(
-            chat({ edit: 2 }),
-            own({ timestamp: new Date(NOW - 100000000).toISOString() }),
-            NOW,
-          ) === true || 'an old message was refused');
-
-        await add('CONTROL: a message with no timestamp cannot be edited', () =>
-          CE.isEditableMessage(
-            chat({ edit: 2, editMaxAge: 900 }), own({ timestamp: null }), NOW,
-          ) === false || 'it was allowed');
-
-        await add('a read-only chat may not be edited', () =>
-          CE.isEditableMessage(
-            { id: 'c1', isReadOnly: true, capabilities: { edit: 2 } }, own(), NOW,
-          ) === false || 'it was allowed');
-
-        // --- the list ------------------------------------------------------
-
-        await add('the editable list is oldest first', () => {
-          const list = CE.editableMessages(chat({ edit: 2 }), [
-            own({ id: 'm3', timestamp: new Date(NOW - 3000).toISOString() }),
-            own({ id: 'm1', timestamp: new Date(NOW - 9000).toISOString() }),
-            own({ id: 'm2', timestamp: new Date(NOW - 6000).toISOString() }),
-          ], NOW);
-          return (list.length === 3 && list[0].id === 'm1' && list[2].id === 'm3')
-            || ('got ' + list.map((m) => m.id).join(','));
-        });
-
-        await add('CONTROL: the editable list skips everything that cannot be edited', () => {
-          const list = CE.editableMessages(chat({ edit: 2 }), [
-            own({ id: 'm1', timestamp: new Date(NOW - 9000).toISOString() }),
-            own({ id: 'm2', isSender: false, timestamp: new Date(NOW - 8000).toISOString() }),
-            own({ id: 'm3', attachments: [{}], timestamp: new Date(NOW - 7000).toISOString() }),
-            own({ id: 'm4', isDeleted: true, timestamp: new Date(NOW - 6000).toISOString() }),
-            own({ id: 'm5', timestamp: new Date(NOW - 5000).toISOString() }),
-          ], NOW);
-          return (list.length === 2 && list[0].id === 'm1' && list[1].id === 'm5')
-            || ('got ' + list.map((m) => m.id).join(','));
-        });
-
-        await add('the same chat and the same messages always give the same list', () => {
-          const messages = [
-            own({ id: 'm1', timestamp: new Date(NOW - 9000).toISOString() }),
-            own({ id: 'm2', timestamp: new Date(NOW - 8000).toISOString() }),
-          ];
-          const a = CE.editableMessages(chat({ edit: 2 }), messages, NOW).map((m) => m.id);
-          const b = CE.editableMessages(chat({ edit: 2 }), messages, NOW).map((m) => m.id);
-          return (a.length === 2 && a.join(',') === b.join(',')) || 'the list changed between calls';
-        });
-
         // --- the session, driven through the app ---------------------------
+
+        // The rules that decide what can be edited are checked in their own
+        // suite, check:composereditrules, which runs them under plain Node
+        // with no window at all. What is left here is the app: the session,
+        // the banner, the thread, the menu and the store.
+        const NOW = Date.parse('2026-11-08T12:00:00Z');
+
 
         const editCalls = [];
         const storeCalls = [];
@@ -338,6 +212,56 @@ async function main() {
           return composer.value === 'the newest one' || ('it holds ' + composer.value);
         });
 
+        // --- the thread is not drawn again for the marker -------------------
+
+        await add('stepping does not rebuild the thread', () => {
+          // Drawing the thread again detaches every image in it, which
+          // restarts an animated GIF, and it throws away where the reader
+          // was. A rebuilt thread replaces the nodes, so the very same node
+          // object has to still be in the document after the step.
+          const before = document.querySelector('[data-message-id="newest"]');
+          press('ArrowUp');
+          press('ArrowUp');
+          const after = document.querySelector('[data-message-id="newest"]');
+          const kept = before && after && before === after && after.isConnected;
+          CE.cancelEdit();
+          return kept || 'the thread was drawn again';
+        });
+
+        await add('the marker moves to the message being edited', () => {
+          press('ArrowUp');
+          const first = document.querySelector('[data-message-id="newest"] .msg-bubble-wrap');
+          // The marker is on the bubble now. Whether it is still on it
+          // afterwards is a different question, because the node is the same
+          // node either way - the thread is not drawn again.
+          const firstMarked = Boolean(first && first.classList.contains('is-editing'));
+          press('ArrowUp');
+          const second = document.querySelector('[data-message-id="middle"] .msg-bubble-wrap');
+          const firstAfter = document.querySelector('[data-message-id="newest"] .msg-bubble-wrap');
+          const ok = (firstMarked
+            && second && second.classList.contains('is-editing')
+            && firstAfter && !firstAfter.classList.contains('is-editing'));
+          CE.cancelEdit();
+          return ok || 'the marker did not move';
+        });
+
+        await add('an upsert that changes nothing visible does not rebuild the thread', async () => {
+          // The marker has moved, so the thread on screen says what the state
+          // says. The signature has to say so too, or the next event that
+          // changes nothing visible - a typing indicator, a read receipt -
+          // rebuilds the whole thread and restarts the GIFs all over again.
+          press('ArrowUp');
+          const before = document.querySelector('[data-message-id="newest"]');
+          const stored = S.state.messages.get('c-edit') || [];
+          const message = stored.find((m) => m.id === 'newest');
+          S.upsertMessage('c-edit', { ...message });
+          await settle(200);
+          const after = document.querySelector('[data-message-id="newest"]');
+          const kept = before && after && before === after;
+          CE.cancelEdit();
+          return kept || 'the thread was drawn again';
+        });
+
         await add('CONTROL: the up arrow does nothing when the composer has text', () => {
           CE.cancelEdit();
           composer.value = 'a message being written';
@@ -360,19 +284,36 @@ async function main() {
 
         await add('the message being edited stays in the thread while the edit is open', async () => {
           press('ArrowUp');
-          const before = document.querySelector('[data-message-id="newest"]');
-          // An upsert of the message is what makes the thread rebuild, and
-          // the rebuild is when a bubble being edited could go missing.
-          const stored = S.state.messages.get('c-edit') || [];
-          const message = stored.find((m) => m.id === 'newest');
-          S.upsertMessage('c-edit', { ...message });
-          await settle(200);
+          // The thread is drawn again while the edit is open - another
+          // message changed - and the bubble being edited has to come back
+          // with it. It is not taken out of the thread while the edit is
+          // open.
+          S.upsertMessage(
+            'c-edit',
+            bubble('oldest', new Date(NOW - 5000).toISOString(), 'the oldest one, again'),
+          );
+          await settle(250);
           const after = document.querySelector('[data-message-id="newest"]');
           const kept = after && after.textContent.includes('the newest one');
-          const rebuilt = after !== before;
           CE.cancelEdit();
-          return (kept && rebuilt)
-            || ('the bubble ' + (kept ? 'was not rebuilt' : 'went missing'));
+          return kept || 'the bubble went missing';
+        });
+
+        await add('the message being edited is still marked after the thread is drawn again', async () => {
+          // The marker is drawn with the bubble, so a thread that is drawn
+          // again while the edit is open comes back with the marker on it -
+          // and not only on the node that happened to be there before.
+          press('ArrowUp');
+          S.upsertMessage(
+            'c-edit',
+            bubble('oldest', new Date(NOW - 5000).toISOString(), 'the oldest one, once more'),
+          );
+          await settle(250);
+          const node = document.querySelector('[data-message-id="newest"]');
+          const wrap = node && node.querySelector('.msg-bubble-wrap');
+          const marked = Boolean(wrap && wrap.classList.contains('is-editing'));
+          CE.cancelEdit();
+          return marked || 'the bubble being edited lost its marker';
         });
 
         await add('CONTROL: the composer placeholder goes back to the chat after the edit', () => {
@@ -440,6 +381,29 @@ async function main() {
           const written = storeCalls.find((c) => c.id === 'newest');
           return (written && written.text === 'the newest one, corrected')
             || ('the store was told ' + JSON.stringify(storeCalls));
+        });
+
+        await add('an edited character reference is shown once and stored encoded', async () => {
+          // A message is stored the way every other message is stored:
+          // encoded. The bubble shows the text decoded, once, so the reader
+          // sees what was typed - and the copy on disk keeps the reference
+          // rather than losing a level of it for good.
+          press('ArrowUp');
+          composer.value = 'Tom &amp; Jerry';
+          editCalls.length = 0;
+          storeCalls.length = 0;
+          press('Enter');
+          await settle(250);
+          const sent = editCalls[0] && editCalls[0].text;
+          const written = storeCalls.find((c) => c.id === 'newest');
+          const node = document.querySelector('[data-message-id="newest"] .bubble-text');
+          const shown = node && node.textContent;
+          const ok = (sent === 'Tom &amp; Jerry'
+            && written && written.text === 'Tom &amp;amp; Jerry'
+            && shown === 'Tom &amp; Jerry');
+          return ok || ('Beeper was told ' + JSON.stringify(sent)
+            + ', the store was told ' + JSON.stringify(written && written.text)
+            + ', the bubble shows ' + JSON.stringify(shown));
         });
 
         await add('CONTROL: the banner is hidden once the edit is saved', () =>
@@ -558,6 +522,33 @@ async function main() {
           const textareas = document.querySelectorAll('#message-list textarea').length;
           CE.cancelEdit();
           return textareas === 0 || (textareas + ' textareas are in the thread');
+        });
+
+        await add('the up arrow steps over a message that never reached Beeper', () => {
+          // The optimistic bubble the app puts on screen before the send
+          // round trip comes back, and the bubble a send that failed leaves
+          // behind. It is one of our own messages and it is the newest thing
+          // in the chat, so without a rule of its own the arrow would land
+          // on it and Enter would ask Beeper to edit an id it has never
+          // heard of.
+          S.upsertMessage('c-edit', {
+            id: '~txn:local:1700000000000:1',
+            chatID: 'c-edit',
+            accountID: 'a1',
+            senderID: 'a1',
+            senderName: 'Me',
+            text: 'never sent',
+            timestamp: new Date(NOW + 1000).toISOString(),
+            isSender: true,
+            sendStatus: 'failed',
+            type: 'TEXT',
+            attachments: [],
+          });
+          press('ArrowUp');
+          const session = CE.editSession();
+          const opened = session.messageID;
+          CE.cancelEdit();
+          return opened === 'newest' || ('it opened on ' + opened);
         });
       }
     })()

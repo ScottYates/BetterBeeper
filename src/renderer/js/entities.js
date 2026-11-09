@@ -61,6 +61,28 @@ export function decodeEntities(value) {
 }
 
 /**
+ * Encode the characters that HTML escaping touches.
+ *
+ * The ampersand goes first, so the ampersands this escape introduces are not
+ * escaped a second time. The apostrophe is a numeric reference because
+ * `&apos;` is not one of the named references HTML has always resolved, and
+ * this app does not want a reader to see the difference.
+ *
+ * This is the other half of `decodeEntities`: a message that is stored
+ * encoded is shown decoded, once, and only once. It is what the store is
+ * given when a message is edited, so an edited message is stored the same
+ * way as every other one.
+ */
+export function encodeEntities(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
  * Cut text for a one-line preview without leaving half a reference behind.
  *
  * A preview that ends in `&am` shows the reader the very thing this is meant

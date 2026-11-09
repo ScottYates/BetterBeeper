@@ -38,6 +38,7 @@
     "check:released": "node tools/released-check.js",
     "check:composer": "electron tools/run-check.js tools/composer-check.js",
     "check:composeredit": "electron tools/run-check.js tools/composer-edit-check.js",
+    "check:composereditrules": "node tools/composer-edit-rules-check.mjs",
     "check:bump": "node tools/bump-check.js",
     "check:live": "node tools/live-send.js",
     "release": "node tools/release.js --skip-install",
