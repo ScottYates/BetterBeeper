@@ -968,11 +968,77 @@ read, so the case counts rows rather than looking for a word.
 only its newest message, and the page not fed in at all - and asserts that the
 named case fails.
 
+## Work done 2026-11-08
+
+### The up arrow edits the message you sent last
+
+The composer takes the up arrow now. With an empty composer, it opens the
+most recent message that can still be edited: the text comes back into the
+composer, a banner above it says what is being edited, and Enter saves the
+change. The up arrow again steps back through your own editable messages,
+and the down arrow steps forward again, so a mis-step is not a one-way
+door.
+
+The arrow only acts on an empty composer, and it only steps while the text
+it loaded has not been changed. Anything typed means the user is writing,
+and the arrow belongs to the text they are writing.
+
+The edit is written through to the local store as well as to Beeper. An
+edit that only lived in the renderer would be drawn from disk as the old
+text the next time the app started.
+
+### Beeper advertises editing per chat, and there are three answers to read
+
+`capabilities.edit` is a support level: -2 rejected, -1 dropped, 0
+unsupported, 1 partially supported, 2 fully supported. Measured against the
+live bridge on 2026-11-08:
+
+| Network | Chats | `edit` | `editMaxCount` | `editMaxAge` |
+| --- | --- | --- | --- | --- |
+| Signal | 3 | 2 | 10 | 86400 s (24 h) |
+| Signal Note to Self | 1 | 2 | 10 | absent, so no limit |
+| Facebook/Messenger | 3 | 2 | 5 | 900 s (15 min) |
+| Google Voice | 91 | absent | absent | absent |
+| Beeper (Matrix) | 2 | no `capabilities` object at all | | |
+
+Three states, and they are not the same: a chat with no `capabilities`
+object at all is a bridge that did not say, and that is allowed; a chat
+with a `capabilities` object and no `edit` key is a bridge that said it
+cannot edit, and that is refused; and an `edit` level of 1 or more may
+edit. Google Voice is the second and Beeper's own Matrix chats are the
+first.
+
+`editMaxAge` is in seconds and is enforced before the arrow offers
+anything, so the app never offers an edit the server will refuse.
+
+`editMaxCount` is not enforced. Beeper's message payload carries no
+per-message count of how many times a message has been edited, so the only
+number the app could produce would count the edits made on this device
+and ignore the ones made on a phone. The server's refusal is shown as a
+toast instead.
+
+### One edit mode, and two different rules behind the menu
+
+The bubble editor is gone. The context menu's `Edit` opens the same
+composer session the up arrow opens, because two editors in one chat means
+two rules about which message is being edited and two places to look for
+the text.
+
+The menu's two items are decided separately, and they used to share one
+flag. `Edit` follows the chat's advertised capability and its age limit.
+`Delete for everyone` keeps the rule it has today, because delete is a
+different capability with a different age limit that this feature does
+not touch, and because narrowing the shared flag would have quietly taken
+away the ability to delete a message that has a picture or has aged out of
+its edit window.
+
 ## Verification status
 
-`npm run check:all` gives **47/47 suites passed** on the tree carrying the
-2026-11-02 work, 2026-11-02. It was 45/45 on the v1.26.0 release commit,
-44/44 on the v1.25.0 release commit and
+`npm run check:all` sweeps **48 suites** on the tree carrying the 2026-11-08
+work, and 47 of them pass. The one that does not is `check:released`, which
+is red until the release is cut, because `main` is ahead of the newest tag.
+It was 47/47 on the tree carrying the 2026-11-02 work, 2026-11-02. It was
+45/45 on the v1.26.0 release commit, 44/44 on the v1.25.0 release commit and
 on the v1.24.0 release commit, 2026-10-27; 43/43 on the v1.23.0 release
 commit, 2026-10-21; 42 suites before `check:contactrefresh` was added, 41
 before `check:participants`, 40 before `check:refreshchats`, 39 before
@@ -987,12 +1053,14 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | Check | Result |
 | --- | --- |
 | `check:update` | 59/59, after `check:update` gained a built helper to read the PE header of |
+| `check:composeredit` | 61/61 checks passed |
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
 | `tools/update-redproof.js` | 17/17 mutations caught, no holes |
 | `tools/search-nav-redproof.js` | 12/12 mutations caught, no holes |
 | `tools/syntax-redproof.js` | 3/3 mutations caught, no holes |
 | `tools/avatar-redproof.js` | 4/4 mutations caught, no holes |
 | `tools/history-render-redproof.js` | 2/2 mutations caught, no holes |
+| `tools/composer-edit-redproof.js` | 19/19 mutations caught, no holes |
 
 Individually measured: `check:entity` 0 failing across 31 cases,
 `check:rich` 27/27, `check:preview` 0 failing across 18 cases,
@@ -1012,6 +1080,8 @@ mutations caught, 1/1 neutral rewrite tolerated (new),
 `check:sidebar` 87/87 and `tools/avatar-redproof.js` 4/4 mutations caught, 1/1
 neutral rewrite tolerated (new),
 `check:historyrender` 28/28 and `tools/history-render-redproof.js` 2/2
+mutations caught, 1/1 neutral rewrite tolerated (new),
+`check:composeredit` 61/61 and `tools/composer-edit-redproof.js` 19/19
 mutations caught, 1/1 neutral rewrite tolerated (new),
 `check:unread` 32/32, `check:layout` 13/13,
 `check:api` 136/136, `check:composer` 17/17, `check:actions` 21/21,
