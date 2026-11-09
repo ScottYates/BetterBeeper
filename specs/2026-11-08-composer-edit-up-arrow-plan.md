@@ -15,7 +15,7 @@
 - Every code comment and every markdown file is pure ASCII. `npm run check:ascii` must pass.
 - **No test may open a console window or a desktop dialog.** Every Electron check runs through `tools/run-check.js`, which parses before it loads, requires inside a catch, and listens for `uncaughtException` and `unhandledRejection`. Never run `cmd.exe` through `start`.
 - `npm run check:syntax` parses every JS file and every harness. Run it before any Electron check after editing a file.
-- **New files are LF.** `package.json` is one of the few CRLF files in the repo: edit it with `[IO.File]::ReadAllText` / `[IO.File]::WriteAllText` on the absolute path, or with the Edit tool, so the line endings do not churn.
+- **New files are LF.** `package.json` is committed as CRLF but checked out as LF, because `core.autocrlf` is on and git normalises it on commit: edit it in place and confirm `git diff` shows only your added line, with no whole-file line-ending churn.
 - Commit with `git commit -F <file>` and then move the message file to the recoverable trash. **Always name the paths you add. Never `git add -A`.**
 - The renderer keeps `contextIsolation: true` and `nodeIntegration: false`. Never disable `webSecurity`.
 - Test messages only to "Note to self" / "Signal Note to Self".
@@ -334,7 +334,7 @@ main().catch((err) => {
 
 - [ ] **Step 2: Add the npm script**
 
-`package.json` is CRLF. Read it, insert the script, and write it back without changing the line endings:
+`package.json` is committed as CRLF and checked out as LF. Read it, insert the script, and write it back without changing the line endings:
 
 ```powershell
 $path = 'C:\Users\scott\.minimax\sessions\mvs_4dde349d75f244c0bc376193b4c9a51a\workspace\beeper-desktop-chat\package.json'
@@ -460,16 +460,24 @@ export function isEditableMessage(chat, message, now = Date.now()) {
  * Oldest first because that is the order the up arrow walks them: the
  * newest one is entered first, and each further press steps towards the
  * past.
+ *
+ * The order is made here rather than assumed of the caller: the list the
+ * renderer holds is usually oldest first already, but a message that
+ * arrives late, or a window that was paged in, does not have to be.
+ * Sorting a copy leaves the caller's array alone, and the sort is stable,
+ * so two messages sent in the same millisecond keep the order they came in.
  */
 export function editableMessages(chat, messages, now = Date.now()) {
-  return (messages || []).filter((message) => isEditableMessage(chat, message, now));
+  return (messages || [])
+    .filter((message) => isEditableMessage(chat, message, now))
+    .sort((a, b) => millisOf(a.timestamp) - millisOf(b.timestamp));
 }
 ```
 
 - [ ] **Step 5: Run the check and watch it pass**
 
 Run: `npm run check:syntax` then `npm run check:composeredit`
-Expected: `check:syntax` reports the new file parses; `check:composeredit` prints `22/22 checks passed`.
+Expected: `check:syntax` reports the new file parses; `check:composeredit` prints `27/27 checks passed` (22 rule cases and 5 source-level cases, which are counted in the same suite).
 
 - [ ] **Step 6: Commit**
 
