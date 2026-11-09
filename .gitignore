@@ -28,14 +28,15 @@ Thumbs.db
 !/docs/network-glyphs.png
 
 # Generated from index.html by check:historyrender, check:sidebar,
-# check:threadopen, check:paste, check:notificationclick and
-# check:threadsearch on every run
+# check:threadopen, check:paste, check:notificationclick,
+# check:threadsearch and check:composeredit on every run
 /tools/.history-render-harness.html
 /tools/.sidebar-check-harness.html
 /tools/.thread-open-harness.html
 /tools/.paste-harness.html
 /tools/.notification-click-harness.html
 /tools/.thread-search-harness.html
+/tools/.composer-edit-harness.html
 
 # Copied in by tools/download-shot.js to render a real video; not part of the repo
 /tools/.shot-video.mp4
