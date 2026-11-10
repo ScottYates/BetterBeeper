@@ -1233,10 +1233,106 @@ have passed it; the new check walks `src/`, and the red proof puts a batch
 file in `ipc.js` to prove the walk sees it. `tools/update-redproof.js` is now
 21/21, up from 17.
 
-## Verification status
+### The up arrow was right, and silence was the defect
 
-`npm run check:all` sweeps **50 suites**, and all 50 of them pass on a release
-commit. On the tree carrying the work, before the release is cut, 49 of them
+Reported as "the up arrow does not seem to work in all conversations. For
+instance Corinne's signal chat does not respond to up arrow".
+
+**The rules were correct.** Measured against the live bridge, over 100 chats,
+with the app's own `composer-edit-rules.js` imported into the probe:
+
+| chat | network | edit level | window | editable of mine |
+| --- | --- | --- | --- | --- |
+| Jim Kraai | Signal | 2 | 24 hours | 5 |
+| Mike Fazio | Signal | 2 | 24 hours | 1 |
+| Signal note to self | Signal | 2 | none | 1 |
+| **Corinne** | Signal | 2 | 24 hours | **0** |
+| Scott Burgess, Tracey Yates, Shawn Williams | Messenger | 2 | 15 minutes | 0 |
+| Note to self | Beeper (Matrix) | - | - | 20 |
+| Google Voice chats | Google Voice | no edit key | - | 0 |
+
+Corinne's newest message of yours was **94.0 hours old** and the window Signal
+publishes for that chat is 24 hours. Eight of your ten messages there were too
+old and two had attachments. Nothing was broken: the arrow had nothing it was
+allowed to open, and it said nothing about that.
+
+**A key that does nothing is indistinguishable from a broken key**, so the fix is
+to explain, not to change which messages are editable. The arrow still skips what
+it cannot edit and still opens the newest editable message when there is one.
+When there is nothing it can open it now:
+
+- says why, in the chat's own terms - the window the chat published (24 hours on
+  Signal, 15 minutes on Messenger, none on a note to self), and how old your
+  last message there was;
+- marks the message it could not open, with a dashed outline that is not the
+  editing outline, and scrolls the thread to it, so the sentence is about
+  something the reader is looking at.
+
+**One rule, two views.** `isEditableMessage` is `messageEditRefusal(...) ===
+null`, so the answer and the reason cannot disagree. The chat-level reason is
+the one that applies to **most** of your messages, a tie going to the newest,
+because that is the one the arrow would have opened. For Corinne that is "too
+old" (8 of 10), not "has attachment" (2 of 10).
+
+The refusal codes are the contract the explanation is written from:
+`chat-cannot-edit`, `chat-read-only`, `no-own-messages`, `too-old`,
+`has-attachment`, `not-confirmed`, `deleted`, `hidden`, `not-mine`.
+
+**One assumption to flag.** Scott's "if a message is not editable, show this and
+explain why" arrived with no image attached, and the questionnaire that would
+have settled it was interrupted by his next message. The reading taken was: mark
+the message in the thread and scroll to it, plus a toast naming the reason, the
+window and the age. The alternative reading - a note on the message bubble
+itself - is not what shipped, and it is the one thing here to revisit if the
+behaviour is not what was meant.
+
+### "Failed to download attachment" is the bridge talking, not the sender
+
+Measured: the phrase is the **first line of the message text itself**. When a
+bridge cannot download an attachment it does not send the message without it -
+it sends the message with the failure written into the text. Google's Voice
+bridge does it like this:
+
+```
+Failed to download attachment
+
+here's another deer I passed. big eight but not quite what I was looking for.
+```
+
+Four such messages on this account, **all Google Voice**, every one of them a
+voice message whose audio Google refused to serve when Beeper's bridge asked
+for it, and every one of them carrying **zero attachment objects**. Beeper's own
+SDK log (`%APPDATA%\BeeperTexts\logs\sdk\sdk-*.log`) says why:
+
+```
+{"level":"error","component":"bridges","local_bridge_id":"local-gvoice",
+ "request_url":"https://voice.google.com/u/0/a/i/71b0ffcda8c7540f291cb3032ecaa2ecec181517-1?s=1",
+ "status_code":400,"error":"unexpected status code 400",
+ "message":"Failed to download attachment"}
+```
+
+So the bubble read as if the sender had typed the complaint themselves and then
+said something else, and the missing file was nowhere to be seen. The
+placeholder is now taken off the text and shown as what it is: the sender's
+words stay the message, and a chip says "Attachment could not be downloaded".
+
+The placeholder only counts as one **when something follows it**, so a message
+that is exactly the phrase is still somebody's words.
+
+**The bytes cannot be recovered from here.** Google answers Beeper's bridge with
+HTTP 400 for those voice messages, so the file is not on this machine and
+cannot be fetched through the app. The most this app can do is present the
+failure honestly, and it now does.
+
+**Found, not fixed, and it is upstream.** Google Voice attachment ids are
+`file:///C:/...` URLs, and the bridge's `POST /v1/assets/download` rejects them
+with HTTP 400 `URL must start with mxc:// or localmxc://`. Twenty-four of the
+twenty-five attachments probed were fine, so this is a narrow fault in Beeper's
+Google Voice bridge rather than a general one.
+
+## Verification status
+`npm run check:all` sweeps **51 suites**, and all 51 of them pass on a release
+commit. On the tree carrying the work, before the release is cut, 50 of them
 pass: the one that does not is `check:released`, which is red until the release
 is cut, because `main` is ahead of the newest tag. It was 49 suites on the
 tree carrying the 2026-11-08 work, 48 of them passing; 47/47 on the tree
@@ -1257,8 +1353,10 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | --- | --- |
 | `check:update` | 62/62, after `check:update` gained a built helper to read the PE header of |
 | `check:proxy` | 5/5 checks passed, with a control run that has to show the proxy lookup |
-| `check:composeredit` | 48/48 checks passed |
-| `check:composereditrules` | 26/26 checks passed, with no Electron and no window |
+| `check:composeredit` | 58/58 checks passed |
+| `check:composereditrules` | 45/45 checks passed, with no Electron and no window |
+| `check:bridgeplaceholder` | 12/12 checks passed, with no Electron and no window (new) |
+| `check:threadopen` | 21/21 checks passed |
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
 | `tools/update-redproof.js` | 21/21 mutations caught, no holes |
 | `tools/proxy-redproof.js` | 5/5 mutations caught, no holes |
@@ -1266,7 +1364,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `tools/syntax-redproof.js` | 3/3 mutations caught, no holes |
 | `tools/avatar-redproof.js` | 4/4 mutations caught, no holes |
 | `tools/history-render-redproof.js` | 2/2 mutations caught, no holes |
-| `tools/composer-edit-redproof.js` | 29/29 mutations caught, no holes |
+| `tools/composer-edit-redproof.js` | 43/43 mutations caught, no holes |
 | `tools/thread-open-redproof.js` | 7/7 mutations caught, no holes |
 
 Individually measured: `check:entity` 0 failing across 31 cases,
@@ -1289,9 +1387,9 @@ mutations caught, 1/1 neutral rewrite tolerated (new),
 neutral rewrite tolerated (new),
 `check:historyrender` 28/28 and `tools/history-render-redproof.js` 2/2
 mutations caught, 1/1 neutral rewrite tolerated (new),
-`check:composereditrules` 26/26 and `check:composeredit` 48/48 and
-`tools/composer-edit-redproof.js` 29/29
-mutations caught, 1/1 neutral rewrite tolerated (new),
+`check:composereditrules` 45/45 and `check:composeredit` 58/58 and
+`tools/composer-edit-redproof.js` 43/43
+mutations caught, 1/1 neutral rewrite tolerated,
 `check:unread` 32/32, `check:layout` 13/13,
 `check:api` 136/136, `check:composer` 17/17, `check:actions` 21/21,
 `check:about` 6/6, `check:installer` passing, `check:syntax` OK on every JS
@@ -1366,6 +1464,18 @@ keeping:
    notices it is wrong. The git state section no longer names a version, so the
    part of it that used to go stale on every release now cannot. The rest of
    the file still has to be refreshed by hand.
+5. **The voice-message bytes are gone upstream.** Four Google Voice messages
+   on this account arrived with "Failed to download attachment" in front of
+   them because Google answers Beeper's own bridge with HTTP 400 when it asks
+   for those files. The app now shows that honestly - the sender's words and a
+   notice about the missing attachment - but **the files cannot be recovered
+   from this machine or from the app**. Nothing in this repository can change
+   that; it is Google's answer to Beeper's bridge.
+6. **Google Voice attachment ids are `file:///C:/...`**, and the bridge's
+   `POST /v1/assets/download` rejects them with HTTP 400 "URL must start with
+   mxc:// or localmxc://". Twenty-four of the twenty-five attachments probed
+   were fine, so it is a narrow fault in Beeper's Google Voice bridge. Not
+   fixable here; worth a report to Beeper if it is still true.
 
 Not outstanding any more, but still true and easy to trip over: the updater
 asks GitHub for a **Release**, not for a commit. It calls `releases/latest` and
