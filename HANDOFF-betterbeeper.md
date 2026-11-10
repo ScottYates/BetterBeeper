@@ -1330,6 +1330,27 @@ with HTTP 400 `URL must start with mxc:// or localmxc://`. Twenty-four of the
 twenty-five attachments probed were fine, so this is a narrow fault in Beeper's
 Google Voice bridge rather than a general one.
 
+### The notice about a missing attachment was beside the words, not above them
+
+The first version of the missing-attachment notice put the chip into the
+bubble as a third item in a row. The bubble is a row of text and timestamp
+(`.bubble-inner { display: flex; align-items: flex-end; gap: 9px; }`), so the
+words were squeezed into a narrow column down the side of the bubble with the
+chip sitting at the bottom of it.
+
+The notice and the words now share a column of their own (`.bubble-stack`):
+the notice is on its own line above the words, and the words start at the same
+left edge as the notice. The timestamp is unchanged - it is still at the
+trailing edge of the bubble, at the bottom.
+
+**The check measures the screen, and a screen with no layout measures
+nothing.** The app shell is hidden until the app's own script connects and the
+harness strips the scripts, so the shell is shown before anything is measured,
+and a control case fails loudly if there is still no layout: the list has to
+be taller than zero and the words wider than zero. Two mutations prove the
+case is load-bearing - removing the stack from the markup, and turning the
+column into a row - and both make it red.
+
 ## Verification status
 `npm run check:all` sweeps **51 suites**, and all 51 of them pass on a release
 commit. On the tree carrying the work, before the release is cut, 50 of them
@@ -1356,7 +1377,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:composeredit` | 58/58 checks passed |
 | `check:composereditrules` | 45/45 checks passed, with no Electron and no window |
 | `check:bridgeplaceholder` | 12/12 checks passed, with no Electron and no window (new) |
-| `check:threadopen` | 21/21 checks passed |
+| `check:threadopen` | 26/26 checks passed |
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
 | `tools/update-redproof.js` | 21/21 mutations caught, no holes |
 | `tools/proxy-redproof.js` | 5/5 mutations caught, no holes |
@@ -1365,7 +1386,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `tools/avatar-redproof.js` | 4/4 mutations caught, no holes |
 | `tools/history-render-redproof.js` | 2/2 mutations caught, no holes |
 | `tools/composer-edit-redproof.js` | 43/43 mutations caught, no holes |
-| `tools/thread-open-redproof.js` | 7/7 mutations caught, no holes |
+| `tools/thread-open-redproof.js` | 9/9 mutations caught, no holes |
 
 Individually measured: `check:entity` 0 failing across 31 cases,
 `check:rich` 27/27, `check:preview` 0 failing across 18 cases,
@@ -1376,8 +1397,8 @@ Individually measured: `check:entity` 0 failing across 31 cases,
 `check:contactrefresh` 71/71 and `tools/contact-refresh-redproof.js` 19/19
 mutations caught, 2/2 neutral rewrites tolerated (new),
 `check:paste` 52/52 (rewritten, new),
-`check:threadopen` 18/18 and `tools/thread-open-redproof.js` 7/7 mutations
-caught, 1/1 neutral rewrite tolerated (new),
+`check:threadopen` 26/26 and `tools/thread-open-redproof.js` 9/9 mutations
+caught, 1/1 neutral rewrite tolerated,
 `check:notificationclick` 20/20 and
 `tools/notification-click-redproof.js` 12/12 mutations caught, 1/1 neutral
 rewrite tolerated (new),
