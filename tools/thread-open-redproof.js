@@ -35,6 +35,7 @@ const ROOT = path.join(__dirname, '..');
 const FILES = {
   thread: path.join(ROOT, 'src', 'renderer', 'js', 'thread.js'),
   state: path.join(ROOT, 'src', 'renderer', 'js', 'state.js'),
+  css: path.join(ROOT, 'src', 'renderer', 'styles.css'),
 };
 
 const hash = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -120,6 +121,26 @@ const MUTATIONS = [
     to: '  const cached = renderableFrom(state.messages.get(chatID));',
     expect: 'a chat this window already has is drawn while the store read is pending',
     expectGreen: true,
+  },
+  {
+    // The notice about an attachment the bridge could not fetch is above the
+    // words of the message, not beside them. The bubble is a row of text and
+    // timestamp, so a notice in that row squeezes the words into a narrow
+    // column down the side of the bubble.
+    what: 'the notice about the missing attachment is beside the words again',
+    file: 'thread',
+    from: "      const stack = el('div', { class: 'bubble-stack' });\n      stack.append(missingAttachmentNode());\n      stack.append(words);\n      inner.append(stack);",
+    to: "      inner.append(missingAttachmentNode());\n      inner.append(words);",
+    expect: 'the notice is above the words, not beside them',
+  },
+  {
+    // The same rule, in the stylesheet: the column the notice and the words
+    // share has to be a column.
+    what: 'the notice and the words are laid out in a row',
+    file: 'css',
+    from: '.bubble-stack {\n  display: flex; flex-direction: column; align-items: stretch;',
+    to: '.bubble-stack {\n  display: flex; flex-direction: row; align-items: stretch;',
+    expect: 'the notice is above the words, not beside them',
   },
 ];
 

@@ -936,11 +936,21 @@ mark.ts-hit.is-current {
    bridge writes the failure into the text - so the bubble says what is
    missing rather than showing the failure as if the sender had written it. */
 .att-missing {
-  display: inline-flex; align-items: center;
-  margin-bottom: 5px; padding: 3px 8px;
+  display: inline-flex; align-items: center; align-self: flex-start;
+  padding: 3px 8px;
   border: 1px dashed var(--border); border-radius: 7px;
   color: var(--text-faint); font-size: 12px;
 }
+
+/* The notice, and the words of the message under it.
+   The bubble is a row of text and timestamp, so the notice needs a column of
+   its own: in that row it would squeeze the words into a narrow column down
+   the side of the bubble. */
+.bubble-stack {
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: 5px; flex: 1; min-width: 0;
+}
+.bubble-stack .bubble-text { flex: none; }
 
 /* The read receipt, on the message it belongs to. */
 .msg-seen { color: var(--text-faint); white-space: nowrap; }

@@ -346,8 +346,11 @@ async function main() {
           'Failed to download attachment\n\nhere is what the voice message said',
           6000,
         );
+        // An ordinary message beside it, so the control below has something
+        // to compare the bubble against.
+        const plain = msg('v2', 'c-voice', 'an ordinary message', 7000);
         S.state.chats.set('c-voice', chatRec('c-voice', 'A voice chat'));
-        plan = give({ messages: [voice], hasMore: false, complete: true });
+        plan = give({ messages: [voice, plain], hasMore: false, complete: true });
         await open('c-voice');
         await settle();
 
@@ -371,6 +374,77 @@ async function main() {
           const chip = node && node.querySelector('.att-missing');
           return (chip && /could not be downloaded/i.test(chip.textContent))
             || 'there is no notice about the missing attachment';
+        });
+
+        // --- the notice is above the words, not beside them -----------------
+        //
+        // The bubble is a row of text and timestamp. A notice in that row is
+        // a third item in it, and the words get squeezed into a narrow
+        // column down the side of the bubble instead of reading as a message
+        // with a line about it above.
+        //
+        // This measures the screen, so it needs a real layout. The app shell
+        // is hidden until the app's own script connects, and the harness
+        // strips the scripts, so the shell is shown here first. A hidden
+        // element has no layout, and a rectangle of zero is inside every
+        // pane - which is why the case below fails loudly rather than
+        // letting the measurements after it measure nothing.
+        const appShell = document.getElementById('app');
+        if (appShell) appShell.hidden = false;
+        await settle();
+
+        const rectOf = (node) => (node ? node.getBoundingClientRect() : null);
+        const plainNode = () => listEl.querySelector('[data-message-id="v2"]');
+        const plainWords = () => {
+          const node = plainNode();
+          const text = node && node.querySelector('.bubble-text');
+          return text || null;
+        };
+        const chipNode = () => {
+          const node = voiceBubble();
+          return node && node.querySelector('.att-missing');
+        };
+        const voiceWordsNode = () => {
+          const node = voiceBubble();
+          return node && node.querySelector('.bubble-text');
+        };
+
+        add('the thread has a real layout to measure', () => {
+          const text = plainWords();
+          const r = rectOf(text);
+          return (listEl.clientHeight > 0 && r && r.width > 0)
+            || ('the list is ' + listEl.clientHeight + 'px tall and the words are '
+              + (r ? r.width : 'nothing') + 'px wide');
+        });
+
+        add('the notice is above the words, not beside them', () => {
+          const chip = rectOf(chipNode());
+          const text = rectOf(voiceWordsNode());
+          if (!chip || !text) return 'there is nothing to measure';
+          return (chip.bottom <= text.top + 1)
+            || ('the notice ends at ' + chip.bottom + ' and the words start at ' + text.top);
+        });
+
+        add('the words are not squeezed down the side of the notice', () => {
+          const chip = rectOf(chipNode());
+          const text = rectOf(voiceWordsNode());
+          if (!chip || !text) return 'there is nothing to measure';
+          return (Math.abs(chip.left - text.left) <= 1)
+            || ('the notice starts at ' + chip.left + ' and the words at ' + text.left);
+        });
+
+        add('the words are not narrower than the notice beside them', () => {
+          const chip = rectOf(chipNode());
+          const text = rectOf(voiceWordsNode());
+          if (!chip || !text) return 'there is nothing to measure';
+          return (text.width >= chip.width - 1)
+            || ('the words are ' + text.width + 'px wide and the notice is ' + chip.width + 'px');
+        });
+
+        add('CONTROL: an ordinary message is not given a stack', () => {
+          const node = plainNode();
+          const stack = node && node.querySelector('.bubble-stack');
+          return (node && !stack) || 'an ordinary message grew a stack';
         });
 
         document.getElementById('modal-root') && document.getElementById('modal-root').replaceChildren();

@@ -1277,12 +1277,25 @@ export function messageNode(message, previous) {
   const body = splitBridgePlaceholder(message.text);
 
   if (!message.isDeleted && body.text) {
-    if (body.missing) inner.append(missingAttachmentNode());
-    inner.append(el('div', { class: 'bubble-text', html: renderRichText(body.text) }));
+    const words = el('div', { class: 'bubble-text', html: renderRichText(body.text) });
+    if (body.missing) {
+      // The notice is above the words, not beside them.
+      //
+      // The bubble is a row of text and timestamp, so a notice in that row
+      // is a third item in it: the words get squeezed into a narrow column
+      // down the side of the bubble, next to the notice, instead of reading
+      // as a message with a line about it above.
+      const stack = el('div', { class: 'bubble-stack' });
+      stack.append(missingAttachmentNode());
+      stack.append(words);
+      inner.append(stack);
+    } else {
+      inner.append(words);
+    }
   } else if (message.isDeleted) {
     inner.append(el('div', { class: 'bubble-text muted', text: 'This message was deleted' }));
   } else if (body.missing) {
-    inner.append(missingAttachmentNode());
+    inner.append(el('div', { class: 'bubble-stack' }, missingAttachmentNode()));
   } else if (!message.attachments?.length) {
     inner.append(
       el('div', { class: 'bubble-text muted', text: message.type ? `[${message.type.toLowerCase()}]` : '' }),
