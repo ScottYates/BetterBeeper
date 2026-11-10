@@ -927,6 +927,21 @@ mark.ts-hit.is-current {
 .composer.is-editing .composer-field { border-color: var(--accent); }
 .msg-bubble-wrap.is-editing .msg-bubble { outline: 1px solid var(--accent); }
 
+/* The message the up arrow could not edit. It is pointed at, not edited, so it
+   is dashed rather than solid: it must not read as a message that is open in
+   the composer. */
+.msg-bubble-wrap.is-not-editable .msg-bubble { outline: 1px dashed var(--text-faint); }
+
+/* An attachment the bridge could not fetch. The message still arrives - the
+   bridge writes the failure into the text - so the bubble says what is
+   missing rather than showing the failure as if the sender had written it. */
+.att-missing {
+  display: inline-flex; align-items: center;
+  margin-bottom: 5px; padding: 3px 8px;
+  border: 1px dashed var(--border); border-radius: 7px;
+  color: var(--text-faint); font-size: 12px;
+}
+
 /* The read receipt, on the message it belongs to. */
 .msg-seen { color: var(--text-faint); white-space: nowrap; }
 

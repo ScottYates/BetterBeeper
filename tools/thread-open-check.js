@@ -330,6 +330,49 @@ async function main() {
           opens.length === expectedOpens
           || (opens.length + ' store reads for ' + expectedOpens + ' opens'));
 
+        // --- an attachment the bridge could not fetch -----------------------
+        //
+        // Beeper's Google Voice bridge writes the failure into the message
+        // text when it cannot download an attachment, so the message arrives
+        // with "Failed to download attachment" at the front of the words the
+        // sender actually sent.
+        //
+        // Shown as it arrives, the bubble reads as if the sender had typed
+        // the complaint themselves, and the missing file is nowhere to be
+        // seen. So the placeholder is taken off the text and shown as what
+        // it is.
+        const voice = msg(
+          'v1', 'c-voice',
+          'Failed to download attachment\n\nhere is what the voice message said',
+          6000,
+        );
+        S.state.chats.set('c-voice', chatRec('c-voice', 'A voice chat'));
+        plan = give({ messages: [voice], hasMore: false, complete: true });
+        await open('c-voice');
+        await settle();
+
+        const voiceBubble = () => listEl.querySelector('[data-message-id="v1"]');
+        const voiceWords = () => {
+          const node = voiceBubble();
+          const text = node && node.querySelector('.bubble-text');
+          return text ? text.textContent : '';
+        };
+
+        add('the sender\'s words are still shown', () =>
+          /here is what the voice message said/.test(voiceWords())
+          || ('the bubble shows ' + JSON.stringify(voiceWords())));
+
+        add('the bridge\'s complaint is not shown as the sender\'s words', () =>
+          !/Failed to download attachment/.test(voiceWords())
+          || ('the bubble shows ' + JSON.stringify(voiceWords())));
+
+        add('the missing attachment is called a missing attachment', () => {
+          const node = voiceBubble();
+          const chip = node && node.querySelector('.att-missing');
+          return (chip && /could not be downloaded/i.test(chip.textContent))
+            || 'there is no notice about the missing attachment';
+        });
+
         document.getElementById('modal-root') && document.getElementById('modal-root').replaceChildren();
       }
     })()

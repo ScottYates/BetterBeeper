@@ -12,6 +12,7 @@
 import { api, call } from './api.js';
 import { state, upsertMessage, isMessageHidden, isMessageDeleted } from './state.js';
 import { decodeEntities, encodeEntities, clipText } from './entities.js';
+import { relative } from './util.js';
 import { toast } from './ui.js';
 import {
   chatAllowsEdit,
@@ -19,6 +20,8 @@ import {
   isEditableMessage,
   editableMessages,
   millisOf,
+  chatEditRefusal,
+  editWindowLabel,
 } from './composer-edit-rules.js';
 
 // The rules live in a module of their own, so they can be checked without a
@@ -30,6 +33,8 @@ export {
   isEditableMessage,
   editableMessages,
   millisOf,
+  chatEditRefusal,
+  editWindowLabel,
 };
 
 // ---------------------------------------------------------------------------
@@ -54,6 +59,8 @@ let deps = {
   focusComposer: () => {},
   renderAll: () => {},
   markEditing: () => {},
+  markNotEditable: () => {},
+  scrollToMessage: () => {},
 };
 
 let session = null;
@@ -201,7 +208,12 @@ function handleArrow(event) {
 function startEditFromComposer() {
   const chat = deps.getChat();
   if (!chat) return false;
-  if (!chatAllowsEdit(chat)) return false;
+  if (!chatAllowsEdit(chat)) {
+    // The chat cannot edit at all - Google Voice, for one. There is no message
+    // to point at, so the explanation is about the chat.
+    explainNoEdit();
+    return false;
+  }
 
   // A staged attachment has already been uploaded. Dropping it quietly would
   // throw away work, so the arrow refuses instead.
@@ -211,8 +223,65 @@ function startEditFromComposer() {
   }
 
   const list = candidateMessages();
-  if (!list.length) return false;
+  if (!list.length) {
+    // Nothing here can be edited. Say why, and say which message it was: an
+    // arrow that does nothing at all is the same thing as a broken feature.
+    explainNoEdit();
+    return false;
+  }
   return startEdit(list[list.length - 1]);
+}
+
+/**
+ * Explain why there is nothing to edit, and show the message it would have been.
+ *
+ * The message is shown because the reason is about a particular message. "Your
+ * last message here was sent 4d ago and Signal allows editing for 24 hours" is
+ * an answer about that message, and the reader should be looking at it while
+ * they read it.
+ */
+function explainNoEdit() {
+  const chat = deps.getChat();
+  const refusal = chatEditRefusal(chat, deps.getMessages() || []);
+  if (!refusal) return false;
+
+  if (refusal.message) {
+    deps.markNotEditable(refusal.message.id);
+    deps.scrollToMessage(refusal.message.id);
+  }
+  toast(refusalMessage(chat, refusal), 'info', 4500);
+  return true;
+}
+
+/**
+ * The sentence the toast is made of.
+ *
+ * The window is the chat's own, so it is the number Beeper published for that
+ * chat rather than a rule written here: fifteen minutes on Messenger,
+ * twenty-four hours on Signal, and no limit at all on the note to self.
+ */
+function refusalMessage(chat, refusal) {
+  const window = editWindowLabel(chat);
+  switch (refusal.code) {
+    case 'chat-cannot-edit':
+      return 'This chat does not support editing messages';
+    case 'chat-read-only':
+      return 'This chat is read-only, so there is nothing to edit';
+    case 'no-own-messages':
+      return 'You have not sent any messages in this chat yet';
+    case 'too-old': {
+      const age = refusal.newestOwnAt ? relative(refusal.newestOwnAt) : '';
+      const window_ = window ? ` for ${window} after you send them` : '';
+      const last = age ? ` Your last one here was sent ${age}.` : '';
+      return `Messages can only be edited${window_}.${last}`;
+    }
+    case 'has-attachment':
+      return 'A message with an attachment cannot be edited';
+    case 'not-confirmed':
+      return 'That message has not been sent yet';
+    default:
+      return 'There is nothing here to edit';
+  }
 }
 
 /**
@@ -259,6 +328,9 @@ export function startEdit(message) {
   // thread again would detach every image in it, which restarts an animated
   // GIF, and it would throw away where the reader was.
   deps.markEditing(message.id);
+  // The "this one cannot be edited" mark goes with it: the message it pointed
+  // at is now in the composer, and two marks on one bubble would be a puzzle.
+  deps.markNotEditable(null);
   deps.focusComposer();
   return true;
 }

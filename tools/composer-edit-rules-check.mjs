@@ -228,6 +228,182 @@ add('the same chat and the same messages always give the same list', withRules((
   return (a.length === 2 && a.join(',') === b.join(',')) || 'the list changed between calls';
 }));
 
+// --- the reason, not just the answer ------------------------------------------
+//
+// The up arrow was silent in the chats where nothing could be edited, and a
+// silent arrow is the same thing as a broken one. The arrow now explains
+// itself, and the explanation is written from these codes.
+//
+// The codes are the contract: the answer and the reason cannot disagree,
+// because the answer IS the reason being null.
+
+add('a message past the edit window is refused as too old', withRules((R) =>
+  R.messageEditRefusal(
+    chat({ edit: 2, editMaxAge: 900 }),
+    own({ timestamp: new Date(NOW - 1000000).toISOString() }),
+    NOW,
+  ) === 'too-old' || 'it was not refused as too old'));
+
+add('a message with an attachment is refused for the attachment', withRules((R) =>
+  R.messageEditRefusal(
+    chat({ edit: 2 }), own({ attachments: [{ mimeType: 'image/png' }] }), NOW,
+  ) === 'has-attachment' || 'it was not refused for the attachment'));
+
+add("somebody else's message is refused as not yours", withRules((R) =>
+  R.messageEditRefusal(chat({ edit: 2 }), own({ isSender: false }), NOW) === 'not-mine'
+  || 'it was not refused as not yours'));
+
+add('a chat that cannot edit refuses every message', withRules((R) =>
+  R.messageEditRefusal(chat({ attachments: {} }), own(), NOW) === 'chat-cannot-edit'
+  || 'it was not refused as chat-cannot-edit'));
+
+add('a deleted message is refused as deleted', withRules((R) =>
+  R.messageEditRefusal(chat({ edit: 2 }), own({ isDeleted: true }), NOW) === 'deleted'
+  || 'it was not refused as deleted'));
+
+add('a message that has not been sent is refused as not confirmed', withRules((R) =>
+  R.messageEditRefusal(chat({ edit: 2 }), own({ sendStatus: 'pending' }), NOW)
+  === 'not-confirmed' || 'it was not refused as not-confirmed'));
+
+add('CONTROL: the answer and the reason cannot disagree', withRules((R) => {
+  // Every kind of message, every kind of chat. For each one, the answer has
+  // to be exactly "the reason is null".
+  const chats = [
+    chat({ edit: 2 }),
+    chat({ edit: 2, editMaxAge: 900 }),
+    chat({ edit: 2, editMaxAge: 86400 }),
+    chat({ attachments: {} }),
+    { id: 'c1', isReadOnly: true, capabilities: { edit: 2 } },
+  ];
+  const messages = [
+    own(),
+    own({ isSender: false }),
+    own({ isDeleted: true }),
+    own({ isHidden: true }),
+    own({ attachments: [{}] }),
+    own({ sendStatus: 'pending' }),
+    own({ timestamp: new Date(NOW - 100000000).toISOString() }),
+    own({ timestamp: new Date(NOW - 1000).toISOString() }),
+    own({ timestamp: null }),
+  ];
+  for (const c of chats) {
+    for (const m of messages) {
+      const reason = R.messageEditRefusal(c, m, NOW);
+      const answer = R.isEditableMessage(c, m, NOW);
+      if (answer !== (reason === null)) {
+        return `the answer was ${answer} but the reason was ${reason}`;
+      }
+    }
+  }
+  return true;
+}));
+
+// --- the explanation ----------------------------------------------------------
+
+add('CONTROL: a chat with something editable has nothing to explain', withRules((R) =>
+  R.chatEditRefusal(chat({ edit: 2 }), [own()], NOW) === null
+  || 'it explained something'));
+
+add('a chat that cannot edit is explained as such', withRules((R) => {
+  const refusal = R.chatEditRefusal(chat({ attachments: {} }), [own()], NOW);
+  return (refusal && refusal.code === 'chat-cannot-edit')
+  || 'it said ' + (refusal && refusal.code);
+}));
+
+add('a chat you have never written in is explained as such', withRules((R) => {
+  const refusal = R.chatEditRefusal(
+    chat({ edit: 2 }), [own({ isSender: false })], NOW,
+  );
+  return (refusal && refusal.code === 'no-own-messages')
+  || 'it said ' + (refusal && refusal.code);
+}));
+
+add('the explanation names the message it is about', withRules((R) => {
+  const refusal = R.chatEditRefusal(
+    chat({ edit: 2, editMaxAge: 900 }),
+    [own({ id: 'm1', timestamp: new Date(NOW - 1000000).toISOString() })],
+    NOW,
+  );
+  return (refusal && refusal.message && refusal.message.id === 'm1')
+  || 'it named no message';
+}));
+
+// The measured case: Corinne's Signal chat, where eight of the ten messages
+// are too old and two have attachments. The reason that explains the chat is
+// the one that applies to the most of your messages.
+add('the reason that explains the chat is the one that applies to most of your messages',
+  withRules((R) => {
+    const messages = [];
+    for (let i = 0; i < 8; i++) {
+      messages.push(own({
+        id: 'old' + i,
+        timestamp: new Date(NOW - 94 * 3600 * 1000).toISOString(),
+      }));
+    }
+    for (let i = 0; i < 2; i++) {
+      messages.push(own({
+        id: 'att' + i,
+        attachments: [{ mimeType: 'image/png' }],
+        timestamp: new Date(NOW - 94 * 3600 * 1000).toISOString(),
+      }));
+    }
+    const refusal = R.chatEditRefusal(chat({ edit: 2, editMaxAge: 86400 }), messages, NOW);
+    return (refusal && refusal.code === 'too-old')
+    || 'it said ' + (refusal && refusal.code);
+  }));
+
+add('CONTROL: a tie in the reasons goes to the newest message', withRules((R) => {
+  // One message too old, one with an attachment, the attachment is newer.
+  const messages = [
+    own({ id: 'old', timestamp: new Date(NOW - 1000000).toISOString() }),
+    own({ id: 'att', attachments: [{}], timestamp: new Date(NOW - 2000).toISOString() }),
+  ];
+  const refusal = R.chatEditRefusal(chat({ edit: 2, editMaxAge: 900 }), messages, NOW);
+  return (refusal && refusal.code === 'has-attachment' && refusal.message.id === 'att')
+  || ('it said ' + (refusal && refusal.code) + ' about ' + (refusal && refusal.message && refusal.message.id));
+}));
+
+add('the explanation carries the chat\'s own edit window', withRules((R) => {
+  const refusal = R.chatEditRefusal(
+    chat({ edit: 2, editMaxAge: 86400 }),
+    [own({ timestamp: new Date(NOW - 100000000).toISOString() })],
+    NOW,
+  );
+  return (refusal && refusal.maxAgeSeconds === 86400)
+  || 'it carried ' + (refusal && refusal.maxAgeSeconds);
+}));
+
+// --- the window, written the way a person says it -----------------------------
+
+add('a twenty-four hour window is written as 24 hours', withRules((R) =>
+  R.editWindowLabel(chat({ edit: 2, editMaxAge: 86400 })) === '24 hours'
+  || 'it said ' + R.editWindowLabel(chat({ edit: 2, editMaxAge: 86400 }))));
+
+add('a fifteen minute window is written as 15 minutes', withRules((R) =>
+  R.editWindowLabel(chat({ edit: 2, editMaxAge: 900 })) === '15 minutes'
+  || 'it said ' + R.editWindowLabel(chat({ edit: 2, editMaxAge: 900 }))));
+
+add('a one hour window is written as 1 hour', withRules((R) =>
+  R.editWindowLabel(chat({ edit: 2, editMaxAge: 3600 })) === '1 hour'
+  || 'it said ' + R.editWindowLabel(chat({ edit: 2, editMaxAge: 3600 }))));
+
+add('CONTROL: a chat with no window has nothing to say about one', withRules((R) =>
+  R.editWindowLabel(chat({ edit: 2 })) === ''
+  || 'it said ' + R.editWindowLabel(chat({ edit: 2 }))));
+
+// --- your own messages -------------------------------------------------------
+
+add('your own messages are the ones the arrow walks past', withRules((R) => {
+  const list = R.ownMessages([
+    own({ id: 'm2', timestamp: new Date(NOW - 2000).toISOString() }),
+    own({ id: 'm1', timestamp: new Date(NOW - 9000).toISOString() }),
+    own({ id: 'theirs', isSender: false, timestamp: new Date(NOW - 3000).toISOString() }),
+    own({ id: 'gone', isDeleted: true, timestamp: new Date(NOW - 4000).toISOString() }),
+  ]);
+  return (list.length === 2 && list[0].id === 'm1' && list[1].id === 'm2')
+  || ('got ' + list.map((m) => m.id).join(','));
+}));
+
 // --- the report --------------------------------------------------------------
 
 let failed = 0;

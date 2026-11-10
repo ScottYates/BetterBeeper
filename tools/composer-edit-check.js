@@ -94,6 +94,17 @@ async function main() {
           text, timestamp: ts, isSender: true, type: 'TEXT', attachments: [],
         }, over || {});
 
+        // A chat where nothing of yours can be edited any more.
+        //
+        // This is the measured case: Corinne's Signal chat, where every one
+        // of your messages is older than the twenty-four hours Signal allows.
+        // The up arrow did nothing at all there, and an arrow that does
+        // nothing is the same thing as a broken key.
+        const staleMessages = [
+          bubble('stale-old', new Date(LIVE - 96 * 3600 * 1000).toISOString(), 'four days ago', { chatID: 'c-stale' }),
+          bubble('stale-new', new Date(LIVE - 94 * 3600 * 1000).toISOString(), 'four days ago, a little newer', { chatID: 'c-stale' }),
+        ];
+
         window.beeper = {
           on: () => {},
           chats: {
@@ -128,8 +139,8 @@ async function main() {
             // one is not mine and one has a picture. With only two eligible
             // messages the step could never be caught skipping anything, so
             // the skipping would be untested.
-            open: async () => envelope({
-              messages: [
+            open: async (chatID) => envelope({
+              messages: chatID === 'c-stale' ? staleMessages : [
                 bubble('oldest', new Date(LIVE - 5000).toISOString(), 'the oldest one'),
                 bubble('theirs', new Date(LIVE - 4000).toISOString(), 'not mine', { isSender: false }),
                 bubble('pictures', new Date(LIVE - 3000).toISOString(), 'with a picture', { attachments: [{ mimeType: 'image/png' }] }),
@@ -607,6 +618,191 @@ async function main() {
           const opened = session.messageID;
           CE.cancelEdit();
           return opened === 'newest' || ('it opened on ' + opened);
+        });
+
+        // --- the arrow explains itself -------------------------------------
+
+        // The measured case: Corinne's Signal chat, where every message of
+        // yours is older than the twenty-four hours Signal allows. The up
+        // arrow used to do nothing at all there, and a key that does nothing
+        // is indistinguishable from a broken one.
+        S.state.chats.set('c-stale', {
+          id: 'c-stale',
+          title: 'An old conversation',
+          type: 'single',
+          participants: { items: [{ isSelf: true }, { isSelf: false }] },
+          capabilities: { edit: 2, editMaxCount: 10, editMaxAge: 86400 },
+        });
+
+        const toastRoot = document.getElementById('toast-root');
+        const clearToasts = () => { if (toastRoot) toastRoot.innerHTML = ''; };
+
+        await add('the up arrow does not open an edit when nothing can be edited', async () => {
+          await T.openChat('c-stale');
+          await settle(250);
+          composer.value = '';
+          CE.cancelEdit();
+          clearToasts();
+          press('ArrowUp');
+          const opened = CE.isEditing();
+          CE.cancelEdit();
+          return opened === false || 'the arrow opened an edit on an old message';
+        });
+
+        await add('the up arrow says why it cannot edit anything', async () => {
+          clearToasts();
+          composer.value = '';
+          CE.cancelEdit();
+          press('ArrowUp');
+          const said = toastRoot ? toastRoot.textContent : '';
+          // The window is the chat's own: Signal allows twenty-four hours.
+          const ok = /can only be edited for 24 hours/.test(said) && /3d ago/.test(said);
+          CE.cancelEdit();
+          return ok || ('the toast said: ' + said);
+        });
+
+        await add('the message it could not edit is marked in the thread', async () => {
+          clearToasts();
+          composer.value = '';
+          CE.cancelEdit();
+          press('ArrowUp');
+          const node = document.querySelector('[data-message-id="stale-new"]');
+          const wrap = node && node.querySelector('.msg-bubble-wrap');
+          const marked = Boolean(wrap && wrap.classList.contains('is-not-editable'));
+          // It is pointed at, not edited: the two marks must not be confused.
+          const notEditing = Boolean(wrap && !wrap.classList.contains('is-editing'));
+          CE.cancelEdit();
+          return (marked && notEditing)
+            || ('the message is marked: ' + marked + ', it is marked as being edited: ' + !notEditing);
+        });
+
+        await add('the mark is on the newest message that failed, not on the oldest one', async () => {
+          clearToasts();
+          composer.value = '';
+          CE.cancelEdit();
+          press('ArrowUp');
+          const newer = document.querySelector('[data-message-id="stale-new"] .msg-bubble-wrap');
+          const older = document.querySelector('[data-message-id="stale-old"] .msg-bubble-wrap');
+          const ok = Boolean(newer && newer.classList.contains('is-not-editable'))
+            && Boolean(older && !older.classList.contains('is-not-editable'));
+          CE.cancelEdit();
+          return ok || 'the mark was on the wrong message';
+        });
+
+        await add('the thread is scrolled to the message it could not edit', async () => {
+          clearToasts();
+          composer.value = '';
+          CE.cancelEdit();
+          // The window is hidden, so the browser never paints and the frame
+          // the scroll waits for never arrives on its own. The frames are
+          // held back here and run by hand, so the call can be seen at all.
+          //
+          // What this cannot show is where the message ends up on screen:
+          // there is no layout in a hidden window, so a position would be a
+          // measurement of nothing. What it shows is that the thread asked
+          // to bring that message into view.
+          const frames = [];
+          const originalRaf = window.requestAnimationFrame;
+          window.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
+          const scrolled = [];
+          const original = Element.prototype.scrollIntoView;
+          Element.prototype.scrollIntoView = function () { scrolled.push(this); };
+          press('ArrowUp');
+          for (let i = 0; i < frames.length; i += 1) {
+            try { frames[i](Date.now()); } catch (e) { /* a frame that cannot run */ }
+          }
+          Element.prototype.scrollIntoView = original;
+          window.requestAnimationFrame = originalRaf;
+          CE.cancelEdit();
+          return scrolled.some((node) => node && node.dataset && node.dataset.messageId === 'stale-new')
+            || ('the thread scrolled to ' + scrolled.map((n) => n && n.dataset && n.dataset.messageId).join(','));
+        });
+
+        await add('CONTROL: a message that can be edited opens without an explanation', async () => {
+          await T.openChat('c-edit');
+          await settle(250);
+          clearToasts();
+          composer.value = '';
+          CE.cancelEdit();
+          press('ArrowUp');
+          const opened = CE.isEditing();
+          const said = toastRoot ? toastRoot.textContent : '';
+          CE.cancelEdit();
+          return (opened === true && !/can only be edited/.test(said))
+            || ('the edit opened: ' + opened + ', the toast said: ' + said);
+        });
+
+        await add('CONTROL: the mark goes when the chat is opened again', async () => {
+          await T.openChat('c-stale');
+          await settle(250);
+          clearToasts();
+          composer.value = '';
+          CE.cancelEdit();
+          press('ArrowUp');
+          await T.openChat('c-edit');
+          await settle(250);
+          const node = document.querySelector('[data-message-id="stale-new"]');
+          const wrap = node && node.querySelector('.msg-bubble-wrap');
+          const stillMarked = Boolean(wrap && wrap.classList.contains('is-not-editable'));
+          return stillMarked === false || 'the mark survived the chat switch';
+        });
+
+        await add('the state says which message could not be edited', async () => {
+          await T.openChat('c-stale');
+          await settle(250);
+          clearToasts();
+          composer.value = '';
+          CE.cancelEdit();
+          press('ArrowUp');
+          const said = S.state.notEditable;
+          CE.cancelEdit();
+          return said === 'stale-new' || ('the state says ' + JSON.stringify(said));
+        });
+
+        await add('the mark survives the thread being drawn again', async () => {
+          await T.openChat('c-stale');
+          await settle(250);
+          clearToasts();
+          composer.value = '';
+          CE.cancelEdit();
+          press('ArrowUp');
+          // The thread is drawn again because the message changed. The mark
+          // is part of what is drawn, so it has to come back with it.
+          S.upsertMessage('c-stale', bubble(
+            'stale-new',
+            new Date(LIVE - 94 * 3600 * 1000).toISOString(),
+            'four days ago, a little newer, and said again',
+            { chatID: 'c-stale' },
+          ));
+          await settle(250);
+          const node = document.querySelector('[data-message-id="stale-new"]');
+          const wrap = node && node.querySelector('.msg-bubble-wrap');
+          const marked = Boolean(wrap && wrap.classList.contains('is-not-editable'));
+          CE.cancelEdit();
+          return marked || 'the mark was lost when the thread was drawn again';
+        });
+
+        // A chat that cannot edit at all - Google Voice, for one - has no
+        // message to point at, so the explanation is about the chat.
+        await add('a chat that cannot edit at all says so', async () => {
+          S.state.chats.set('c-voice', {
+            id: 'c-voice',
+            title: 'A voice chat',
+            type: 'single',
+            participants: { items: [{ isSelf: true }, { isSelf: false }] },
+            capabilities: { attachments: {} },
+          });
+          await T.openChat('c-voice');
+          await settle(250);
+          clearToasts();
+          composer.value = '';
+          CE.cancelEdit();
+          press('ArrowUp');
+          const opened = CE.isEditing();
+          const said = toastRoot ? toastRoot.textContent : '';
+          CE.cancelEdit();
+          return (opened === false && /does not support editing/.test(said))
+            || ('the edit opened: ' + opened + ', the toast said: ' + said);
         });
       }
     })()

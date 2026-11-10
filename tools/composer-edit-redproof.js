@@ -28,6 +28,7 @@ const FILES = {
   thread: path.join(ROOT, 'src', 'renderer', 'js', 'thread.js'),
   rules: path.join(ROOT, 'src', 'renderer', 'js', 'composer-edit-rules.js'),
   entities: path.join(ROOT, 'src', 'renderer', 'js', 'entities.js'),
+  placeholder: path.join(ROOT, 'src', 'renderer', 'js', 'bridge-placeholder.js'),
   css: path.join(ROOT, 'src', 'renderer', 'styles.css'),
 };
 
@@ -37,12 +38,18 @@ const SUITE = {
   thread: 'check:composeredit',
   rules: 'check:composereditrules',
   entities: 'check:composeredit',
+  placeholder: 'check:bridgeplaceholder',
   css: 'check:composeredit',
 };
 
 // The suites the proof needs a baseline for. Every one of them has to be
 // green before a single byte is changed.
-const BASELINE_SUITES = ['check:composereditrules', 'check:composeredit'];
+const BASELINE_SUITES = [
+  'check:composereditrules',
+  'check:bridgeplaceholder',
+  'check:threadopen',
+  'check:composeredit',
+];
 
 const hash = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 
@@ -128,22 +135,22 @@ const MUTATIONS = [
   {
     what: 'the edit window is ignored',
     file: 'rules',
-    from: "    if (now - sent > maxAge * 1000) return false;",
-    to: "    if (false) return false;",
+    from: "    if (now - sent > maxAge * 1000) return 'too-old';",
+    to: "    if (false) return 'too-old';",
     expect: 'CONTROL: a message past the edit window cannot be edited',
   },
   {
     what: 'a message with an attachment can be edited',
     file: 'rules',
-    from: "  if ((message.attachments || []).length) return false;",
-    to: '',
+    from: "  if ((message.attachments || []).length) return 'has-attachment';",
+    to: "  if ((message.attachments || []).length) return null;",
     expect: 'a message with an attachment cannot be edited',
   },
   {
     what: 'somebody else\'s message can be edited',
     file: 'rules',
-    from: "  if (!message.isSender) return false;",
-    to: '',
+    from: "  if (!message.isSender) return 'not-mine';",
+    to: "  if (!message.isSender) return null;",
     expect: 'CONTROL: somebody else\'s message cannot be edited',
   },
   {
@@ -152,8 +159,8 @@ const MUTATIONS = [
     // then asks Beeper to edit an id it has never heard of.
     what: 'a message that has not been sent yet can be edited',
     file: 'rules',
-    from: "  if (!confirmedByBeeper(message)) return false;",
-    to: '',
+    from: "  if (!confirmedByBeeper(message)) return 'not-confirmed';",
+    to: "  if (!confirmedByBeeper(message)) return null;",
     expect: 'a message that has not been sent yet cannot be edited',
   },
   {
@@ -235,8 +242,18 @@ const MUTATIONS = [
     // GIFs all over again.
     what: 'the signature is left stale when the marker moves',
     file: 'thread',
-    from: "  lastThreadSignature = threadSignature(renderableMessages(state.activeChatID));",
-    to: '',
+    // Both markers have to keep the signature in step: the editing marker and
+    // the "this one cannot be edited" marker. Removing either one on its own
+    // is masked by the other, because startEdit clears the second marker
+    // right after it moves the first.
+    from: [
+      "  // same bug through a different door.\n  lastThreadSignature = threadSignature(renderableMessages(state.activeChatID));",
+      "    else wrap.classList.remove('is-not-editable');\n  }\n  lastThreadSignature = threadSignature(renderableMessages(state.activeChatID));",
+    ],
+    to: [
+      "  // same bug through a different door.",
+      "    else wrap.classList.remove('is-not-editable');\n  }",
+    ],
     expect: 'an upsert that changes nothing visible does not rebuild the thread',
   },
   {
@@ -345,6 +362,139 @@ const MUTATIONS = [
     to: "  const step = event.key !== 'ArrowUp' ? 1 : -1;",
     expect: 'the up arrow again steps to the older message',
     expectGreen: true,
+  },
+
+  // --- the arrow explains itself -----------------------------------------
+  //
+  // The measured case: Corinne's Signal chat, where every message of yours
+  // is older than the twenty-four hours Signal allows. The arrow did nothing
+  // at all there, and an arrow that does nothing reads as a broken key.
+
+  {
+    // The reason the explanation is written from. Without the age rule every
+    // message looks editable, so the arrow opens an edit that Beeper will
+    // refuse.
+    what: 'a message past the edit window is not refused as too old',
+    file: 'rules',
+    from: "    if (now - sent > maxAge * 1000) return 'too-old';",
+    to: "    if (now - sent > maxAge * 1000) return null;",
+    expect: 'a message past the edit window is refused as too old',
+  },
+  {
+    // The reason that explains the chat is the one that applies to the most
+    // of your messages. A tie goes to the newest, because that is the one the
+    // arrow would have opened.
+    what: 'the explanation always uses the newest message\'s reason',
+    file: 'rules',
+    from: "    if (count > bestCount) {",
+    to: "    if (false) {",
+    expect: 'the reason that explains the chat is the one that applies to most of your messages',
+  },
+  {
+    // The chat-level refusal is what the explanation is written from.
+    what: 'the chat is never explained',
+    file: 'rules',
+    from: "  if (reasons.includes(null)) return null;",
+    to: "  if (reasons.includes(null) || true) return null;",
+    expect: 'the explanation names the message it is about',
+  },
+  {
+    // The window in the sentence is the chat's own, read from what Beeper
+    // published for that chat rather than written here.
+    what: 'the edit window is written in the wrong words',
+    file: 'rules',
+    from: "    return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;",
+    to: "    return `${hours} hrs`;",
+    expect: 'a twenty-four hour window is written as 24 hours',
+  },
+  {
+    // The arrow has to say something. A toast that is never raised is the
+    // same silence as before.
+    what: 'the arrow never explains itself',
+    file: 'edit',
+    from: "function explainNoEdit() {\n  const chat = deps.getChat();",
+    to: "function explainNoEdit() {\n  return false;\n  const chat = deps.getChat();",
+    expect: 'the up arrow says why it cannot edit anything',
+  },
+  {
+    // The sentence is the reason, written for a person.
+    what: 'the explanation is written but never shown',
+    file: 'edit',
+    from: "  toast(refusalMessage(chat, refusal), 'info', 4500);",
+    to: "  void refusalMessage(chat, refusal);",
+    expect: 'the up arrow says why it cannot edit anything',
+  },
+  {
+    // The message the explanation is about has to be marked, or the reader
+    // is told about a message they cannot find.
+    what: 'the message it could not edit is never marked',
+    file: 'thread',
+    from: "    if (id === messageID) wrap.classList.add('is-not-editable');",
+    to: "    if (id === messageID) wrap.classList.remove('is-not-editable');",
+    expect: 'the message it could not edit is marked in the thread',
+  },
+  {
+    // The mark is part of what is drawn, so the state has to remember it.
+    what: 'the state does not remember which message was marked',
+    file: 'thread',
+    from: "  state.notEditable = messageID || null;",
+    to: "  state.notEditable = null;",
+    expect: 'the state says which message could not be edited',
+  },
+  {
+    // A thread drawn again while the mark is up has to come back with it.
+    what: 'the mark is not drawn with the bubble',
+    file: 'thread',
+    from: "  if (state.notEditable === message.id) bubbleWrap.classList.add('is-not-editable');",
+    to: '',
+    expect: 'the mark survives the thread being drawn again',
+  },
+  {
+    // The explanation is about that message, so the reader is taken to it.
+    what: 'the thread is not scrolled to the message it could not edit',
+    file: 'thread',
+    from: "function scrollToMessage(messageID) {\n  requestAnimationFrame(() => {",
+    to: "function scrollToMessage(messageID) {\n  requestAnimationFrame(() => {\n    if (messageID) return;",
+    expect: 'the thread is scrolled to the message it could not edit',
+  },
+
+  // --- the attachment the bridge could not fetch --------------------------
+
+  {
+    // The bridge writes the failure into the message text. Shown as it
+    // arrives, the bubble reads as if the sender had typed the complaint.
+    what: 'the bridge\'s complaint is shown as the sender\'s words',
+    file: 'thread',
+    from: "  const body = splitBridgePlaceholder(message.text);",
+    to: "  const body = { missing: false, text: message.text };",
+    expect: 'the bridge\'s complaint is not shown as the sender\'s words',
+    suite: 'check:threadopen',
+  },
+  {
+    // The missing file has to be called a missing file.
+    what: 'the missing attachment is not called one',
+    file: 'thread',
+    from: "  return el('div', { class: 'att-missing', text: 'Attachment could not be downloaded' });",
+    to: "  return el('div', { class: 'att-missing-x', text: 'Attachment could not be downloaded' });",
+    expect: 'the missing attachment is called a missing attachment',
+    suite: 'check:threadopen',
+  },
+  {
+    // The rule that recognises the bridge's placeholder.
+    what: 'the bridge\'s placeholder is never recognised',
+    file: 'placeholder',
+    from: "  if (!text.startsWith(PLACEHOLDER)) return { missing: false, text };",
+    to: "  return { missing: false, text };",
+    expect: 'the measured message is recognised as a missing attachment',
+  },
+  {
+    // A message that is exactly the placeholder, with nothing after it, is
+    // somebody's own words.
+    what: 'a message that is exactly the placeholder is treated as missing',
+    file: 'placeholder',
+    from: "  if (!rest.startsWith('\\n')) return { missing: false, text };",
+    to: '',
+    expect: 'CONTROL: a message that is exactly the placeholder is the sender\'s words',
   },
 ];
 

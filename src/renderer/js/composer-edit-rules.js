@@ -91,32 +91,132 @@ export function confirmedByBeeper(message) {
 }
 
 /**
+ * Why this message cannot be edited, or null when it can.
+ *
+ * The checks are in the same order `isEditableMessage` uses, so the reason and
+ * the answer can never disagree: the answer is the reason being null. One
+ * rule, two views of it.
+ *
+ * The codes are what the explanation is written from, so they are part of the
+ * contract rather than an implementation detail.
+ */
+export function messageEditRefusal(chat, message, now = Date.now()) {
+  if (!chat || !message) return 'no-message';
+  if (!chatAllowsEdit(chat)) return 'chat-cannot-edit';
+  // A read-only chat cannot be written to at all, so there is nothing to
+  // edit in it either.
+  if (chat.isReadOnly) return 'chat-read-only';
+  if (!message.isSender) return 'not-mine';
+  if (message.isDeleted) return 'deleted';
+  if (message.isHidden) return 'hidden';
+  // A message that only exists on this device is not a message Beeper has.
+  if (!confirmedByBeeper(message)) return 'not-confirmed';
+  // Beeper's own rule: a message with an attachment cannot be edited.
+  if ((message.attachments || []).length) return 'has-attachment';
+
+  const maxAge = editMaxAgeSeconds(chat);
+  if (maxAge !== null) {
+    const sent = millisOf(message.timestamp);
+    if (!sent) return 'no-timestamp';
+    if (now - sent > maxAge * 1000) return 'too-old';
+  }
+  return null;
+}
+
+/**
  * Can this message be edited, right now?
  *
  * `now` is a parameter so a check can ask about a message sent two days ago
  * without waiting two days.
  */
 export function isEditableMessage(chat, message, now = Date.now()) {
-  if (!chat || !message) return false;
-  if (!chatAllowsEdit(chat)) return false;
-  // A read-only chat cannot be written to at all, so there is nothing to
-  // edit in it either.
-  if (chat.isReadOnly) return false;
-  if (!message.isSender) return false;
-  if (message.isDeleted) return false;
-  if (message.isHidden) return false;
-  // A message that only exists on this device is not a message Beeper has.
-  if (!confirmedByBeeper(message)) return false;
-  // Beeper's own rule: a message with an attachment cannot be edited.
-  if ((message.attachments || []).length) return false;
+  return messageEditRefusal(chat, message, now) === null;
+}
 
-  const maxAge = editMaxAgeSeconds(chat);
-  if (maxAge !== null) {
-    const sent = millisOf(message.timestamp);
-    if (!sent) return false;
-    if (now - sent > maxAge * 1000) return false;
+/**
+ * Your own messages, oldest first.
+ *
+ * The same list the up arrow walks, without the editability test on it: the
+ * messages it cannot open are the ones the explanation is about.
+ */
+export function ownMessages(messages) {
+  return (messages || [])
+    .filter((m) => m && m.isSender && !m.isDeleted && !m.isHidden)
+    .sort((a, b) => millisOf(a.timestamp) - millisOf(b.timestamp));
+}
+
+/**
+ * Why there is nothing to edit in this chat, and which message it was.
+ *
+ * Null when something in the chat can be edited.
+ *
+ * The reason reported is the one that applies to the most of your messages,
+ * because that is the one that explains the chat. A tie goes to the newest
+ * message, because that is the one the arrow would have opened.
+ */
+export function chatEditRefusal(chat, messages, now = Date.now()) {
+  if (!chat) return null;
+  if (!chatAllowsEdit(chat)) {
+    return { code: 'chat-cannot-edit', message: null, maxAgeSeconds: null, newestOwnAt: null };
   }
-  return true;
+  if (chat.isReadOnly) {
+    return { code: 'chat-read-only', message: null, maxAgeSeconds: null, newestOwnAt: null };
+  }
+
+  const own = ownMessages(messages);
+  if (!own.length) {
+    return { code: 'no-own-messages', message: null, maxAgeSeconds: null, newestOwnAt: null };
+  }
+
+  const reasons = own.map((m) => messageEditRefusal(chat, m, now));
+  // Something in here can be edited, so there is nothing to explain.
+  if (reasons.includes(null)) return null;
+
+  const counts = new Map();
+  for (const reason of reasons) counts.set(reason, (counts.get(reason) || 0) + 1);
+  const newestReason = reasons[reasons.length - 1];
+  let best = newestReason;
+  let bestCount = counts.get(newestReason) || 0;
+  for (const [reason, count] of counts) {
+    if (count > bestCount) {
+      best = reason;
+      bestCount = count;
+    }
+  }
+
+  // The message the explanation is about is the newest one that fails for
+  // that reason, so the reason and the message agree.
+  let shown = null;
+  for (let i = own.length - 1; i >= 0; i -= 1) {
+    if (reasons[i] === best) {
+      shown = own[i];
+      break;
+    }
+  }
+
+  return {
+    code: best,
+    message: shown,
+    maxAgeSeconds: editMaxAgeSeconds(chat),
+    newestOwnAt: shown ? millisOf(shown.timestamp) : null,
+  };
+}
+
+/**
+ * The edit window, written the way a person would say it.
+ *
+ * "24 hours" on Signal, "15 minutes" on Messenger, and '' for a chat with no
+ * window at all.
+ */
+export function editWindowLabel(chat) {
+  const seconds = editMaxAgeSeconds(chat);
+  if (seconds === null) return '';
+  if (seconds >= 3600 && seconds % 3600 === 0) {
+    const hours = seconds / 3600;
+    return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+  }
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
 }
 
 /**

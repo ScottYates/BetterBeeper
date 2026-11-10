@@ -14,6 +14,7 @@ import {
   escapeHtml,
 } from './util.js';
 import { decodeEntities, clipText } from './entities.js';
+import { splitBridgePlaceholder } from './bridge-placeholder.js';
 import { initThreadSearch, applyThreadSearchHighlights, closeThreadSearch } from './thread-search.js';
 import {
   initComposerEdit,
@@ -167,6 +168,8 @@ export function initThread() {
     focusComposer: () => focusComposer(),
     renderAll: () => renderAll(),
     markEditing: (messageID) => markEditing(messageID),
+    markNotEditable: (messageID) => markNotEditable(messageID),
+    scrollToMessage: (messageID) => scrollToMessage(messageID),
   });
 
   // A job's progress is the only thing that starts and stops the refresh
@@ -370,6 +373,8 @@ export async function openChat(chatID, { focusMessageID: focusId } = {}) {
     // The edit belongs to the conversation it was started in. The thread is
     // drawn again below, so the banner does not need a second redraw.
     cancelEdit({ render: false });
+    // The mark belongs to the conversation it was made in, so it goes with it.
+    state.notEditable = null;
     // The marks belong to the conversation that was open, so they go with it.
     closeThreadSearch();
   }
@@ -1083,6 +1088,30 @@ export function markEditing(messageID) {
 }
 
 /**
+ * Mark the message the up arrow could not edit, and say why in the thread.
+ *
+ * The same shape as the "being edited" marker, for the same reason: the
+ * thread is not drawn again, because drawing it detaches every image in it
+ * and restarts an animated GIF. The marker moves on its own.
+ *
+ * It is a different class from the editing one on purpose. A message that is
+ * being edited is in the composer; a message that cannot be edited is only
+ * being pointed at, and the reader must not mistake one for the other.
+ */
+export function markNotEditable(messageID) {
+  // The state is the record of what is marked, so the thread is drawn again
+  // with the mark on it and stays drawn with it.
+  state.notEditable = messageID || null;
+  for (const [id, row] of renderedNodes) {
+    const wrap = row.querySelector('.msg-bubble-wrap');
+    if (!wrap) continue;
+    if (id === messageID) wrap.classList.add('is-not-editable');
+    else wrap.classList.remove('is-not-editable');
+  }
+  lastThreadSignature = threadSignature(renderableMessages(state.activeChatID));
+}
+
+/**
  * Everything about the thread that changes what is drawn, as one string.
  *
  * If this is unchanged, the next render would produce the same rows in the same
@@ -1095,6 +1124,7 @@ export function threadSignature(messages) {
     state.activeChatID || '',
     currentChat?.type || '',
     state.editing || '',
+    state.notEditable || '',
     String(atBottom),
   ];
   for (const m of messages) {
@@ -1223,6 +1253,9 @@ export function messageNode(message, previous) {
   // The message being edited is marked, not replaced. The text being
   // changed is in the composer, and the bubble keeps showing what it says.
   if (state.editing === message.id) bubbleWrap.classList.add('is-editing');
+  // The message the up arrow could not edit. Marked for the same reason and
+  // in a different colour, because it is being pointed at rather than edited.
+  if (state.notEditable === message.id) bubbleWrap.classList.add('is-not-editable');
 
   if (message.linkedMessageID) bubbleWrap.append(replyQuoteNode(message));
 
@@ -1238,10 +1271,18 @@ export function messageNode(message, previous) {
 
   const inner = el('div', { class: 'bubble-inner' });
 
-  if (!message.isDeleted && message.text) {
-    inner.append(el('div', { class: 'bubble-text', html: renderRichText(message.text) }));
+  // The bridge writes a failed attachment into the message text. It is taken
+  // off and shown as what it is, so the words are the sender's and the
+  // missing file is called a missing file.
+  const body = splitBridgePlaceholder(message.text);
+
+  if (!message.isDeleted && body.text) {
+    if (body.missing) inner.append(missingAttachmentNode());
+    inner.append(el('div', { class: 'bubble-text', html: renderRichText(body.text) }));
   } else if (message.isDeleted) {
     inner.append(el('div', { class: 'bubble-text muted', text: 'This message was deleted' }));
+  } else if (body.missing) {
+    inner.append(missingAttachmentNode());
   } else if (!message.attachments?.length) {
     inner.append(
       el('div', { class: 'bubble-text muted', text: message.type ? `[${message.type.toLowerCase()}]` : '' }),
@@ -1564,6 +1605,17 @@ function videoElement(attachment) {
     else fallback();
   });
   return wrap;
+}
+
+/**
+ * The notice for an attachment the bridge could not fetch.
+ *
+ * It is drawn where the attachment would have been, so the bubble reads the
+ * same way as any other message with a file in it - and the words in the
+ * bubble are the sender's words, not the bridge's complaint.
+ */
+function missingAttachmentNode() {
+  return el('div', { class: 'att-missing', text: 'Attachment could not be downloaded' });
 }
 
 /**

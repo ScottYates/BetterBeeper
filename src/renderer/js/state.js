@@ -47,6 +47,14 @@ export const state = {
   searchScope: 'all',
   /** messageID the composer is editing, per chat */
   editing: null,
+  /**
+   * messageID the up arrow could not edit, per chat.
+   *
+   * It is marked in the thread and explained in a toast: the arrow says why
+   * it cannot open a message, and the message it could not open is shown so
+   * the explanation is about something the reader can see.
+   */
+  notEditable: null,
   /** accountID -> 'me', for reaction "is mine" styling */
   selfUserIDs: new Set(),
   /**
