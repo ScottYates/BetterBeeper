@@ -490,8 +490,13 @@ that Beeper's own UI interprets on the client side:
   and can legitimately contain a second note chat. The list shows each as its own row.
 - **Timestamps sit inside the bubble** at its trailing edge, and sender names are suppressed in
   one-to-one chats. Both match Beeper.
-- **`seen` is polymorphic.** Matrix returns a `{ userID: ISO }` map while other bridges return a
-  single timestamp, so `seenAt()` unwraps whichever shape arrives and shows the latest.
+- **A read receipt is somebody else's read.** Beeper's `seen` map names every account that has read a
+  message, and on a message of yours it names *you* first, with the time your own window marked the
+  conversation read - a second or two after you hit send, because the message is on screen in your
+  window as you send it. That is not a delivery, so the receipt on your messages is the read time of
+  somebody **else**, and a message nobody else has read carries no receipt at all - just the tick
+  that says it was sent. The rules live in `read-receipts.js` and are checked under plain node by
+  `npm run check:readreceipts`.
 - **Network glyphs are hand-drawn.** Beeper reports network names but never ships artwork, so
   `network-icons.js` holds a mark per network on a 16x16 grid, rendered white on the
   brand-coloured badge. Unknown networks fall back to a monogram.

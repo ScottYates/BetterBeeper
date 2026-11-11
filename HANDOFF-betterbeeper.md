@@ -1351,12 +1351,83 @@ be taller than zero and the words wider than zero. Two mutations prove the
 case is load-bearing - removing the stack from the markup, and turning the
 column into a row - and both make it red.
 
+## Work done 2026-11-10
+
+### The read receipt was your own read, not a delivery
+
+Asked for as "check delivered times in messages". The times on messages were
+checked against the live bridge, and the receipt on your own messages was
+wrong.
+
+**What Beeper actually sends.** A message carries `seen`: a map of account id
+to the time that account read it. Measured over 484 messages from 100 chats:
+
+| | |
+| --- | --- |
+| message objects | `id`, `chatID`, `accountID`, `senderID`, `senderName`, `timestamp`, `sortKey`, `isSender`, `type`, `isDeleted`, `mentions`, `text`, **`seen`**, `isUnread`, `attachments`, `isHidden`, `linkedMessageID`, `reactions`, `links`, `editedTimestamp` |
+| a "delivered" field | **there is none** - `seen` is the only read state there is |
+| `timestamp` format | ISO 8601 with `Z`, 484 of 484, none missing and none unparseable |
+| `seen` shape | always a map, 445 of 484 messages; never a bare boolean or a bare string |
+
+**The bug.** On a message of yours, the map names **you** first, with the time
+your own window marked the conversation read - a second or two after you hit
+send, because the message is on screen in your window as you send it. The app
+took the latest entry in the map and wrote it as the receipt, so the receipt on
+your own messages was your own read time.
+
+Measured over 261 messages of yours:
+
+| | count | gap between the send and the "read" |
+| --- | --- | --- |
+| the map names only you | **242** | median **0 minutes** (a second or two), worst case 577 days |
+| the map names somebody else as well | 4 | 0.1 to 108.7 minutes |
+
+So 98% of the receipts on screen were a time that said "read" about a message
+the other person had not read at all, and the outliers were worse: an old
+message of yours that you scrolled past in the last week carried a receipt
+saying it was read 143 days after you sent it.
+
+**The rule now.** The receipt on a message of yours is somebody **else's** read
+time. Your own read is not a delivery, so it is not shown. A message nobody
+else has read carries no receipt - just the tick that says it was sent, which
+is what the row already had a place for.
+
+Who is "you" comes from the chat's own participant list: every one of the 100
+chats on the live account marks exactly one participant with `isSelf`, and
+that id is the one the seen map names when you read your own message. The
+message's own sender id is the fallback for a chat with no participant list.
+The account list is not usable for this: `GET /v1/accounts` returned nothing.
+
+**A read on another day carries the date.** A message sent at 11pm and read at
+8am said "8:03 AM", which reads as the morning before rather than the morning
+after. The receipt now carries the date when the read was on a different day
+than the send.
+
+The rules live in `src/renderer/js/read-receipts.js`, which touches no DOM, so
+`npm run check:readreceipts` runs them under plain node. The rendering is
+checked in `check:threadopen` (a message only you have read carries no
+receipt; a message somebody else has read does; and the receipt appears when
+their read time arrives), and the rule that the app's own read time is not a
+delivery is checked in `check:composer`.
+
+`tools/thread-open-redproof.js` is 13/13 with no holes, up from 9/9: four new
+mutations - your own read counting as a delivery, the receipt written from any
+seen time, the thread's signature forgetting the delivery time, and the oldest
+read winning instead of the newest.
+
+**One thing this does not do.** Only 4 of your 261 messages carried anybody
+else's read time, so most of your sent messages now show the sent tick and no
+time. That is what the data says: Signal and Messenger do not report the
+recipient's read state for most messages on this account, and where they do
+report it, it is 0.1 to 108 minutes after the send.
+
 ## Verification status
-`npm run check:all` sweeps **51 suites**, and all 51 of them pass on a release
-commit. On the tree carrying the work, before the release is cut, 50 of them
+`npm run check:all` sweeps **52 suites**, and all 52 of them pass on a release
+commit. On the tree carrying the work, before the release is cut, 51 of them
 pass: the one that does not is `check:released`, which is red until the release
-is cut, because `main` is ahead of the newest tag. It was 49 suites on the
-tree carrying the 2026-11-08 work, 48 of them passing; 47/47 on the tree
+is cut, because `main` is ahead of the newest tag. It was 51 suites on the
+tree carrying the 2026-11-09 work, 50 of them passing; 49 suites on the tree
+carrying the 2026-11-08 work, 48 of them passing; 47/47 on the tree
 carrying the 2026-11-02 work, 2026-11-02. It was
 45/45 on the v1.26.0 release commit, 44/44 on the v1.25.0 release commit and
 on the v1.24.0 release commit, 2026-10-27; 43/43 on the v1.23.0 release
@@ -1377,7 +1448,8 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:composeredit` | 58/58 checks passed |
 | `check:composereditrules` | 45/45 checks passed, with no Electron and no window |
 | `check:bridgeplaceholder` | 12/12 checks passed, with no Electron and no window (new) |
-| `check:threadopen` | 26/26 checks passed |
+| `check:threadopen` | 29/29 checks passed |
+| `check:readreceipts` | 14/14 checks passed, with no Electron and no window (new) |
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
 | `tools/update-redproof.js` | 21/21 mutations caught, no holes |
 | `tools/proxy-redproof.js` | 5/5 mutations caught, no holes |
@@ -1386,7 +1458,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `tools/avatar-redproof.js` | 4/4 mutations caught, no holes |
 | `tools/history-render-redproof.js` | 2/2 mutations caught, no holes |
 | `tools/composer-edit-redproof.js` | 43/43 mutations caught, no holes |
-| `tools/thread-open-redproof.js` | 9/9 mutations caught, no holes |
+| `tools/thread-open-redproof.js` | 13/13 mutations caught, no holes |
 
 Individually measured: `check:entity` 0 failing across 31 cases,
 `check:rich` 27/27, `check:preview` 0 failing across 18 cases,
@@ -1397,7 +1469,7 @@ Individually measured: `check:entity` 0 failing across 31 cases,
 `check:contactrefresh` 71/71 and `tools/contact-refresh-redproof.js` 19/19
 mutations caught, 2/2 neutral rewrites tolerated (new),
 `check:paste` 52/52 (rewritten, new),
-`check:threadopen` 26/26 and `tools/thread-open-redproof.js` 9/9 mutations
+`check:threadopen` 29/29 and `tools/thread-open-redproof.js` 13/13 mutations
 caught, 1/1 neutral rewrite tolerated,
 `check:notificationclick` 20/20 and
 `tools/notification-click-redproof.js` 12/12 mutations caught, 1/1 neutral
