@@ -447,6 +447,69 @@ async function main() {
           return (node && !stack) || 'an ordinary message grew a stack';
         });
 
+        // --- the read receipt on a message of yours -------------------------
+        //
+        // Beeper's seen map names every account that has read a message, and
+        // on a message of yours it names *you* first, with the time your own
+        // window marked the conversation read - a second or two after you hit
+        // send. That is not a delivery, so a message nobody else has read
+        // carries no receipt at all.
+        const RECEIPT_AT = new Date(Date.now() - 3600 * 1000).toISOString();
+        S.state.chats.set('c-receipt', {
+          id: 'c-receipt', title: 'A receipt chat', type: 'single',
+          participants: { items: [{ id: '@me:x', isSelf: true }, { id: '@them:x', isSelf: false }] },
+        });
+        const mineOnly = {
+          id: 'r1', chatID: 'c-receipt', accountID: 'a1',
+          senderID: '@me:x', senderName: 'Me', text: 'read by me only',
+          timestamp: RECEIPT_AT, isSender: true, type: 'TEXT', attachments: [],
+          seen: { '@me:x': RECEIPT_AT },
+        };
+        const readByThem = {
+          id: 'r2', chatID: 'c-receipt', accountID: 'a1',
+          senderID: '@me:x', senderName: 'Me', text: 'read by them as well',
+          timestamp: RECEIPT_AT, isSender: true, type: 'TEXT', attachments: [],
+          seen: { '@me:x': RECEIPT_AT, '@them:x': RECEIPT_AT },
+        };
+        plan = give({ messages: [mineOnly, readByThem], hasMore: false, complete: true });
+        await open('c-receipt');
+        await settle();
+
+        const receiptOf = (id) => {
+          const node = listEl.querySelector('[data-message-id="' + id + '"]');
+          const seen = node && node.querySelector('.msg-seen');
+          return seen ? seen.textContent : '';
+        };
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        add('a message only you have read carries no receipt', () =>
+          receiptOf('r1') === '' || ('it says ' + JSON.stringify(receiptOf('r1'))));
+
+        add('a message somebody else has read carries the receipt', () => {
+          const text = receiptOf('r2');
+          return text.startsWith('\u2713\u2713') || ('it says ' + JSON.stringify(text));
+        });
+
+        // Your own read time is not in the thread's signature, so nothing is
+        // rebuilt for it - and when the other person's read time arrives, the
+        // receipt has to appear.
+        //
+        // The wait is out here rather than inside the case: this harness's
+        // cases are synchronous, so a case that awaited would report a
+        // promise instead of an answer.
+        const receiptBefore = receiptOf('r1');
+        S.upsertMessage('c-receipt', {
+          ...mineOnly,
+          seen: { '@me:x': RECEIPT_AT, '@them:x': new Date(Date.now() - 60000).toISOString() },
+        });
+        await wait(250);
+        const receiptAfter = receiptOf('r1');
+
+        add('the receipt appears when the other person reads it', () =>
+          (receiptBefore === '' && receiptAfter.startsWith('\u2713\u2713'))
+          || ('before was ' + JSON.stringify(receiptBefore)
+            + ' and after ' + JSON.stringify(receiptAfter)));
+
         document.getElementById('modal-root') && document.getElementById('modal-root').replaceChildren();
       }
     })()

@@ -161,6 +161,51 @@ async function main() {
         return out === '' || ('got ' + JSON.stringify(out));
       });
 
+      // The receipt is somebody else's read.
+      //
+      // Beeper's seen map names every account that has read a message, and on
+      // a message of yours it names *you* first, with the time your own window
+      // marked the conversation read - a second or two after you hit send.
+      // That is not a delivery, and taking it as one put a time on the screen
+      // that said "read" about a message the other person had not read.
+      const chatFixture = {
+        id: 'c1',
+        participants: {
+          items: [
+            { id: '@me:x', isSelf: true },
+            { id: '@them:x', isSelf: false },
+          ],
+        },
+      };
+      const receiptIn = (m, chat) => (typeof seen === 'function' ? seen(m, chat) : seen);
+
+      add('your own read of your own message carries no receipt', () => {
+        const out = receiptIn(
+          msg({ seen: { '@me:x': '2026-10-08T12:00:03.000Z' } }),
+          chatFixture,
+        );
+        return out === '' || ('got ' + JSON.stringify(out));
+      });
+
+      add('CONTROL: somebody else reading it is what carries the receipt', () => {
+        const out = receiptIn(
+          msg({ seen: { '@me:x': '2026-10-08T12:00:03.000Z', '@them:x': '2026-10-08T12:30:00.000Z' } }),
+          chatFixture,
+        );
+        return (typeof out === 'string' && out.length > 0)
+          || ('got ' + JSON.stringify(out));
+      });
+
+      add("CONTROL: the receipt is the other person's time, not yours", () => {
+        const mine = receiptIn(msg({ seen: { '@me:x': '2026-10-08T12:00:03.000Z' } }), chatFixture);
+        const theirs = receiptIn(
+          msg({ seen: { '@me:x': '2026-10-08T12:00:03.000Z', '@them:x': '2026-10-08T13:45:00.000Z' } }),
+          chatFixture,
+        );
+        return (mine === '' && theirs !== '')
+          || ('mine was ' + JSON.stringify(mine) + ' and theirs was ' + JSON.stringify(theirs));
+      });
+
       add('a title of only spaces is treated as untitled', () => {
         const out = placeholder(person('   '));
         return out === 'Write a message…' || ('got ' + JSON.stringify(out));
@@ -174,7 +219,20 @@ async function main() {
   harnessGuard(app, { label: 'check:composer' });
   const win = new BrowserWindow({ show: false });
   await win.loadFile(path.join(__dirname, 'composer-harness.html'));
-  const result = await win.webContents.executeJavaScript(harness, true);
+  // The renderer's own errors are the only thing that says what went wrong
+  // inside the harness, and Electron's message for them ("Script failed to
+  // execute") says nothing at all.
+  win.webContents.on('console-message', (event) => {
+    console.error('  [renderer] ' + event.message + ' (' + event.sourceId + ':' + event.lineNumber + ')');
+  });
+  let result;
+  try {
+    result = await win.webContents.executeJavaScript(harness, true);
+  } catch (err) {
+    console.error('the harness threw:', err && (err.stack || err.message));
+    app.exit(1);
+    process.exit(1);
+  }
   app.exit(0);
 
   const cases = JSON.parse(result);

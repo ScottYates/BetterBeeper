@@ -36,6 +36,7 @@ const FILES = {
   thread: path.join(ROOT, 'src', 'renderer', 'js', 'thread.js'),
   state: path.join(ROOT, 'src', 'renderer', 'js', 'state.js'),
   css: path.join(ROOT, 'src', 'renderer', 'styles.css'),
+  receipts: path.join(ROOT, 'src', 'renderer', 'js', 'read-receipts.js'),
 };
 
 const hash = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -142,6 +143,47 @@ const MUTATIONS = [
     to: '.bubble-stack {\n  display: flex; flex-direction: row; align-items: stretch;',
     expect: 'the notice is above the words, not beside them',
   },
+  {
+    // The read receipt is somebody else's read, not your own. Beeper's seen
+    // map names your own account on your own messages, with the time your
+    // own window marked the conversation read - a second or two after you
+    // hit send. Taking that as the delivery put a time on the screen that
+    // said "read" about a message the other person had not read.
+    what: 'your own read counts as a delivery again',
+    file: 'receipts',
+    from: '    if (selfIds && selfIds.has(id)) continue;\n',
+    to: '',
+    expect: 'a message only you have read carries no receipt',
+  },
+  {
+    // The same rule, at the place the receipt is written.
+    what: 'the receipt is written from any seen time, whoever read it',
+    file: 'thread',
+    from: '  const when = deliveryTime(message, selfReaderIds(chat, message));',
+    to: '  const when = deliveryTime(message, new Set());',
+    expect: 'a message only you have read carries no receipt',
+  },
+  {
+    // The thread's signature has to watch the *other* person's read time: it
+    // is the receipt that is drawn, and it is that time arriving that has to
+    // make the thread redraw. A signature that forgets it leaves the receipt
+    // off the message until something else happens to redraw the thread.
+    what: 'the signature forgets the delivery time',
+    file: 'thread',
+    from: '      deliveryTime(m, self) || \'\',',
+    to: '      deliveryTime(m, new Set(Object.keys(m.seen || {}))) || \'\',',
+    expect: 'the receipt appears when the other person reads it',
+  },
+  {
+    // In a conversation with several people, the message has been read by
+    // all of them when the last of them has read it.
+    what: 'the oldest read wins instead of the newest',
+    file: 'receipts',
+    from: '    if (best === null || at > best.at) best = { at, value };',
+    to: '    if (best === null || at < best.at) best = { at, value };',
+    expect: 'the newest read wins when several people have read it',
+    suite: 'check:readreceipts',
+  },
 ];
 
 function runCheck(suite) {
@@ -186,7 +228,7 @@ const holes = [];
 // the baseline has to be green and every named case has to be in it, PASS.
 // ---------------------------------------------------------------------------
 
-const BASELINE_SUITES = ['check:threadopen'];
+const BASELINE_SUITES = ['check:threadopen', 'check:readreceipts'];
 
 const baseline = {};
 for (const suite of BASELINE_SUITES) {

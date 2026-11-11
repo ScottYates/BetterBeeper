@@ -15,6 +15,11 @@ import {
 } from './util.js';
 import { decodeEntities, clipText } from './entities.js';
 import { splitBridgePlaceholder } from './bridge-placeholder.js';
+import {
+  selfReaderIds,
+  deliveryTime,
+  deliveryText,
+} from './read-receipts.js';
 import { initThreadSearch, applyThreadSearchHighlights, closeThreadSearch } from './thread-search.js';
 import {
   initComposerEdit,
@@ -803,45 +808,43 @@ export function attachmentIcon(attachment) {
 }
 
 /**
- * The read receipt under one of our messages, or '' when it has not been read
- * back yet.
+ * The read receipt under one of our messages, or '' when nobody else has read
+ * it yet.
  *
  * Per message rather than one line for the whole thread: "seen at" on its own
  * could only ever say when the *newest* message was read, which leaves a
  * message that was read hours earlier looking unread. Each bubble carries its
  * own answer, so the receipts read as a fact about that message.
  *
+ * **The receipt is somebody else's read, not your own.** Beeper's `seen` map
+ * names every account that has read the message, and on a message of yours it
+ * names *you* first, with the time your own window marked the conversation
+ * read - a second or two after you hit send. That is not a delivery: taking
+ * it as one put a time on the screen that said "read" about a message the other
+ * person had not read at all.
+ *
  * A reaction record has a `seen` of its own and is newer than the message it
  * belongs to, but it is not a message - `renderableFrom` keeps it out of here.
  */
-export function seenIndicatorText(message) {
+export function seenIndicatorText(message, chat = currentChat) {
   if (!message?.isSender) return '';
-  const when = seenAt(message.seen);
-  return when ? `\u2713\u2713 ${messageTime(when)}` : '';
+  const when = deliveryTime(message, selfReaderIds(chat, message));
+  return deliveryText(when, message?.timestamp);
+}
+
+/**
+ * When this message of yours was read by somebody else, or null.
+ *
+ * The title of the receipt says the same thing in full.
+ */
+export function deliveryTimeOf(message, chat = currentChat) {
+  if (!message?.isSender) return null;
+  return deliveryTime(message, selfReaderIds(chat, message));
 }
 
 /** True when this message needs a meta row of its own to carry the receipt. */
 function hasSeenIndicator(message) {
   return Boolean(seenIndicatorText(message));
-}
-
-/**
- * Beeper's `seen` field is polymorphic: a boolean, an ISO timestamp, or a map
- * of userID -> ISO timestamp (as returned by the Matrix bridges). Pull the
- * most recent concrete timestamp out of whichever shape arrived.
- */
-function seenAt(seen) {
-  if (!seen) return null;
-  if (seen === true) return null;
-  if (typeof seen === 'string') return seen;
-  if (typeof seen === 'object') {
-    const values = Object.values(seen).filter((v) => typeof v === 'string' && v);
-    if (values.length) return values.sort().slice(-1)[0];
-    for (const key of ['timestamp', 'seenAt', 'time', 'lastReadTimestamp']) {
-      if (typeof seen[key] === 'string') return seen[key];
-    }
-  }
-  return null;
 }
 
 function chatSubtitle(chat) {
@@ -1127,6 +1130,8 @@ export function threadSignature(messages) {
     state.notEditable || '',
     String(atBottom),
   ];
+  // The ids that are me, worked out once for the whole thread.
+  const self = selfReaderIds(currentChat, null);
   for (const m of messages) {
     parts.push([
       m.id,
@@ -1144,7 +1149,11 @@ export function threadSignature(messages) {
       // The read receipt is drawn on the message itself now, so a receipt is a
       // change the thread actually draws - and therefore has to be in here or
       // the rebuild that would draw it gets skipped.
-      seenAt(m.seen) || '',
+      //
+      // It is the *other* person's read time that is drawn, so that is what
+      // the signature carries: your own read time changes on every message
+      // you send, and watching that would rebuild the thread for nothing.
+      deliveryTime(m, self) || '',
       (m.attachments || [])
         .map((a) => `${a.id || a.fileName || ''}:${a.fileSize || 0}:${a.mimeType || ''}`)
         .join(','),
@@ -1479,6 +1488,7 @@ function metaNode(message) {
   // the whole thread. `seen` is polymorphic, so the raw value would render as
   // [object Object] next to a message that was plainly read.
   const receipt = seenIndicatorText(message);
+  const delivery = deliveryTimeOf(message);
 
   if (message.isSender) {
     // Once it has been read, the plain "sent" tick says nothing the receipt has
@@ -1495,7 +1505,7 @@ function metaNode(message) {
       el('span', {
         class: 'msg-seen',
         text: receipt,
-        title: `Seen at ${fullTime(seenAt(message.seen))}`,
+        title: `Read by them at ${fullTime(delivery)}`,
       }),
     );
   }
