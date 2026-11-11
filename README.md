@@ -302,6 +302,10 @@ npm run check:imagecopy-live   # copies an image, then pastes it straight back
 
 The artwork is one file: `build/icon.svg`. Everything else is drawn from it.
 
+The mark is a white speech balloon on the app's accent blue with "BB" knocked out of it in
+the plate colour. The letters are drawn as paths rather than set as text, so the icon never
+depends on a font being installed on the machine that builds it.
+
 ```bash
 npm run icon        # redraw build/icon.ico and src/assets/icon.png from build/icon.svg
 ```

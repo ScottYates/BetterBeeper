@@ -1426,9 +1426,19 @@ report it, it is 0.1 to 108 minutes after the send.
 ### The app has an icon now, and it is drawn from one file
 
 The executable was carrying Electron's default icon. There is now a real
-one: a white speech balloon with three dots on the app's own accent blue,
-which is the outgoing bubble colour, so the icon and the app are the same
-product.
+one: a white speech balloon on the app's own accent blue, which is the
+outgoing bubble colour, so the icon and the app are the same product, with
+"BB" knocked out of the balloon in the plate colour. The balloon says
+"chat", the letters say "this one", and knocking them out rather than
+drawing them on top keeps the mark to one shape inside another, which is
+what still reads at 16 pixels in a crowded taskbar.
+
+The letters are drawn as paths, not set as text. A font is a dependency the
+build machine may not have, and a monogram that changes shape because
+somebody installed a different font is not a stable icon. The letter is one
+path with two counters, filled with evenodd so the counters come out as
+holes, and the second B is a copy of the first shifted sideways, so both
+letters are guaranteed to be the same shape.
 
 The artwork is one file, `build/icon.svg`, and everything else is drawn from
 it:
