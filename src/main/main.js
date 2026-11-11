@@ -36,6 +36,20 @@ applyProxyPolicy(app.commandLine);
 
 const isDev = process.argv.includes('--dev');
 
+/**
+ * The app icon, as a PNG.
+ *
+ * The executable carries its own icon, and that is the one the taskbar, the
+ * shortcuts and the installer show. A window still has to be told, because a
+ * window opened from source - and any window that is not the main one - falls
+ * back to the Electron default otherwise.
+ *
+ * The file lives in src/assets so it is packed into the app. It is generated
+ * from build/icon.svg by tools/build-icon.js, which is why there is no
+ * hand-made copy of it to fall out of date.
+ */
+const APP_ICON = path.join(__dirname, '..', 'assets', 'icon.png');
+
 // A staged update has to be applied before the window exists, because the NSIS
 // installer cannot replace the executable of a running process. applyPendingUpdate
 // spawns the installer detached and then schedules the exit itself.
@@ -422,6 +436,7 @@ function createWindow() {
     minHeight: MIN_HEIGHT,
     backgroundColor: '#12141a',
     title: 'Better Beeper',
+    icon: APP_ICON,
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -667,6 +682,20 @@ app.whenReady().then(async () => {
   // it can replace the executable, so no window is created and nothing else
   // starts. applyPendingUpdate() has already scheduled the exit.
   if (applyingUpdate) return;
+
+  // Tell Windows which application this is, before any window exists.
+  //
+  // Without it, Windows groups the app under the name of the executable it
+  // happens to be running - which is "electron.exe" when the app is run from
+  // source - and the taskbar entry, the jump list and the notification icon
+  // are all grouped under that name instead of under Better Beeper. It is the
+  // same id the installer puts in the shortcut, so the shortcut and the
+  // running app belong to the same group.
+  try {
+    app.setAppUserModelId('com.yates.better-beeper');
+  } catch {
+    /* the id is a nicety, not a requirement */
+  }
 
   registerFileProtocol();
   buildMenu();

@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const http = require('node:http');
+const path = require('node:path');
 const { BrowserWindow, shell } = require('electron');
 const { OAUTH, TIMING } = require('./config');
 
@@ -199,6 +200,9 @@ async function authorize({ baseUrl, parentWindow }) {
       modal: parentWindow ? true : false,
       autoHideMenuBar: true,
       title: 'Authorize Beeper Desktop Chat',
+      // The same icon the main window carries, so the approval window does
+      // not turn up as the Electron default.
+      icon: path.join(__dirname, '..', 'assets', 'icon.png'),
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
 

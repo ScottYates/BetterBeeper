@@ -47,7 +47,13 @@ win:
       arch:
         - x64
   artifactName: ${productName}-${version}-${arch}-setup.${ext}
-  # No custom icon yet; Electron's default is used.
+  # The app icon. This is the file that ends up in the executable, in the
+  # installer and in the shortcuts, so it is the one that has to be right.
+  #
+  # It is generated, not drawn by hand: build/icon.svg is the artwork and
+  # `npm run icon` turns it into this file. The .ico holds all seven sizes
+  # Windows asks for, so the shell never has to scale one of them.
+  icon: build/icon.ico
   signAndEditExecutable: true
 
 nsis:

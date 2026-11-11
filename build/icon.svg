@@ -1,0 +1,51 @@
+<!--
+  The Better Beeper app icon.
+
+  This file is the source of truth for the artwork. tools/build-icon.js renders
+  it into the two files the app actually uses:
+
+    build/icon.ico         - copied by electron-builder into the executable,
+                             the installer and the shortcuts
+    src/assets/icon.png    - packed into the app, and handed to the windows so
+                             they carry the right icon when the app is run
+                             from source
+
+  One file, so the three places the icon shows up cannot drift apart. Editing
+  the artwork here and running `npm run icon` is the whole workflow.
+
+  The shape is a speech balloon on the app's own accent blue, so it reads as a
+  chat client at 16 pixels and still has room for the three dots that make it
+  say "typing" rather than just "chat". The official Beeper icon is a blue
+  circle with an outlined balloon, so the squared off plate and the solid
+  white balloon are what tell the two apart on a crowded taskbar.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- The plate: the app's accent blue, lightened towards the top left. -->
+    <linearGradient id="plate" x1="0.08" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#4a9bff" />
+      <stop offset="1" stop-color="#0a53c8" />
+    </linearGradient>
+    <!-- A soft sheen over the top half, so the plate is not a flat block. -->
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.20" />
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <rect x="14" y="14" width="484" height="484" rx="118" fill="url(#plate)" />
+  <rect x="14" y="14" width="484" height="484" rx="118" fill="url(#sheen)" />
+
+  <!-- The balloon, with its tail swept off to the lower left. -->
+  <path
+    fill="#ffffff"
+    d="M256 116C172 116 104 168 104 234c0 38 22 71 57 90l-25 74 96-47c7 1 15 2 24 2 84 0 152-53 152-120S340 116 256 116z"
+  />
+
+  <!-- Three dots, in the same blue as the plate. -->
+  <g fill="#0a53c8">
+    <circle cx="190" cy="234" r="20" />
+    <circle cx="256" cy="234" r="20" />
+    <circle cx="322" cy="234" r="20" />
+  </g>
+</svg>
