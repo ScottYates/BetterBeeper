@@ -1421,9 +1421,112 @@ time. That is what the data says: Signal and Messenger do not report the
 recipient's read state for most messages on this account, and where they do
 report it, it is 0.1 to 108 minutes after the send.
 
+## Work done 2026-11-11
+
+### The app has an icon now, and it is drawn from one file
+
+The executable was carrying Electron's default icon. There is now a real
+one: a white speech balloon with three dots on the app's own accent blue,
+which is the outgoing bubble colour, so the icon and the app are the same
+product.
+
+The artwork is one file, `build/icon.svg`, and everything else is drawn from
+it:
+
+| file | who uses it |
+| --- | --- |
+| `build/icon.svg` | the artwork, and the only file edited by hand |
+| `build/icon.ico` | electron-builder puts it in the executable, the installer and the shortcuts |
+| `src/assets/icon.png` | packed into the app, and handed to the windows |
+
+`npm run icon` redraws the two generated files. `tools/build-icon.js` does
+the drawing and `tools/icon-render.js` does the rasterising, and the split
+exists because the check has to draw the artwork the same way the builder
+does, or it is comparing two different things.
+
+**The .ico is written by hand.** There is no icon library in this project and
+adding one for a format this small would be a larger dependency than the
+problem. The format is a six byte header, a sixteen byte directory entry per
+size, and then the images: a DIB for each of the small sizes, which is what
+the older readers that still draw icons in the shell expect, and a PNG for
+the 256 pixel one, which Windows has understood since Vista and which is a
+quarter of the size of the same picture as a DIB.
+
+**Drawing at each size, not shrinking one picture.** All seven sizes Windows
+asks for (16, 24, 32, 48, 64, 128, 256) are drawn at that size, by putting
+the SVG in a page of exactly that size and capturing the page. An icon made
+by shrinking a 512 pixel picture looks like a smudge at 16, which is the
+size the taskbar uses.
+
+**One bug, found by asking Windows to read the file back.** Electron's
+`toBitmap()` returns the pixels top-down, while a DIB stores its rows
+bottom-up: the first row in the file is the bottom row of the picture. The
+first `.ico` came out upside down, and nothing in the build noticed. It was
+found by loading the file with `System.Drawing.Icon` and looking at what
+Windows drew, which is why the check now reads the file back rather than
+trusting the code that wrote it.
+
+`check:appicon` draws the artwork again, builds the `.ico` from that fresh
+drawing, and compares it with the file in the repository byte for byte. An
+artwork that was edited without the files being regenerated is caught instead
+of quietly shipping the old picture. `tools/app-icon-redproof.js` breaks the
+files on purpose in a copy of the tree and insists the check notices each
+one: six mutations, six caught.
+
+The windows are given the icon as well. `main.js` passes it to the main
+window, `auth.js` to the approval window, and the app now sets an explicit
+AppUserModelID, so Windows groups the taskbar entry and the jump list under
+"Better Beeper" instead of under `electron.exe` when the app is run from
+source.
+
+### The app would not launch, and the reason was a process that could not be killed
+
+**Symptom.** The installed app produced no window, no error dialog and no
+exit code. Every attempt to start it hung.
+
+**It was not the code.** Every installed file was byte-identical (SHA-256) to
+the official 1.28.8 payload, the same tree ran fine from source, and a copy
+of the install directory ran fine. Only the installed path failed.
+
+**It was a lock on the executable.** Opening `Better Beeper.exe` with read
+access and no sharing fails with "used by another process". It was the only
+file in the folder that was held. Windows blocks the launch of a locked image
+inside the loader, so the start call never returns: no window, no error, no
+diagnostic. Any probe that calls `Start-Process` on it wedges too, which is
+how several probes here hung before the cause was known.
+
+**Who held it.** The Restart Manager API names the holder: pid 13316,
+`Better.Beeper-1.28.8-x64-setup.exe`, the 1.28.8 auto-update installer,
+started by the update helper with `/S`.
+
+**Why it could not be cleared.** The installer was already in kernel
+termination: `NtTerminateProcess` returned `0xC000010A`
+(STATUS_PROCESS_IS_TERMINATING). `Stop-Process -Force`, `taskkill /F /T`
+and renaming the install directory all failed with "in use". Only a reboot
+releases it. The helper had already timed out at fifteen minutes and written
+`-1  The installer did not finish within 15 minutes.` to `update-result.txt`,
+so the app was left with a locked executable and no way to start.
+
+**The relaunch script.** `C:\Users\Scott\AppData\Local\BetterBeeper\relaunch-check.ps1`
+is left behind for after the reboot. It tests the lock first and refuses to
+launch while the executable is held, and the launch itself runs under a
+thirty second job timeout, so it cannot wedge the way every other attempt
+did. Exit codes: `0` running, `2` still locked, `3` the launch call hung, `4`
+started but nothing survived. It was verified on all three paths against real
+executables, and two bugs in it were found that way: the lock probe needed
+read-only access to work on protected files, and the process detection had to
+recognise a stub process that exits and leaves the real one behind.
+
+**What this means for the updater.** The wedge happened inside the update
+handoff, and the update handoff is the code that is supposed to leave a
+runnable app behind. It did not. The helper gave up after fifteen minutes
+and wrote a report, but it could not abandon the wedged installer, and the
+app it was updating was left unable to start. That is a defect in the
+updater, not a one-off, and it is listed under "Still outstanding".
+
 ## Verification status
-`npm run check:all` sweeps **52 suites**, and all 52 of them pass on a release
-commit. On the tree carrying the work, before the release is cut, 51 of them
+`npm run check:all` sweeps **53 suites**, and all 53 of them pass on a release
+commit. On the tree carrying the work, before the release is cut, 52 of them
 pass: the one that does not is `check:released`, which is red until the release
 is cut, because `main` is ahead of the newest tag. It was 51 suites on the
 tree carrying the 2026-11-09 work, 50 of them passing; 49 suites on the tree
@@ -1459,6 +1562,8 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `tools/history-render-redproof.js` | 2/2 mutations caught, no holes |
 | `tools/composer-edit-redproof.js` | 43/43 mutations caught, no holes |
 | `tools/thread-open-redproof.js` | 13/13 mutations caught, no holes |
+| `check:appicon` | 20/20 checks passed, with the artwork redrawn and compared byte for byte (new) |
+| `tools/app-icon-redproof.js` | 6/6 mutations caught, no holes (new) |
 
 Individually measured: `check:entity` 0 failing across 31 cases,
 `check:rich` 27/27, `check:preview` 0 failing across 18 cases,
@@ -1569,6 +1674,15 @@ keeping:
    mxc:// or localmxc://". Twenty-four of the twenty-five attachments probed
    were fine, so it is a narrow fault in Beeper's Google Voice bridge. Not
    fixable here; worth a report to Beeper if it is still true.
+7. **The update handoff can leave the app unable to start.** On 2026-11-11
+   the 1.28.8 installer wedged in a kernel termination state while holding an
+   exclusive lock on `Better Beeper.exe`, and the app could not be launched
+   afterwards. Nothing could clear it but a reboot. The helper gave up
+   after fifteen minutes and wrote a report, but it has no way to abandon a
+   wedged installer, and the app it was updating was left locked out. The
+   updater needs a failure path that leaves the previous executable
+   runnable, and the handoff helper needs a way to give up on the installer
+   it started. See "The app would not launch" above.
 
 Not outstanding any more, but still true and easy to trip over: the updater
 asks GitHub for a **Release**, not for a commit. It calls `releases/latest` and
@@ -1626,3 +1740,13 @@ is what catches that gap.
 - **Beeper's MCP `search_docs` tool is useless as evidence.** It returns "not
   found" for every query, including `messages` and `chats`. Always run a control
   query before believing a negative from any search tool.
+- **An app that will not launch may be locked rather than broken.** No window,
+  no error and no exit code is what a locked executable looks like: Windows
+  blocks the launch inside the loader, so the start call never returns and any
+  probe that calls `Start-Process` on it hangs instead of failing. Test the
+  lock first - open the exe with read access and no sharing, and a failure
+  saying "used by another process" is the answer. The Restart Manager API
+  (`RmStartSession` / `RmRegisterResources` / `RmGetList`) then names the
+  holder. `NtTerminateProcess` returning `0xC000010A` means the holder is
+  already in kernel termination: it cannot be killed, and only a reboot
+  releases the lock.

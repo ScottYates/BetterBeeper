@@ -256,6 +256,7 @@ npm run dist:only      # build only, leave the installed app alone
 npm run deploy         # re-run just the install, using the installer already in release/
 npm run deploy:check   # report what would happen, install nothing
 npm run pack           # unpacked build -> release/win-unpacked/
+npm run icon           # redraw the app icon from build/icon.svg
 
 npm run check:notify   # notification preference logic
 npm run check:send     # optimistic-send bubble absorption
@@ -282,6 +283,7 @@ npm run check:syntax    # every JS file parses, so a broken check cannot pose as
 npm run check:bump      # the semver level chosen from a commit message is right
 npm run check:released  # every push to main has a release
 npm run check:icons     # network glyphs, including the self-coloured Google Voice mark
+npm run check:appicon  # the icon files still match the artwork, and the app uses them
 npm run check:ascii     # documentation and code comments stay ASCII
 npm run check:live     # send a real message, then assert the thread and the list are intact
 ```
@@ -295,6 +297,31 @@ Note to self chat and never send a message:
 npm run check:paste-live
 npm run check:imagecopy-live   # copies an image, then pastes it straight back
 ```
+
+## The app icon
+
+The artwork is one file: `build/icon.svg`. Everything else is drawn from it.
+
+```bash
+npm run icon        # redraw build/icon.ico and src/assets/icon.png from build/icon.svg
+```
+
+| file | who uses it |
+|---|---|
+| `build/icon.svg` | the artwork, and the only file edited by hand |
+| `build/icon.ico` | electron-builder puts it in the executable, the installer and the shortcuts |
+| `src/assets/icon.png` | packed into the app, and handed to the windows so they carry the icon too |
+
+The `.ico` is written by hand rather than by a library, because a file format this small does not
+need a dependency: a six byte header, a sixteen byte directory entry per size, and the images.
+It holds all seven sizes Windows asks for (16, 24, 32, 48, 64, 128 and 256), drawn at each size
+rather than shrunk, which is the difference between an icon that looks sharp in the taskbar and
+one that looks like a smudge.
+
+`npm run check:appicon` redraws the artwork and compares the result with the files in the
+repository, byte for byte, so an edited artwork that was never regenerated is caught instead of
+quietly shipping the old picture. `node tools/app-icon-redproof.js` breaks the files on purpose
+in a copy of the tree and insists the check notices.
 
 ## Releasing
 
@@ -469,6 +496,11 @@ src/
     released-check.js check: every push to main has a release
     bump-check.js     check: the semver level a commit message produces is the right one
     icon-check.mjs    check: every network glyph still renders, self-coloured or not
+    build-icon.js     draw the app icon from build/icon.svg into the .ico and the png
+    icon-render.js    the renderer that draws the artwork at every size Windows wants
+    icon-format.js    the .ico container, written and read back in plain JavaScript
+    app-icon-check.js check: the icon files still match the artwork, and the app uses them
+    app-icon-redproof.js  prove the icon check fails when the files are broken on purpose
     ascii-check.js    check: markdown and code comments stay ASCII
     badge-probe.js    dev helper: prove glyph badges stay square and monograms stay pills
     glyph-sheet.js    dev helper: render every shipped glyph large, on real badge colours
