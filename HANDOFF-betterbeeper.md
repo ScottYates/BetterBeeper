@@ -45,12 +45,12 @@ The last few commits, most recent first. The commit that carries this
 paragraph is above them:
 
 ```
-740cfe8  fix: the update failure path leaves a runnable app behind
-ec78511  Release 1.30.1
-053a424  docs: the handoff and the README for the icon drawing scale
-b57c493  fix: the icon is drawn in device pixels, so the display's scaling cannot change it
-dd70e91  Release 1.30.0
-4d7eb76  feat: the app icon is now a balloon with BB knocked out of it
+5b3c229  fix: the update installs over the top, so the taskbar pin survives
+9f342c6  Release 1.30.5
+2135695  docs: the window's place, and the wpad record is not an issue
+1f8a6e7  fix: the window opens exactly where it was closed
+3fe318a  Release 1.30.4
+1a7ed31  fix: the proxy check can see the lookup it exists to catch
 ```
 
 The newest tag is on the topmost `Release` commit, so `main` is not left
@@ -1704,10 +1704,18 @@ on. A window on a desktop the user is not looking at is a different failure
 from a window that was never created, and only the trace tells the two apart.
 
 `check:handoff` runs the real helper with the real window and reads the
-trace. The window is put off the screen and made transparent while the check
-runs, so the window path can be exercised without putting anything in front
-of the user. It is still created, still shown and still visible in every sense
-Windows cares about, which is what the trace records.
+trace. The window is put off the screen while the check runs, so the window
+path can be exercised without putting anything in front of the user. It is
+still created, still shown and still visible in every sense Windows cares
+about, which is what the trace records.
+
+> **Superseded later the same day.** The off-screen mode used to make the
+> window *transparent* as well, and the paragraph above said so. A transparent
+> window is `Visible = true`, so that made the check unable to tell an
+> invisible window from a visible one. The mode now only moves the window, and
+> the check asks whether it is opaque. The pin paragraph below was wrong about
+> the pin for a different reason - see "The pin went missing because the
+> update uninstalled the old version" above.
 
 Running that check on this machine says the window works: it is built, it is
 visible, it is on the `Default` desktop, and it is up while the install runs
@@ -1728,6 +1736,12 @@ does so whether the install worked or not: a failed install rewrites the
 shortcut just as well as a good one. The helper is the only thing alive
 across the gap the installer makes, so it is the only place the pin can be
 put back.
+
+> **This was wrong, and it made the pin worse.** Overwriting Explorer's own
+> copy of the pinned shortcut does not restore a pin; it makes Explorer
+> register the item as a new one - `Better Beeper (2).lnk` - at the end of the
+> list. The helper now only inspects the pin. See "The pin went missing
+> because the update uninstalled the old version" above.
 
 **And the helper itself.** It used to run from inside the install folder - the
 very folder the installer replaces. Windows will not delete a running
@@ -1849,11 +1863,169 @@ vanished display removed, the rescue leaving the window in the void, the app
 stopping asking the module at all, a minimized window being remembered, and
 the window not being remembered when it closes.
 
+### The pin went missing because the update uninstalled the old version
+
+**What was reported:** "the taskbar pin does not survive. the icon disappears
+during install and reappears when launched at the right end of the icon list
+rather than where i put it, and it is no longer pinned."
+
+**What the pin is.** Explorer's pinned taskbar items live in
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband\Favorites`,
+a blob that lists each item by the AppUserModelId of the app behind it, and in
+a copy of the shortcut under `%APPDATA%\Microsoft\Internet Explorer\Quick
+Launch\User Pinned\TaskBar`. Read on this machine, the blob lists
+`Better Beeper (2).lnk` with the id `com.yates.better-beeper` at position 3 -
+between Google Voice and deck.blue - and the pinned folder holds both
+`Better Beeper.lnk` and `Better Beeper (2).lnk`, both 2626 bytes, both pointing
+at the app's exe, both carrying the modification time of the install.
+
+**Why the update took it.** The uninstaller is what deletes the Start Menu
+shortcut and unregisters the app's identity -
+`WinShell::UninstAppUserModelId "${APP_ID}"` in electron-builder's own
+`uninstaller.nsh`. The pin is the shell's entry for that identity, so an update
+that uninstalls the old version gives the shell a reason to drop it.
+
+Why the old version was uninstalled is a flag. `nsisScriptGenerator.flags()`
+generates `${isUpdated}` from `StdUtils.TestParameter $R9 "updated"`, which
+tests the **command line** of the installer. The helper was launching the
+installer with only `/S`, so `${isUpdated}` was false, so
+`setIsTryToKeepShortcuts` forced `isTryToKeepShortcuts` to false, so
+`$keepShortcuts` was false, so the uninstaller ran without `--keep-shortcuts`
+and the shortcut was rewritten and the identity unregistered. The modification
+time of the Start Menu shortcut says which branch ran: it was the install's.
+
+**What is now.** Two changes, and the second is the one Scott asked for:
+
+1. The installer is launched with `--updated` (`/S --updated`), so
+   `${isUpdated}` is true, so the installer keeps the Start Menu shortcut and
+   passes `--keep-shortcuts` on to the uninstaller it would otherwise run.
+2. The update installs **over the top**. `tools/nsis/installer.nsh` is included
+   by `electron-builder.yml`, and its `customUnInstall` macro makes the old
+   uninstaller give up before it deletes anything - `SetErrorLevel 0`, then
+   `Quit` - so the new files are written over the old ones and nothing happens
+   to the shortcut or to the app's identity.
+
+The trade is written down in the script itself: a file the new version no
+longer ships is left on disk rather than removed. A few hundred kilobytes, in
+exchange for leaving the user's own settings alone.
+
+**The fix that made it worse is gone.** The 2026-11-11 work added
+`TaskbarPin.Restore`, which copied the shortcut over Explorer's pinned copy and
+told the shell about the change. That is not how the pin works: the pinned file
+is Explorer's own state, and overwriting it made Explorer register the item as
+a **new** item - `Better Beeper (2).lnk` - and put it at the end of the list.
+The pin was not restored; it was replaced by a copy of itself in the wrong
+place. The helper now only **inspects** the pin and writes down what it finds
+(`pin present` / `pin missing`), and never writes to the pinned folder.
+
+**What proves it.** `check:handoff` is 20 cases now: the installer is told it
+is an update, the builder config includes the script, the script makes the old
+uninstaller give up, electron-builder's own template calls the hook *before* it
+unregisters the identity, the update writes nothing into the pinned folder
+(whether the install works or fails), a pinned shortcut is left exactly as it
+was, and the helper's window is up, opaque, on the interactive desktop and not
+cloaked.
+
+`tools/update-handoff-redproof.js` breaks each of those rules in turn: 12/12
+mutations caught, no holes, with the baseline asserted.
+
+**And the hook itself was tested by running it.** Every other check can only
+see that the hook is *there* - the script is in the config, the macro is in
+the file, the template calls it before the damage. None of that says the hook
+works, and "works" here has a precise meaning: the old uninstaller must stop
+before it deletes anything, and it must stop with the exit code the installer
+is looking for, because the installer carries on only if the uninstaller
+succeeded.
+
+So `npm run check:nsis` builds two tiny NSIS programs with `makensis` (the
+one electron-builder downloaded) and runs them in a sandbox in the temp
+directory. The **control** is the same program with the hook left out, and it
+has to delete the file it is told to delete and write its marker - if it did
+not, the check would be proving nothing. The **treatment** is the same program
+with the repository's own `tools/nsis/installer.nsh` included, and the file
+has to survive, the marker must not appear, and the exit code must be zero.
+11/11.
+
+Two things about that check are worth knowing, because both of them were
+mistakes in the first version of it:
+
+- **NSIS does not find a file named with forward slashes.** The include line
+  has to use Windows paths, which is what electron-builder writes anyway.
+- **An uninstaller run the ordinary way copies itself to the temp directory
+  and returns at once**, and the copy does the work afterwards - so a check
+  that looks at the files straight afterwards is looking before the uninstall
+  has happened and sees a program that did nothing. The real installer runs
+  the old uninstaller with `_?=`, which runs it in place, and so does this
+  check.
+
+`tools/nsis-install-over-top-redproof.js` breaks the hook in the repository -
+the `Quit` taken out, and the success code turned into a failure - and
+requires the check to notice: 2/2, no holes, with the baseline asserted.
+
+**One thing is still true on this machine.** The persisted `Favorites` blob
+still has the pin at position 3, but the live taskbar is out of sync with it -
+the shell has not re-read the blob, and it is the shell's live state that is
+wrong, not the blob. The pin comes back at the right place when Explorer does.
+The one-time repair is restarting Explorer - which closes the Explorer windows
+and restarts the taskbar - or signing out and back in. That has not been done:
+it is the user's desktop, and the windows he has open are his.
+
+### The helper's window was up, and behind everything else
+
+**What was reported:** "the helper window does not show still."
+
+**What the trace said.** The trace from the update that Scott ran said:
+
+    tick visible=True handle=yes bounds=1042,556,476,279 desktop=Default
+
+The window was built, it was visible, it was on the `Default` desktop, and it
+was up for the whole install: `installer-started` comes after that tick and
+`work-done code=0` comes two and a half minutes later. So the window was never
+missing. It was **behind everything else**. It was activated when it was first
+shown, which is while Better Beeper is still the foreground app and in the
+middle of quitting, and a window that is not the foreground one is often not
+allowed to come to the front at all.
+
+**What is now.** Once the app's process is gone - `parent-gone` - the helper
+puts the window in front: `TopMost = true`, then `Show`, `Activate`,
+`SetForegroundWindow`. It is taken off `TopMost` again when it finishes, so the
+app that comes back afterwards is not left behind it.
+
+**This reverses a rule from 2026-10-13, and the reason it was made no longer
+holds.** TopMost was removed then because the window was not draggable - there
+was no caption bar and nothing to grab - so it sat in the middle of the screen
+above everything with no way to move it, which is a window someone cannot get
+out of the way of. The window can be dragged now (grab any part of it), so that
+objection is answered. The other half of that reason - that the window should
+not demand the front of the desktop for its whole life - is kept: the window is
+**not** in front from the moment it opens, only once the app has gone, and it
+gives the front up when the work is done. `check:update` asserts exactly that
+now, in place of the old "the window does not force itself to the top": it must
+be put in front at some point, that point must not be before it has a reason
+to, and it must let go of the front again.
+
+Windows may still refuse `SetForegroundWindow`; it is a privilege, and the
+helper is not the foreground process. So the trace records `foreground=` as
+well as `topmost=`, and the check requires the window to be **above** the
+others (`topmost=yes`), which is what the user sees. `foreground=yes` is the
+best-effort part, and the check does not fail on it: a check that fails on
+something Windows is entitled to refuse is a check that fails for no reason.
+
+**The check could not have caught this before.** The off-screen test mode used
+to make the window transparent, and a transparent window is `Visible = true` -
+so the old check could not tell an invisible window from a visible one, and
+"the window is not transparent" was not a question it could ask. The off-screen
+mode now only *moves* the window off the screen and leaves it opaque, and the
+check can ask the questions that matter: is it transparent, is it cloaked (on
+a virtual desktop nobody is looking at), is it on the interactive window
+station (`WinSta0`), and is it above the others.
+
 ## Verification status
-`npm run check:all` sweeps **56 suites**, and all 56 of them pass on a release
-commit. On the tree carrying the work, before the release is cut, 55 of them
+`npm run check:all` sweeps **57 suites**, and all 57 of them pass on a release
+commit. On the tree carrying the work, before the release is cut, 56 of them
 pass: the one that does not is `check:released`, which is red until the release
-is cut, because `main` is ahead of the newest tag. It was 55 suites on the
+is cut, because `main` is ahead of the newest tag. It was 56 suites on the
+tree carrying the 2026-11-12 work, 55 of them passing; it was 55 suites on the
 tree carrying the 2026-11-11 work, 54 of them passing; it was 54 suites on the
 tree carrying the 2026-11-09 work, 53 of them passing; 53 suites on the tree
 carrying the 2026-11-08 work, 52 of them passing; 47/47 on the tree
@@ -1874,7 +2046,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | --- | --- |
 | `check:update` | 62/62, after `check:update` gained a built helper to read the PE header of |
 | `check:updatefailure` | 23/23 checks passed, running the real helper against real executables, with no window (new) |
-| `check:handoff` | 13/13 checks passed, running the real helper with the real window, off the screen and transparent (new) |
+| `check:handoff` | 20/20 checks passed, running the real helper with the real window, off the screen and opaque |
 | `check:proxy` | 5/5 checks passed, with a control run that has to show the proxy lookup |
 | `check:windowbounds` | 28/28 checks passed, against made-up displays and against the real one (new) |
 | `check:composeredit` | 58/58 checks passed |
@@ -1883,9 +2055,11 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:threadopen` | 29/29 checks passed |
 | `check:readreceipts` | 14/14 checks passed, with no Electron and no window (new) |
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
-| `tools/update-redproof.js` | 21/21 mutations caught, no holes |
+| `tools/update-redproof.js` | 23/23 mutations caught, no holes |
 | `tools/update-failure-redproof.js` | 15/15 mutations caught, no holes, with an asserted baseline (new) |
-| `tools/update-handoff-redproof.js` | 9/9 mutations caught, no holes, with an asserted baseline (new) |
+| `tools/update-handoff-redproof.js` | 12/12 mutations caught, no holes, with an asserted baseline (new) |
+| `check:nsis` | 11/11 checks passed, with the hook built and run by NSIS itself, control included (new) |
+| `tools/nsis-install-over-top-redproof.js` | 2/2 mutations caught, no holes, with an asserted baseline (new) |
 | `tools/proxy-redproof.js` | 5/5 mutations caught, no holes |
 | `tools/window-bounds-redproof.js` | 9/9 mutations caught, no holes, with an asserted baseline (new) |
 | `tools/search-nav-redproof.js` | 12/12 mutations caught, no holes |
@@ -2025,6 +2199,16 @@ keeping:
    for: a display that has been unplugged. The last move before the window
    closed was also being thrown away, by a debounce that nothing ever
    flushed; the window now saves its bounds when it closes.
+9. **The live taskbar on this machine is out of sync with Explorer's own
+   record of the pin.** The persisted `Favorites` blob has
+   `Better Beeper (2).lnk` at position 3, between Google Voice and deck.blue,
+   but the running shell has the item at the end of the list and no longer
+   pinned. The pin comes back where it was when Explorer re-reads the blob:
+   restart Explorer - which closes the Explorer windows and restarts the
+   taskbar - or sign out and back in. **This has not been done.** It is the
+   user's desktop and the windows he has open are his; and it is a one-time
+   repair for the damage the 1.30.4 "put the pin back" code did, which is
+   gone now that the update installs over the top.
 
 Not outstanding any more, but still true and easy to trip over: the updater
 asks GitHub for a **Release**, not for a commit. It calls `releases/latest` and
