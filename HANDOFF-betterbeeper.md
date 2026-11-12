@@ -1688,11 +1688,68 @@ silently when it could not even work out what it was asked to do, which is
 indistinguishable from never having been started. It now says so, on a window
 with a Close button, and waits for it to be read.
 
+### The update's window was never checked, and the pin was never kept
+
+Scott reported two things about an update: the helper's window does not show,
+and the app comes off the taskbar and has to be pinned again by hand.
+
+**The window.** The helper's window had never once been run. Every check that
+drove the helper passed `--no-window`, because a window on the desktop during a
+test is not allowed - so "the window shows" was an assumption with nothing
+behind it, and the window path could have been broken for as long as it had
+been written.
+
+The helper now writes down what it did as it does it (`--trace <file>`), and
+the app always asks for one: `<userData>\update-helper-trace.txt`. The trace
+says whether the window was built, whether the message loop started, and - the
+part that matters - whether the window was visible and which desktop it was
+on. A window on a desktop the user is not looking at is a different failure
+from a window that was never created, and only the trace tells the two apart.
+
+`check:handoff` runs the real helper with the real window and reads the
+trace. The window is put off the screen and made transparent while the check
+runs, so the window path can be exercised without putting anything in front
+of the user. It is still created, still shown and still visible in every sense
+Windows cares about, which is what the trace records.
+
+Running that check on this machine says the window works: it is built, it is
+visible, it is on the `Default` desktop, and it is up while the install runs
+rather than after it. It says the same when the helper is spawned exactly the
+way `updater.js` spawns it - detached, `stdio: 'ignore'`, `windowsHide: true`
+- and when the spawning process is Electron itself and exits 300 ms later.
+
+**The pin.** The taskbar pin is a copy of the Start Menu shortcut. That was
+measured, not assumed: on this machine the pinned `Better Beeper.lnk` and the
+Start Menu `Better Beeper.lnk` had the same SHA-256, and both had the
+modification time of the install. The installer rewrites the shortcut - the
+uninstaller deletes it and the installer creates it again - and Explorer's
+copy is left holding an item it can no longer match, so the pin has to be put
+back by hand.
+
+The helper puts it back, from the shortcut as the installer left it, and it
+does so whether the install worked or not: a failed install rewrites the
+shortcut just as well as a good one. The helper is the only thing alive
+across the gap the installer makes, so it is the only place the pin can be
+put back.
+
+**And the helper itself.** It used to run from inside the install folder - the
+very folder the installer replaces. Windows will not delete a running
+program, so the installer could not finish deleting it, gave up with "File is
+busy", and the helper's own executable was never replaced by the new one. The
+app now copies the helper to `%LOCALAPPDATA%\Better Beeper\update-helper\` and
+runs that copy, so the install folder is free to be replaced while the helper
+keeps going.
+
+`tools/update-handoff-redproof.js` breaks each of those rules in turn and
+requires the check they were written for to catch it: 9/9, with an asserted
+baseline.
+
 ## Verification status
-`npm run check:all` sweeps **54 suites**, and all 54 of them pass on a release
-commit. On the tree carrying the work, before the release is cut, 53 of them
+`npm run check:all` sweeps **55 suites**, and all 55 of them pass on a release
+commit. On the tree carrying the work, before the release is cut, 54 of them
 pass: the one that does not is `check:released`, which is red until the release
-is cut, because `main` is ahead of the newest tag. It was 53 suites on the
+is cut, because `main` is ahead of the newest tag. It was 54 suites on the
+tree carrying the 2026-11-11 work, 53 of them passing; it was 53 suites on the
 tree carrying the 2026-11-09 work, 52 of them passing; 51 suites on the tree
 carrying the 2026-11-08 work, 50 of them passing; 47/47 on the tree
 carrying the 2026-11-02 work, 2026-11-02. It was
@@ -1712,6 +1769,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | --- | --- |
 | `check:update` | 62/62, after `check:update` gained a built helper to read the PE header of |
 | `check:updatefailure` | 23/23 checks passed, running the real helper against real executables, with no window (new) |
+| `check:handoff` | 13/13 checks passed, running the real helper with the real window, off the screen and transparent (new) |
 | `check:proxy` | 5/5 checks passed, with a control run that has to show the proxy lookup |
 | `check:composeredit` | 58/58 checks passed |
 | `check:composereditrules` | 45/45 checks passed, with no Electron and no window |
@@ -1721,6 +1779,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
 | `tools/update-redproof.js` | 21/21 mutations caught, no holes |
 | `tools/update-failure-redproof.js` | 15/15 mutations caught, no holes, with an asserted baseline (new) |
+| `tools/update-handoff-redproof.js` | 9/9 mutations caught, no holes, with an asserted baseline (new) |
 | `tools/proxy-redproof.js` | 5/5 mutations caught, no holes |
 | `tools/search-nav-redproof.js` | 12/12 mutations caught, no holes |
 | `tools/syntax-redproof.js` | 3/3 mutations caught, no holes |
