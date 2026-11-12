@@ -30,7 +30,7 @@ one person's machine.
 ## Git state
 
 Branch `main`, in sync with origin. The work described under "Work done
-2026-11-11" is committed and released.
+2026-11-12" is committed and released.
 
 **This section does not name a version, on purpose.** `git describe --tags
 --abbrev=0` names it, and the `Release x.y.z` commit at the top of the list
@@ -1163,7 +1163,7 @@ certificate for itself, was reachable with a plain `https.get` from this
 machine, and was never in the log.
 
 It was **Chromium's proxy auto-discovery**. Chromium looks for a WPAD file by
-fetching `http://wpad/wpad.dat`. On this machine `wpad` resolves to
+fetching `http://wpad/wpad.dat`. On this machine `wpad` resolved to
 `wpad.yatesframe.com`, which is Scott's own YunoHost box at 139.64.176.66.
 The fetch is answered with a redirect to `https://wpad/yunohost/admin`, and
 the certificate that answers is **YunoHost's default self-signed one** -
@@ -1181,16 +1181,13 @@ accepted by Electron and ignored by Chromium, so the timing is part of the
 rule. The app has no use for a proxy - the renderer makes no network requests
 at all, and the only outbound call in the app is the GitHub release feed.
 
-**What is left is on the DNS, and it is a record to delete.** `wpad` is
-resolved as an alias of `wpad.yatesframe.com`, and both resolve to
-139.64.176.66. WPAD is a legacy way for a machine to be told about a proxy by
-a name in DHCP or DNS; a personal domain has no business having one, and
-nothing on this network is a proxy. Delete the `wpad.yatesframe.com` record
-and the `wpad` alias in front of it at whatever serves the DNS for
-`yatesframe.com`, and the lookup fails at once with NXDOMAIN instead of
-failing slowly with a certificate error. Until it is deleted, **any browser
-that does proxy auto-discovery will still make the lookup** - Chrome and Edge
-do it by default - and will still show the certificate warning on it.
+**The DNS side of it is closed too, and is not on the list any more.** `wpad`
+was resolved as an alias of `wpad.yatesframe.com`, both pointing at
+139.64.176.66, where no vhost serves that name. The record now points at
+`0.0.0.0`, so the lookup fails at once instead of being answered with an
+untrusted certificate. Nothing is left to do there, and it is not an item to
+chase: the app does not go looking, and the browsers that do are the
+browser's business, not this app's.
 
 **The check has a control, and the control is the point.** "No proxy lookup
 happened" is also what a Chromium that never looks would produce, on a machine
@@ -1771,14 +1768,95 @@ nothing" used to leave the check green, because with no WPAD lookup possible
 there was nothing for the missing policy to cause. It goes red now, which is
 the whole point of the case.
 
+## Work done 2026-11-12
+
+### The window came back slightly off, and the offset was the overhang
+
+**What was reported:** "the close and reopen coordinates do not seem to exactly
+work. When the window is very close to the edge of a monitor, it comes back
+slightly offset from where it closed."
+
+**What it was.** The saved bounds were clamped into the work area of whichever
+display owned them:
+
+    x: Math.round(Math.min(Math.max(saved.x, area.x), area.x + area.width - width)),
+
+That clamp was there for a good reason - a window whose display has been
+unplugged would otherwise open in the void, with no way to get it back - but it
+did not stop at the case it was for. It applied to every position, including
+the ones the user had chosen.
+
+**Measured, not assumed.** A probe (since removed) drove the real window
+through every edge of every one of this machine's seven displays, with the
+window hidden so that nothing reached the desktop, and read the bounds back at
+each step. The offset was exactly the overhang, and nothing else:
+
+| the window was closed | it came back |
+| --- | --- |
+| 30px past the right edge of a display | 30px to the left of that |
+| 30px past the left edge | 30px to the right of that |
+| 30px above the top edge | 30px below it |
+| 30px below the work area | 30px above it |
+| flush with an edge | exactly where it was |
+
+The last row is the one that matters: a window that was *exactly* at an edge
+came back exactly. The offset only ever appeared when the window was over the
+edge, and then the offset was the overhang. Nothing else about the desktop was
+involved - the same numbers came out of every display, at every scale factor,
+on both sides of the screen.
+
+The taskbar was the same case. The primary display's work area is 48px shorter
+than the display because of the taskbar along the bottom, so a window closed
+over the taskbar came back above it - and the bottom edge of the screen is
+where a window lives most of the time.
+
+**What it is now.** `src/main/window-bounds.js` holds the geometry, away from
+Electron, and the rule is one sentence: the window opens exactly where it was
+closed - the same position and the same size.
+
+The clamp survives in the one case it was written for. If the saved window
+touches no display at all - the monitor it was on is gone - it is brought onto
+the primary display and centred. That test is "touches no display", not "is not
+entirely inside one": a window hanging over an edge still touches its display,
+and a window in the gap between two displays does not.
+
+**The size was being tidied up too.** The old code also fitted the width and
+height to the display, so a 900px window on the 682px-wide portrait display
+came back 720px wide - the app's minimum. That is the same tidying, and it is
+gone as well: the size is the size the user had.
+
+**The last move was being thrown away.** The bounds were written 400ms after
+the last move event - a drag fires one for every pixel - and the window closing
+did not write anything at all. A window closed within 400ms of being dragged
+therefore came back where it was *before* the drag. The window now saves its
+bounds when it closes, as well as on the debounce, and the rule about what is
+worth saving has moved into `boundsToRemember()`: a minimized or full-screen
+window is not saved (its bounds are not the shape the user chose), and a
+maximized window is saved as the rectangle it had before it was maximized.
+
+**What proves it.** `npm run check:windowbounds` (28/28) checks the geometry
+against displays that are made up - a taskbar in the way, a monitor that is not
+there, a display narrower than the minimum window - because the cases that
+matter are not the ones this machine happens to have. It also asks the real
+desktop the same question, and puts a real window where the app would put one -
+hidden, so nothing appears on the desktop - and reads back where it landed.
+
+`tools/window-bounds-redproof.js` breaks each rule in turn: 9/9 mutations
+caught, no holes, with the baseline asserted. The mutations are the ones that
+would bring the bug back - the clamp returning, the taskbar clamp on its own, a
+one-pixel nudge, the size fitted to the display again, the rescue for a
+vanished display removed, the rescue leaving the window in the void, the app
+stopping asking the module at all, a minimized window being remembered, and
+the window not being remembered when it closes.
+
 ## Verification status
-`npm run check:all` sweeps **55 suites**, and all 55 of them pass on a release
-commit. On the tree carrying the work, before the release is cut, 54 of them
+`npm run check:all` sweeps **56 suites**, and all 56 of them pass on a release
+commit. On the tree carrying the work, before the release is cut, 55 of them
 pass: the one that does not is `check:released`, which is red until the release
-is cut, because `main` is ahead of the newest tag. It was 54 suites on the
-tree carrying the 2026-11-11 work, 53 of them passing; it was 53 suites on the
-tree carrying the 2026-11-09 work, 52 of them passing; 51 suites on the tree
-carrying the 2026-11-08 work, 50 of them passing; 47/47 on the tree
+is cut, because `main` is ahead of the newest tag. It was 55 suites on the
+tree carrying the 2026-11-11 work, 54 of them passing; it was 54 suites on the
+tree carrying the 2026-11-09 work, 53 of them passing; 53 suites on the tree
+carrying the 2026-11-08 work, 52 of them passing; 47/47 on the tree
 carrying the 2026-11-02 work, 2026-11-02. It was
 45/45 on the v1.26.0 release commit, 44/44 on the v1.25.0 release commit and
 on the v1.24.0 release commit, 2026-10-27; 43/43 on the v1.23.0 release
@@ -1798,6 +1876,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:updatefailure` | 23/23 checks passed, running the real helper against real executables, with no window (new) |
 | `check:handoff` | 13/13 checks passed, running the real helper with the real window, off the screen and transparent (new) |
 | `check:proxy` | 5/5 checks passed, with a control run that has to show the proxy lookup |
+| `check:windowbounds` | 28/28 checks passed, against made-up displays and against the real one (new) |
 | `check:composeredit` | 58/58 checks passed |
 | `check:composereditrules` | 45/45 checks passed, with no Electron and no window |
 | `check:bridgeplaceholder` | 12/12 checks passed, with no Electron and no window (new) |
@@ -1808,6 +1887,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `tools/update-failure-redproof.js` | 15/15 mutations caught, no holes, with an asserted baseline (new) |
 | `tools/update-handoff-redproof.js` | 9/9 mutations caught, no holes, with an asserted baseline (new) |
 | `tools/proxy-redproof.js` | 5/5 mutations caught, no holes |
+| `tools/window-bounds-redproof.js` | 9/9 mutations caught, no holes, with an asserted baseline (new) |
 | `tools/search-nav-redproof.js` | 12/12 mutations caught, no holes |
 | `tools/syntax-redproof.js` | 3/3 mutations caught, no holes |
 | `tools/avatar-redproof.js` | 4/4 mutations caught, no holes |
@@ -1891,14 +1971,10 @@ keeping:
 
 1. **The TLS warning was Chromium looking for a proxy, not a bad certificate
    on the GitHub call.** Closed in v1.28.3 - see "The TLS warning was Chromium
-   looking for a proxy" above. The cause is fixed in the app. The *root* cause
-   is still on the server: the DNS record `wpad.yatesframe.com`, and the
-   `wpad` alias in front of it, point at the YunoHost box, where no vhost
-   serves that name - so nginx answers with its default self-signed
-   `CN=yunohost.org` certificate and the chain is not trusted. The app no
-   longer goes looking, so the app is quiet about it. **A browser that
-   auto-discovers a proxy will still find it.** That is a DNS record to
-   delete, on the DNS, and it is not in this repository.
+   looking for a proxy" above. The cause is fixed in the app, and the DNS side
+   of it is closed too: the `wpad` record points at `0.0.0.0`, so the lookup
+   fails at once rather than being answered with an untrusted certificate.
+   Nothing is outstanding here, in the app or on the DNS.
 2. **The empty command windows were the old status window.** Closed in
    v1.28.3 - see "The empty command windows were a batch file's status window"
    above. The update path cannot have a console window now, and the checks say
@@ -1939,6 +2015,16 @@ keeping:
    use Better Beeper again." - rather than leaving the user with a dead app
    and no explanation. The old version of the app is still on disk and is
    still runnable once the lock is gone.
+8. **The window came back slightly off from where it was closed.** Closed in
+   v1.30.5 - see "The window came back slightly off, and the offset was the
+   overhang" above. The saved bounds were clamped into the work area of the
+   display that owned them, so a window closed over an edge came back by
+   exactly the overhang, and a window closed over the taskbar came back above
+   it. The window now opens exactly where it was closed, at exactly the size
+   it was closed at, and the clamp survives only for the case it was written
+   for: a display that has been unplugged. The last move before the window
+   closed was also being thrown away, by a debounce that nothing ever
+   flushed; the window now saves its bounds when it closes.
 
 Not outstanding any more, but still true and easy to trip over: the updater
 asks GitHub for a **Release**, not for a commit. It calls `releases/latest` and
