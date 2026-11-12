@@ -118,6 +118,9 @@ function describeInstallOutcome(code) {
  */
 const HELPER_EXE = 'BetterBeeper.UpdateHelper.exe';
 
+/** Where the helper leaves a record of what it did. */
+const HELPER_TRACE_FILE = 'update-helper-trace.txt';
+
 const DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
@@ -131,6 +134,68 @@ function helperPath() {
   const packaged = path.join(process.resourcesPath || '', 'update-helper', HELPER_EXE);
   if (app.isPackaged) return packaged;
   return path.join(app.getAppPath(), 'build', 'update-helper', HELPER_EXE);
+}
+
+/**
+ * Where the helper is *run* from.
+ *
+ * Not from the install folder, and that is the whole point.
+ *
+ * The installer replaces that folder wholesale: it runs the old uninstaller,
+ * which moves the install folder aside and deletes it. The helper is running
+ * while that happens, and its own executable is inside the folder being
+ * deleted, so the delete cannot finish - Windows will not delete a running
+ * program - and the installer gives up with "File is busy". The app's own
+ * files get copied over anyway, so the update half-works; the helper's
+ * executable never gets replaced, and the install is left in a state nobody
+ * asked for.
+ *
+ * Running a copy from somewhere the installer does not touch removes the
+ * problem: the install folder is free to be replaced while the helper keeps
+ * running from its own copy.
+ */
+function helperRunPath() {
+  const base = process.env.LOCALAPPDATA || app.getPath('appData');
+  return path.join(base, 'Better Beeper', 'update-helper', HELPER_EXE);
+}
+
+/**
+ * Put the helper somewhere it can run from, and say where that is.
+ *
+ * Returns null when there is no helper to run. The copy is refreshed only when
+ * the one on disk is missing or older than the one being shipped, so this
+ * costs a stat rather than a copy on the ordinary path.
+ */
+function prepareHelper() {
+  const source = helperPath();
+  if (!fs.existsSync(source)) return null;
+
+  const target = helperRunPath();
+
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+
+    const shipped = fs.statSync(source);
+    let stale = true;
+    try {
+      const running = fs.statSync(target);
+      stale = running.size !== shipped.size || running.mtimeMs < shipped.mtimeMs;
+    } catch {
+      stale = true;
+    }
+
+    if (stale) fs.copyFileSync(source, target);
+
+    return target;
+  } catch {
+    // Running it from where it is beats not running it at all.
+    return source;
+  }
+}
+
+/** Where the helper writes down what it did. */
+function helperTracePath() {
+  return path.join(app.getPath('userData'), HELPER_TRACE_FILE);
 }
 
 /**
@@ -468,10 +533,10 @@ let previousInstall = null;
  * must not really do; and a stubbed boundary that records the call is enough,
  * because what is being verified is *that it was launched, and with what*.
  */
-function launchInstall(pending, { spawnProcess = spawn, helper = helperPath(), parentPid = process.pid } = {}) {
+function launchInstall(pending, { spawnProcess = spawn, helper = prepareHelper(), parentPid = process.pid } = {}) {
   const installer = pending && pending.installer;
   if (!installer || !fs.existsSync(installer)) return false;
-  if (!fs.existsSync(helper)) return false;
+  if (!helper || !fs.existsSync(helper)) return false;
 
   const relaunch = (pending && pending.relaunch) || process.execPath;
   const result = path.join(app.getPath('userData'), INSTALL_RESULT_FILE);
@@ -481,6 +546,11 @@ function launchInstall(pending, { spawnProcess = spawn, helper = helperPath(), p
     '--relaunch', relaunch,
     '--result', result,
     '--pid', String(parentPid),
+    // The helper writes down what it did as it does it. The window is the
+    // part of this that has no other evidence: the app is gone while the
+    // install runs, and "the window showed" was an assumption until the
+    // helper started saying so.
+    '--trace', helperTracePath(),
   ];
 
   try {
@@ -598,5 +668,9 @@ module.exports = {
   readInstallResult,
   describeInstallOutcome,
   helperPath,
+  helperRunPath,
+  helperTracePath,
+  prepareHelper,
   HELPER_EXE,
+  HELPER_TRACE_FILE,
 };

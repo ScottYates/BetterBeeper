@@ -35,6 +35,7 @@
     "check:unread": "electron tools/run-check.js tools/unread-check.js",
     "check:update": "node tools/update-check.js",
     "check:updatefailure": "node tools/update-failure-check.js",
+    "check:handoff": "node tools/update-handoff-check.js",
     "check:proxy": "node tools/proxy-check.js",
     "check:spellmenu": "node tools/spellmenu-check.js",
     "check:syntax": "node tools/syntax-check.js",

@@ -29,6 +29,7 @@
 using System;
 using System.Drawing;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -51,10 +52,27 @@ namespace BetterBeeper.UpdateHelper
 
         private string _lastStatus = "";
         private bool _finished;
+        private bool _ticked;
 
-        public StatusForm(ProgressState state)
+        private readonly TraceLog _trace;
+
+        /// <summary>
+        /// Park the window off the screen.
+        ///
+        /// For running the real window path in a check. The window is created,
+        /// shown and visible in every sense Windows cares about; it is simply
+        /// nowhere the user would see it. Without this, the only way to find out
+        /// whether the window works is to put it in front of the user and ask.
+        /// </summary>
+        private readonly bool _offscreen;
+
+        public StatusForm(ProgressState state, TraceLog trace, bool offscreen)
         {
             _state = state;
+            _trace = trace ?? new TraceLog(null);
+            _offscreen = offscreen;
+
+            _trace.Write("form-constructed");
 
             Text = "Better Beeper Update";
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -76,6 +94,29 @@ namespace BetterBeeper.UpdateHelper
             BackColor = Color.FromArgb(24, 26, 30);
             ForeColor = Color.White;
             Font = new Font("Segoe UI", 9F);
+
+            if (_offscreen)
+            {
+                // Off the screen, and not on the taskbar: a check must not put
+                // anything in front of the user.
+                //
+                // Three things, because one of them is not enough. Setting
+                // Location in the constructor does not stick - Windows puts a
+                // window at the top left of the screen unless something moves
+                // it afterwards, and that is exactly what happened here: a
+                // check that was meant to be invisible put a window in the
+                // corner of the screen. Moving it once the handle exists works,
+                // but something puts it back at the top left afterwards, so it
+                // is moved again once it has been shown.
+                //
+                // And the opacity is zero throughout, so even in the moment
+                // before it is moved there is nothing to see. The window is
+                // still created, shown and visible in every sense Windows
+                // cares about - which is what the check is about.
+                StartPosition = FormStartPosition.Manual;
+                ShowInTaskbar = false;
+                Opacity = 0.0;
+            }
 
             var title = new Label
             {
@@ -189,11 +230,164 @@ namespace BetterBeeper.UpdateHelper
         [DllImport("user32.dll")]
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
+        /// <summary>
+        /// Moves the window off the screen before it is ever shown.
+        ///
+        /// OnHandleCreated runs when the window exists but before it is visible,
+        /// so this is the last moment at which the window can be placed where
+        /// the user will not see it. Setting Location in the constructor does
+        /// not work: the window still comes up at the top left of the screen.
+        /// </summary>
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+
+            if (_offscreen)
+            {
+                SetBounds(-32000, -32000, Width, Height);
+                _trace.Write("offscreen handle-created bounds=" + Bounds.X + "," + Bounds.Y + "," + Bounds.Width + "," + Bounds.Height);
+            }
+        }
+
+        /// <summary>
+        /// Moves the window off the screen once it has been shown.
+        ///
+        /// Something puts the window back at the top left of the screen after
+        /// the handle exists, so it is moved again here. The opacity is zero by
+        /// this time, so there is nothing to see even in between.
+        /// </summary>
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+
+            if (_offscreen)
+            {
+                SetBounds(-32000, -32000, Width, Height);
+                _trace.Write("offscreen shown bounds=" + Bounds.X + "," + Bounds.Y + "," + Bounds.Width + "," + Bounds.Height);
+                return;
+            }
+
+            // The window comes to the front.
+            //
+            // The helper is started while the app is still on screen, so its
+            // window can open behind the app that is about to close - and the
+            // app closing is the moment the user is looking for something. A
+            // window that is up but behind is the same as no window, from
+            // where the user is sitting.
+            //
+            // Not TopMost. The window is the only thing on screen at this
+            // point, so there is nothing to stay above, and a window that
+            // insists on being in front is a window someone cannot get out of
+            // the way of.
+            try
+            {
+                Activate();
+            }
+            catch (Exception)
+            {
+                // A window that cannot take the focus is still a window.
+            }
+        }
+
         /// <summary>Shows the window and pumps messages until the work is finished and the linger is over.</summary>
         public void Pump()
         {
             _timer.Start();
+            _trace.Write("pump-enter");
             Application.Run(this);
+            _trace.Write("pump-exit");
+        }
+
+        /// <summary>
+        /// The name of the desktop this window is on.
+        ///
+        /// "Default" is the desktop the user is looking at. A window on any
+        /// other desktop is created and painted and nobody sees it, which is a
+        /// completely different failure from a window that was never created -
+        /// and the two need different fixes.
+        /// </summary>
+        private static string CurrentDesktopName()
+        {
+            try
+            {
+                var desktop = GetThreadDesktop(GetCurrentThreadId());
+                if (desktop == IntPtr.Zero) return "unknown";
+
+                var buffer = new StringBuilder(256);
+                uint needed;
+                if (!GetUserObjectInformation(desktop, UOI_NAME, buffer, (uint)buffer.Capacity * 2, out needed))
+                {
+                    return "unknown";
+                }
+
+                return buffer.ToString();
+            }
+            catch (Exception)
+            {
+                return "unknown";
+            }
+        }
+
+        private const int UOI_NAME = 2;
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetThreadDesktop(uint dwThreadId);
+
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool GetUserObjectInformation(
+            IntPtr hObj, int nIndex, StringBuilder pvInfo, uint nLength, out uint lpnLengthNeeded);
+
+        /// <summary>
+        /// One line describing the window, as Windows sees it.
+        ///
+        /// This is the fact the whole trace exists for: a window that is not
+        /// visible is not a window, however well it was built.
+        /// </summary>
+        private string Describe()
+        {
+            var visible = false;
+            var handle = IntPtr.Zero;
+            var bounds = "";
+
+            try
+            {
+                visible = Visible;
+                handle = Handle;
+                var rect = DesktopBounds;
+                bounds = rect.X + "," + rect.Y + "," + rect.Width + "," + rect.Height;
+            }
+            catch (Exception)
+            {
+                // A form that cannot even say where it is has not been shown.
+            }
+
+            return "visible=" + visible
+                + " handle=" + (handle == IntPtr.Zero ? "none" : "yes")
+                + " bounds=" + bounds
+                + " desktop=" + CurrentDesktopName()
+                + " screens=" + ScreenCount();
+        }
+
+        private static string ScreenCount()
+        {
+            try
+            {
+                var screens = Screen.AllScreens;
+                var parts = new string[screens.Length];
+                for (var i = 0; i < screens.Length; i++)
+                {
+                    parts[i] = screens[i].Bounds.X + "," + screens[i].Bounds.Y + ","
+                        + screens[i].Bounds.Width + "," + screens[i].Bounds.Height;
+                }
+                return string.Join(";", parts);
+            }
+            catch (Exception)
+            {
+                return "unknown";
+            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -211,6 +405,12 @@ namespace BetterBeeper.UpdateHelper
 
         private void OnTick(object sender, EventArgs e)
         {
+            if (!_ticked)
+            {
+                _ticked = true;
+                _trace.Write("tick " + Describe());
+            }
+
             var status = _state.Status;
             if (status != _lastStatus)
             {

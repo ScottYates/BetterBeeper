@@ -257,6 +257,11 @@ internal static class FakeLock
  *
  * --pid 0 because the check is not the app: there is no parent process for
  * the helper to wait for, and it is written to wait for none.
+ *
+ * --shortcut points at a path that is not there. The helper puts the app back
+ * on the taskbar after an install, and a check must never touch the user's
+ * real taskbar. There is no shortcut at this path, so there is nothing to
+ * copy and nothing is touched.
  */
 function runHelper({ installer, relaunch, result, env = {}, installTimeout = '3', releaseTimeout = '5' }) {
   const args = [
@@ -265,6 +270,7 @@ function runHelper({ installer, relaunch, result, env = {}, installTimeout = '3'
     '--relaunch', relaunch,
     '--result', result,
     '--pid', '0',
+    '--shortcut', path.join(sandbox, 'no-such-shortcut.lnk'),
     '--install-timeout', installTimeout,
     '--release-timeout', releaseTimeout,
   ];

@@ -114,6 +114,157 @@ namespace BetterBeeper.UpdateHelper
         public const int Unexpected = -1;
     }
 
+    /// <summary>
+    /// What the program did, written to a file as it does it.
+    ///
+    /// The window is the feature, and until now there was no way to see whether
+    /// it happened: every check drives this program with --no-window, because a
+    /// window on the desktop during a test is not allowed. So the window path
+    /// had never been run, and "the window shows" was an assumption.
+    ///
+    /// This is the instrument that turns it into a fact. Each step of the
+    /// window's life is written down as it happens - the form being built, the
+    /// message loop starting, the first tick arriving, the work finishing - so
+    /// a run that shows no window says which step it stopped at.
+    ///
+    /// It is a file, not a console: this program has no console, by design.
+    /// </summary>
+    internal sealed class TraceLog
+    {
+        private readonly string _path;
+        private readonly object _gate = new object();
+
+        public TraceLog(string path)
+        {
+            _path = path;
+
+            // One run, one trace. The file is the record of the last update,
+            // and a record that carries the previous update's lines in it is
+            // a record of two updates.
+            if (!string.IsNullOrEmpty(_path))
+            {
+                try { File.Delete(_path); } catch { /* best effort */ }
+            }
+        }
+
+        /// <summary>Writes one line. Never throws: a trace that breaks the thing it is tracing is worse than no trace.</summary>
+        public void Write(string line)
+        {
+            if (string.IsNullOrEmpty(_path)) return;
+
+            lock (_gate)
+            {
+                try
+                {
+                    File.AppendAllText(_path, line + "\r\n");
+                }
+                catch (Exception)
+                {
+                    // A trace that cannot be written is not a reason to stop.
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The app's place on the taskbar.
+    ///
+    /// The taskbar pin is a copy of the Start Menu shortcut. Explorer's pinned
+    /// copy and the Start Menu shortcut are the same file, byte for byte, and
+    /// that was measured on a real machine rather than assumed: the pinned
+    /// "Better Beeper.lnk" and the Start Menu "Better Beeper.lnk" had the same
+    /// SHA-256.
+    ///
+    /// Which means the pin does not survive the installer rewriting the
+    /// shortcut. The uninstaller deletes it and the installer creates it again,
+    /// and Explorer is left with a pin whose item it can no longer match, so
+    /// the app has to be pinned by hand again. The copy that is put back here
+    /// is the same copy Explorer would have made, so the pin comes back with
+    /// the app still in the same place.
+    ///
+    /// Doing it here rather than in the app is deliberate. The installer is
+    /// what breaks the pin, and the installer runs between the app closing and
+    /// the app starting again. This program is the only thing alive across
+    /// that gap.
+    /// </summary>
+    internal static class TaskbarPin
+    {
+        /// <summary>The folder Windows keeps the pinned taskbar items in.</summary>
+        private static string DefaultPinFolder()
+        {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            if (string.IsNullOrEmpty(appData)) return null;
+            return Path.Combine(appData, "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar");
+        }
+
+        /// <summary>The Start Menu shortcut for an installed program.</summary>
+        private static string DefaultShortcut(string appExePath)
+        {
+            var programs = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
+            if (string.IsNullOrEmpty(programs) || string.IsNullOrEmpty(appExePath)) return null;
+            return Path.Combine(programs, Path.GetFileNameWithoutExtension(appExePath) + ".lnk");
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern void SHChangeNotify(int wEventId, uint uFlags, string dwItem1, IntPtr dwItem2);
+
+        /// <summary>
+        /// Puts the app back on the taskbar if it fell off.
+        ///
+        /// Returns the pinned shortcut's path when it is there afterwards, and
+        /// null when it is not. Never throws: a failed pin must not stop an
+        /// update, and the update has already happened by the time this runs.
+        /// </summary>
+        public static string Restore(string appExePath, string shortcutPath, string pinFolder, TraceLog trace)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(appExePath))
+                {
+                    trace.Write("pin skipped no-app-path");
+                    return null;
+                }
+
+                var shortcut = shortcutPath;
+                if (string.IsNullOrEmpty(shortcut)) shortcut = DefaultShortcut(appExePath);
+
+                var folder = pinFolder;
+                if (string.IsNullOrEmpty(folder)) folder = DefaultPinFolder();
+
+                if (string.IsNullOrEmpty(shortcut) || string.IsNullOrEmpty(folder))
+                {
+                    trace.Write("pin skipped no-paths shortcut=" + shortcut + " folder=" + folder);
+                    return null;
+                }
+
+                if (!File.Exists(shortcut))
+                {
+                    // No shortcut means there is nothing to copy. That is not an
+                    // error worth stopping for: the app is installed either way.
+                    trace.Write("pin skipped no-shortcut " + shortcut);
+                    return null;
+                }
+
+                Directory.CreateDirectory(folder);
+
+                var pinned = Path.Combine(folder, Path.GetFileName(shortcut));
+                File.Copy(shortcut, pinned, true);
+
+                // Tell the shell the item changed, or Explorer keeps showing
+                // what it had cached.
+                SHChangeNotify(0x2000, 0x0005, pinned, IntPtr.Zero);
+
+                trace.Write("pin restored " + pinned);
+                return pinned;
+            }
+            catch (Exception ex)
+            {
+                trace.Write("pin failed " + ex.Message);
+                return null;
+            }
+        }
+    }
+
     internal static class Program
     {
         // Long enough for a 90 MB install on a slow disk, and bounded so a wedged
@@ -157,12 +308,15 @@ namespace BetterBeeper.UpdateHelper
                 // is the one thing this whole failure path exists to prevent.
                 RelaunchFromArgs(args);
 
-                if (!HasFlag(args, "--no-window")) ShowFatal(ex.Message);
+                if (!HasFlag(args, "--no-window")) ShowFatal(ex.Message, new TraceLog(ArgumentValue(args, "--trace")));
                 return 2;
             }
 
+            var trace = new TraceLog(options.TracePath);
+            trace.Write("main-enter no-window=" + options.NoWindow + " trace=" + !string.IsNullOrEmpty(options.TracePath));
+
             var state = new ProgressState();
-            var work = Task.Run(() => Run(state, options));
+            var work = Task.Run(() => Run(state, options, trace));
 
             // The check suite drives this program end to end, and a window on the
             // desktop during a test is not allowed. --no-window runs the same
@@ -173,7 +327,7 @@ namespace BetterBeeper.UpdateHelper
                 return state.ExitCode == 0 ? 0 : 1;
             }
 
-            using (var form = new StatusForm(state))
+            using (var form = new StatusForm(state, trace, options.Offscreen))
             {
                 form.Pump();
             }
@@ -183,20 +337,38 @@ namespace BetterBeeper.UpdateHelper
             return state.ExitCode == 0 ? 0 : 1;
         }
 
-        private static void Run(ProgressState state, Options options)
+        private static void Run(ProgressState state, Options options, TraceLog trace)
         {
             var code = ResultCodes.Unexpected;
             var detail = (string)null;
 
+            trace.Write("work-start");
+
             try
             {
-                code = Install(state, options);
+                code = Install(state, options, trace);
                 detail = state.Detail;
             }
             catch (Exception ex)
             {
                 code = ResultCodes.Unexpected;
                 detail = ex.Message;
+            }
+
+            // The taskbar pin is put back before the app comes back, and whether
+            // or not the install worked. The installer is what breaks the pin -
+            // it rewrites the Start Menu shortcut the pin is a copy of - so a
+            // failed install can break it just as well as a good one.
+            //
+            // Not in --no-window mode. That mode exists so the check suite can
+            // drive this program end to end, and a check must never touch the
+            // user's own taskbar - the same reason it must never put a window
+            // on their screen. The helper is the only thing alive across the
+            // gap the installer makes, so this is the only place the pin can
+            // be put back.
+            if (!options.NoWindow)
+            {
+                TaskbarPin.Restore(options.RelaunchPath, options.ShortcutPath, options.PinFolder, trace);
             }
 
             // The result is written BEFORE the app is started again, because the
@@ -230,9 +402,11 @@ namespace BetterBeeper.UpdateHelper
             state.Detail = detail;
             state.Ok = code == ResultCodes.Installed;
             Volatile.Write(ref state.Done, true);
+
+            trace.Write("work-done code=" + code + " detail=" + (detail ?? ""));
         }
 
-        private static int Install(ProgressState state, Options options)
+        private static int Install(ProgressState state, Options options, TraceLog trace)
         {
             if (!File.Exists(options.InstallerPath))
             {
@@ -249,6 +423,7 @@ namespace BetterBeeper.UpdateHelper
             // the installer is about to ask for, and asking for it early turns a
             // silent partial install into a clean one.
             WaitForProcessExit(options.ParentPid);
+            trace.Write("parent-gone pid=" + options.ParentPid);
 
             // And this is the wait that decides whether the install is attempted
             // at all. The old code waited for the files to be free and then
@@ -260,9 +435,11 @@ namespace BetterBeeper.UpdateHelper
             {
                 state.Detail = "Something is still holding Better Beeper's files. Restart Windows to use "
                     + "Better Beeper again.";
+                trace.Write("files-held");
                 return ResultCodes.FilesHeld;
             }
 
+            trace.Write("files-free");
             state.Status = "Installing...";
             var started = DateTime.UtcNow;
 
@@ -273,6 +450,7 @@ namespace BetterBeeper.UpdateHelper
             {
                 using (var installer = StartInstaller(options.InstallerPath, job))
                 {
+                    trace.Write("installer-started");
                     var stopped = WaitForInstaller(installer, state, options.InstallTimeoutSeconds);
                     if (stopped != null)
                     {
@@ -606,7 +784,7 @@ namespace BetterBeeper.UpdateHelper
         /// and a message that disappears before it has been read is the same as
         /// no message at all.
         /// </summary>
-        private static void ShowFatal(string message)
+        private static void ShowFatal(string message, TraceLog trace)
         {
             var state = new ProgressState();
             state.Fatal = true;
@@ -615,7 +793,9 @@ namespace BetterBeeper.UpdateHelper
             state.Ok = false;
             Volatile.Write(ref state.Done, true);
 
-            using (var form = new StatusForm(state))
+            trace.Write("fatal " + message);
+
+            using (var form = new StatusForm(state, trace, false))
             {
                 form.Pump();
             }
@@ -871,6 +1051,41 @@ namespace BetterBeeper.UpdateHelper
         /// <summary>How long to wait for the app's files. Shorter for the check suite.</summary>
         public int ReleaseTimeoutSeconds { get; private set; }
 
+        /// <summary>
+        /// Where to write what this program did.
+        ///
+        /// Null means no trace. The trace is how the window's behaviour is
+        /// observed at all: the window path cannot be run with a window on the
+        /// screen during a test, so the facts about it come from here.
+        /// </summary>
+        public string TracePath { get; private set; }
+
+        /// <summary>
+        /// Put the window off the screen.
+        ///
+        /// For running the real window path in a check without putting anything
+        /// on the user's screen. The window is still created, still shown and
+        /// still visible in every sense that matters to Windows; it is simply
+        /// parked where nobody is looking.
+        /// </summary>
+        public bool Offscreen { get; private set; }
+
+        /// <summary>
+        /// The Start Menu shortcut to copy onto the taskbar.
+        ///
+        /// Null means "work it out from the installed executable". The check
+        /// suite points it at a sandbox instead, so it can prove the behaviour
+        /// without touching the real taskbar.
+        /// </summary>
+        public string ShortcutPath { get; private set; }
+
+        /// <summary>
+        /// The folder the pinned taskbar items live in.
+        ///
+        /// Null means the real one. The check suite points it at a sandbox.
+        /// </summary>
+        public string PinFolder { get; private set; }
+
         private Options(
             string installer,
             string relaunch,
@@ -878,7 +1093,11 @@ namespace BetterBeeper.UpdateHelper
             int? pid,
             bool noWindow,
             int installTimeout,
-            int releaseTimeout)
+            int releaseTimeout,
+            string tracePath,
+            bool offscreen,
+            string shortcutPath,
+            string pinFolder)
         {
             InstallerPath = installer;
             RelaunchPath = relaunch;
@@ -887,6 +1106,10 @@ namespace BetterBeeper.UpdateHelper
             NoWindow = noWindow;
             InstallTimeoutSeconds = installTimeout;
             ReleaseTimeoutSeconds = releaseTimeout;
+            TracePath = tracePath;
+            Offscreen = offscreen;
+            ShortcutPath = shortcutPath;
+            PinFolder = pinFolder;
         }
 
         public static Options Parse(string[] args)
@@ -898,6 +1121,10 @@ namespace BetterBeeper.UpdateHelper
             var noWindow = false;
             var installTimeout = Program.InstallTimeoutSeconds;
             var releaseTimeout = Program.ReleaseTimeoutSeconds;
+            string tracePath = null;
+            var offscreen = false;
+            string shortcutPath = null;
+            string pinFolder = null;
 
             for (var i = 0; i < args.Length; i++)
             {
@@ -954,6 +1181,30 @@ namespace BetterBeeper.UpdateHelper
                     if (int.TryParse(args[++i], out parsed) && parsed > 0) releaseTimeout = parsed;
                     continue;
                 }
+
+                if (flag == "--trace" && i + 1 < args.Length)
+                {
+                    tracePath = args[++i];
+                    continue;
+                }
+
+                if (flag == "--offscreen")
+                {
+                    offscreen = true;
+                    continue;
+                }
+
+                if (flag == "--shortcut" && i + 1 < args.Length)
+                {
+                    shortcutPath = args[++i];
+                    continue;
+                }
+
+                if (flag == "--pin-folder" && i + 1 < args.Length)
+                {
+                    pinFolder = args[++i];
+                    continue;
+                }
             }
 
             // `installer == null` rather than only IsNullOrWhiteSpace: the
@@ -965,7 +1216,7 @@ namespace BetterBeeper.UpdateHelper
                 throw new ArgumentException("--installer is required.");
             }
 
-            return new Options(installer, relaunch, result, pid, noWindow, installTimeout, releaseTimeout);
+            return new Options(installer, relaunch, result, pid, noWindow, installTimeout, releaseTimeout, tracePath, offscreen, shortcutPath, pinFolder);
         }
     }
 }
