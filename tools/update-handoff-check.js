@@ -111,13 +111,21 @@ const HELPER_EXE = path.join(HELPER_DIR, 'BetterBeeper.UpdateHelper.exe');
 
 // An installer that takes a moment, so the window is genuinely up while the
 // install runs rather than for a single tick.
+//
+// It writes down the command line it was given, because what the installer is
+// told matters: the installer decides from its own arguments whether this is
+// an update, and an update keeps the app's shortcuts and its registered
+// identity. An update that does not say so takes the taskbar pin with it.
+const FAKE_OK_ARGS = path.join(sandbox, 'fake-ok-args.txt');
 const FAKE_INSTALLER = compileFake('FakeOk', `using System;
+using System.IO;
 using System.Threading;
 
 internal static class FakeOk
 {
     private static int Main(string[] args)
     {
+        File.WriteAllText(@"${FAKE_OK_ARGS}", string.Join(" ", args));
         Thread.Sleep(1500);
         return 0;
     }
@@ -230,9 +238,58 @@ add('the window is on the desktop the user is looking at', () => {
   // A window on some other desktop is created and painted and nobody sees it.
   // That is a different failure from a window that was never created, and the
   // two need different fixes.
+  //
+  // The desktop name alone is not enough: every window station has a desktop
+  // called "Default", and a window on another station is invisible. The
+  // station is the interactive one - WinSta0 - on the desktop the user is
+  // looking at.
   const tick = good.lines.find((l) => l.startsWith('tick '));
   if (!tick) return 'the window never ticked';
   if (!/desktop=Default/.test(tick)) return 'the window was not on the interactive desktop: ' + tick;
+  if (!/station=WinSta0/.test(tick)) return 'the window was not on the interactive window station: ' + tick;
+  return true;
+});
+
+add('the window is not transparent', () => {
+  // A transparent window is a window nobody can see, and the form's own
+  // Visible property says nothing about it - a transparent window is Visible.
+  // This is the case the off-screen mode used to make: it made the window
+  // transparent, so the check could not tell an invisible window from a
+  // visible one, which is the whole thing it is here to catch.
+  const tick = good.lines.find((l) => l.startsWith('tick '));
+  if (!tick) return 'the window never ticked';
+  if (!/transparent=no/.test(tick)) return 'the window was transparent: ' + tick;
+  return true;
+});
+
+add('the window is not hidden on another desktop', () => {
+  // A cloaked window is one the desktop manager is not showing: it is on a
+  // virtual desktop that is not the one being looked at. It is Visible as far
+  // as Windows is concerned and nobody sees it.
+  const tick = good.lines.find((l) => l.startsWith('tick '));
+  if (!tick) return 'the window never ticked';
+  if (!/cloaked=no/.test(tick)) return 'the window was cloaked: ' + tick;
+  return true;
+});
+
+add('the window comes to the front once the app has gone', () => {
+  // The window is activated when it is shown, but that is while the app is
+  // still on screen and in the foreground, and Windows does not always let a
+  // window that is not the foreground one come to the front. The app being
+  // gone is the moment the user is looking for something, so the window is
+  // put in front then - and a window that is behind whatever the user was
+  // working in is the same as no window at all.
+  //
+  // "Topmost" is the part that is guaranteed. Windows may refuse
+  // SetForegroundWindow - it is a privilege, and the helper is not the
+  // foreground process - so the trace records whether the window became the
+  // foreground one, but the window being *above* the others is what the user
+  // sees, and that is what is required here.
+  if (!good.lines.some((l) => l.startsWith('brought-to-front'))) {
+    return 'the window was never brought to the front';
+  }
+  const front = good.lines.find((l) => l.startsWith('brought-to-front'));
+  if (!/topmost=yes/.test(front)) return 'the window was not put above the others: ' + front;
   return true;
 });
 
@@ -262,33 +319,42 @@ add('the window is taken off the screen when a test asks for it', () => {
 // The taskbar pin
 // ---------------------------------------------------------------------------
 
-add('the taskbar pin is put back after the install', () => {
-  // The pin is a copy of the Start Menu shortcut, and the installer rewrites
-  // that shortcut, so the copy has to be put back. This is the difference
-  // between "the app stays where it was" and "re-pin it by hand".
-  if (!fs.existsSync(good.pinned)) return 'there is no pinned shortcut afterwards';
-  if (sha(good.pinned) !== sha(good.shortcut)) return 'the pinned shortcut is not a copy of the Start Menu one';
+add('the update does not touch the taskbar pin', () => {
+  // The pin is not a file that happens to be in a folder. It is Explorer's own
+  // state - the list of pinned items, their order, and the identity each one
+  // carries - and the file in the pinned folder is Explorer's copy of it.
+  //
+  // Writing over that copy does not restore a pin. Explorer notices the file
+  // changed, treats it as a new item, and adds it at the end of the list. That
+  // is exactly what the old "put the pin back" did on the machine it was
+  // measured on: the pinned "Better Beeper.lnk" was overwritten, Explorer
+  // registered a second item called "Better Beeper (2).lnk", and the pin moved
+  // to the end of the list and stopped matching the app.
+  //
+  // So the rule is that the update does not write there at all.
+  const left = fs.existsSync(good.pinFolder) ? fs.readdirSync(good.pinFolder) : [];
+  if (left.length) return 'the update wrote into the pinned items folder: ' + left.join(', ');
   return true;
 });
 
-add('the taskbar pin is put back even when the install fails', () => {
-  // A failed install rewrites the shortcut just as well as a good one, so
-  // leaving the pin alone on failure is leaving the pin broken.
-  if (!fs.existsSync(failed.pinned)) return 'a failed install left the app unpinned';
-  if (sha(failed.pinned) !== sha(failed.shortcut)) return 'the pinned shortcut is not a copy of the Start Menu one';
+add('a failed install does not touch the taskbar pin either', () => {
+  const left = fs.existsSync(failed.pinFolder) ? fs.readdirSync(failed.pinFolder) : [];
+  if (left.length) return 'a failed install wrote into the pinned items folder: ' + left.join(', ');
   return true;
 });
 
-add('a pinned shortcut that has gone stale is replaced', () => {
-  // The copy has to be overwritten, not merely skipped when one is already
-  // there. A stale copy is what a pin that no longer matches looks like.
-  const dir = path.join(sandbox, 'stale');
+add('a pinned shortcut is left exactly as it was', () => {
+  // Not rewritten, not replaced, not given a new name. The pin is the user's
+  // and the update has no business touching it.
+  const dir = path.join(sandbox, 'untouched');
   fs.mkdirSync(dir, { recursive: true });
   const shortcut = path.join(dir, 'Better Beeper.lnk');
   const pinFolder = path.join(dir, 'TaskBar');
   fs.mkdirSync(pinFolder, { recursive: true });
-  fs.writeFileSync(shortcut, 'the new shortcut', 'utf8');
-  fs.writeFileSync(path.join(pinFolder, 'Better Beeper.lnk'), 'the old stale one', 'utf8');
+  fs.writeFileSync(shortcut, 'the shortcut', 'utf8');
+  const pinned = path.join(pinFolder, 'Better Beeper.lnk');
+  fs.writeFileSync(pinned, 'the pinned shortcut, byte for byte', 'utf8');
+  const before = sha(pinned);
 
   spawnSync(HELPER_EXE, [
     '--installer', FAKE_INSTALLER,
@@ -300,9 +366,83 @@ add('a pinned shortcut that has gone stale is replaced', () => {
     '--pin-folder', pinFolder,
   ], { timeout: 25000, windowsHide: true, stdio: 'ignore' });
 
-  const pinned = path.join(pinFolder, 'Better Beeper.lnk');
-  if (!fs.existsSync(pinned)) return 'the stale pin was not replaced';
-  if (sha(pinned) !== sha(shortcut)) return 'the stale pin is still there';
+  if (!fs.existsSync(pinned)) return 'the pinned shortcut was taken away';
+  if (sha(pinned) !== before) return 'the pinned shortcut was rewritten';
+  if (fs.readdirSync(pinFolder).length !== 1) return 'the update added something to the pinned items folder';
+  return true;
+});
+
+add('the installer is told this is an update', () => {
+  // The installer decides from its own command line whether this is an
+  // update. An update keeps the Start Menu shortcut and the app's registered
+  // identity; anything else deletes them and writes new ones - and the taskbar
+  // pin is the shell's entry for that identity.
+  //
+  // This is the whole reason the pin went missing on every update: the
+  // installer was being run as if it were a fresh install.
+  let recorded = '';
+  try { recorded = fs.readFileSync(FAKE_OK_ARGS, 'utf8'); } catch { /* the installer never ran */ }
+  if (!recorded) return 'the installer was never run, so it was never told anything';
+  if (!/--updated/.test(recorded)) return 'the installer was not told it is an update: ' + recorded;
+  if (!/\/S/.test(recorded)) return 'the installer was not run silently: ' + recorded;
+  return true;
+});
+
+// ---------------------------------------------------------------------------
+// The update installs over the top
+// ---------------------------------------------------------------------------
+
+add('the installer includes the script that installs over the top', () => {
+  // The uninstaller is what deletes the Start Menu shortcut and unregisters
+  // the app's identity, and the taskbar pin is the shell's entry for that
+  // identity. So an update that uninstalls the old version takes the pin with
+  // it, every time, and the app has to be pinned by hand again.
+  //
+  // The fix is that the update does not uninstall anything: the installer
+  // writes the new files over the old ones.
+  const yml = fs.readFileSync(path.join(ROOT, 'electron-builder.yml'), 'utf8');
+  // A commented-out line is not an include. The whole line is dropped before
+  // the line is looked for, so "include: ..." behind a "#" does not pass.
+  const live = yml
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+  if (!/^\s*include:\s*tools\/nsis\/installer\.nsh\s*$/m.test(live)) {
+    return 'electron-builder.yml does not include tools/nsis/installer.nsh';
+  }
+  if (!fs.existsSync(path.join(ROOT, 'tools', 'nsis', 'installer.nsh'))) {
+    return 'the script electron-builder.yml includes is not there';
+  }
+  return true;
+});
+
+add('the script makes the old uninstaller give up', () => {
+  const nsh = fs.readFileSync(path.join(ROOT, 'tools', 'nsis', 'installer.nsh'), 'utf8');
+  if (!/!macro\s+customUnInstall/.test(nsh)) return 'there is no customUnInstall macro';
+  if (!/^\s*Quit\s*$/m.test(nsh)) return 'the uninstaller is not told to quit';
+  if (!/SetErrorLevel\s+0/.test(nsh)) {
+    return 'the installer checks the uninstaller exit code, so it has to be zero';
+  }
+  return true;
+});
+
+add('the uninstaller gives up before it deletes the shortcuts', () => {
+  // The hook has to come before the uninstaller deletes the shortcuts and
+  // unregisters the app's identity, or the script is called too late to
+  // matter. This reads electron-builder's own template, so a change in
+  // electron-builder turns the check red rather than quietly undoing the fix.
+  const templatePath = path.join(
+    ROOT, 'node_modules', 'app-builder-lib', 'templates', 'nsis', 'uninstaller.nsh',
+  );
+  if (!fs.existsSync(templatePath)) {
+    return 'node_modules is not installed, so the hook cannot be checked';
+  }
+  const template = fs.readFileSync(templatePath, 'utf8');
+  const hook = template.indexOf('!insertmacro customUnInstall');
+  const damage = template.indexOf('WinShell::UninstAppUserModelId');
+  if (hook === -1) return 'electron-builder no longer calls the custom uninstall hook';
+  if (damage === -1) return 'the template no longer unregisters the app identity';
+  if (hook > damage) return 'the hook comes after the damage, so it is too late';
   return true;
 });
 

@@ -64,6 +64,13 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: Better Beeper
   deleteAppDataOnUninstall: false
+  # The update installs over the top of the old version instead of
+  # uninstalling it first. The uninstaller deletes the Start Menu shortcut and
+  # unregisters the app's identity, and the taskbar pin is the shell's entry
+  # for that identity - so an update that uninstalls the old version takes the
+  # pin with it. See tools/nsis/installer.nsh, which says what it does and
+  # why.
+  include: tools/nsis/installer.nsh
 
 # The app talks only to a localhost Beeper Desktop instance, so it needs no
 # network entitlements beyond the loopback API and an optional AI endpoint.

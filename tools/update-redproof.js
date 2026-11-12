@@ -115,6 +115,7 @@ const MUTATIONS = [
             {
                 state.Detail = "Something is still holding Better Beeper's files. Restart Windows to use "
                     + "Better Beeper again.";
+                trace.Write("files-held");
                 return ResultCodes.FilesHeld;
             }`,
     to: '            // The install is attempted whatever is holding the app\'s files.',
@@ -164,11 +165,34 @@ const MUTATIONS = [
     expect: 'the status window can be moved out of the way',
   },
   {
-    what: 'the window insists on staying on top',
+    // The window must not be in front of everything from the moment it opens:
+    // the app is still on the screen then, and a window that demands the front
+    // of the desktop for its whole life is a window someone cannot get out of
+    // the way of.
+    what: 'the window insists on staying on top from the start',
     file: 'form',
     from: '            StartPosition = FormStartPosition.CenterScreen;',
     to: '            TopMost = true;\n            StartPosition = FormStartPosition.CenterScreen;',
-    expect: 'the status window does not force itself to the top',
+    expect: 'the status window comes to the front when the app has gone, and lets go of it when it is done',
+  },
+  {
+    // The other half of the same rule: the window has to be put in front when
+    // the app has gone. Without this it is activated while the app is still
+    // in the foreground, which is the one moment it cannot be seen.
+    what: 'the window is never put in front of anything',
+    file: 'form',
+    from: '                TopMost = true;\n                Show();',
+    to: '                Show();',
+    expect: 'the status window comes to the front when the app has gone, and lets go of it when it is done',
+  },
+  {
+    // And it has to let go of the front when the install is done, or it is
+    // still there over the app that comes back.
+    what: 'the window never gives up the front of the screen',
+    file: 'form',
+    from: '                TopMost = false;',
+    to: '                // the window keeps the front',
+    expect: 'the status window comes to the front when the app has gone, and lets go of it when it is done',
   },
   {
     // The empty console windows that were reported after an interrupted update

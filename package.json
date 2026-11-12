@@ -70,6 +70,7 @@
     "check:about": "electron tools/run-check.js tools/about-check.js",
     "check:actions": "electron tools/run-check.js tools/actions-check.js",
     "check:installer": "node tools/installer-check.js",
+    "check:nsis": "node tools/nsis-install-over-top-check.js",
     "check:media": "electron tools/run-check.js tools/media-check.js",
     "check:history": "node tools/history-check.js",
     "check:historyrender": "electron tools/run-check.js tools/history-render-check.js",

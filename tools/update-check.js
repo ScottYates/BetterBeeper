@@ -565,15 +565,37 @@ add('the status window can be moved out of the way', () => {
     || ('only ' + wired + ' labels drag, and the form itself does not');
 });
 
-add('the status window does not force itself to the top', () => {
+add('the status window comes to the front when the app has gone, and lets go of it when it is done', () => {
   // Comments stripped first: the word TopMost is discussed in the source, and a
   // bare substring test over the file would be satisfied by the explanation of
   // why it is not set.
   const src = fs.readFileSync(path.join(HELPER_PROJECT, 'StatusForm.cs'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\/\/.*$/gm, '');
-  return !/TopMost\s*=\s*true/.test(src)
-    || 'the window is TopMost, so it cannot be pushed behind anything';
+
+  // It has to be put in front of something at some point. A window that is
+  // behind whatever the user is working in is the same as no window at all -
+  // that was reported: the window was visible, on the right desktop, and never
+  // seen, because it was activated while the app was still in the foreground
+  // and quitting.
+  const raise = /TopMost\s*=\s*true/.exec(src);
+  if (!raise) return 'the window is never put in front of anything';
+
+  // But not from the start. Before the app has gone there is the app on the
+  // screen, and a window that demands the front of the desktop for its whole
+  // life is a window someone cannot get out of the way of.
+  const front = src.indexOf('public void ComeToFront()');
+  if (front === -1) return 'the window has no way of coming to the front';
+  if (raise.index < front) {
+    return 'the window is in front of everything from the moment it opens';
+  }
+
+  // And it has to let go of the front when the work is done, or it is still
+  // there over the app that comes back.
+  if (!/TopMost\s*=\s*false/.test(src)) {
+    return 'the window never gives up the front of the screen';
+  }
+  return true;
 });
 
 add('the built helper, if there is one, has no console subsystem', () => {

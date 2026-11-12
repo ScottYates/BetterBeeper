@@ -109,13 +109,14 @@ namespace BetterBeeper.UpdateHelper
                 // but something puts it back at the top left afterwards, so it
                 // is moved again once it has been shown.
                 //
-                // And the opacity is zero throughout, so even in the moment
-                // before it is moved there is nothing to see. The window is
-                // still created, shown and visible in every sense Windows
-                // cares about - which is what the check is about.
+                // The opacity is NOT changed. A transparent window is a window
+                // nobody can see, and this mode exists to check that the window
+                // is a real, visible one - so it is opaque, and only its
+                // position is different. A check that made the window
+                // transparent could not tell an invisible window from a
+                // visible one, which is the whole thing it is here to catch.
                 StartPosition = FormStartPosition.Manual;
                 ShowInTaskbar = false;
-                Opacity = 0.0;
             }
 
             var title = new Label
@@ -345,6 +346,14 @@ namespace BetterBeeper.UpdateHelper
         ///
         /// This is the fact the whole trace exists for: a window that is not
         /// visible is not a window, however well it was built.
+        ///
+        /// The facts that matter are all here: whether the window is visible,
+        /// whether it has a handle, where it is, which desktop and which window
+        /// station it is on, whether the desktop manager has cloaked it, and
+        /// whether it is transparent. A window that is cloaked is on a desktop
+        /// nobody is looking at, and a window that is transparent is not there
+        /// at all - and both of those are "Visible" as far as the form is
+        /// concerned, which is why they have to be asked about separately.
         /// </summary>
         private string Describe()
         {
@@ -368,8 +377,129 @@ namespace BetterBeeper.UpdateHelper
                 + " handle=" + (handle == IntPtr.Zero ? "none" : "yes")
                 + " bounds=" + bounds
                 + " desktop=" + CurrentDesktopName()
+                + " station=" + CurrentStationName()
+                + " cloaked=" + IsCloaked()
+                + " transparent=" + IsTransparent()
+                + " foreground=" + IsForeground()
                 + " screens=" + ScreenCount();
         }
+
+        /// <summary>
+        /// The name of the window station this process is on.
+        ///
+        /// "WinSta0" is the interactive one - the one the user's desktop is
+        /// drawn on. A process on any other station has windows that are
+        /// created and painted and that nobody will ever see, and the desktop
+        /// name alone cannot tell the two apart: every window station has a
+        /// desktop called "Default".
+        /// </summary>
+        private static string CurrentStationName()
+        {
+            try
+            {
+                var station = GetProcessWindowStation();
+                if (station == IntPtr.Zero) return "unknown";
+
+                var buffer = new StringBuilder(256);
+                uint needed;
+                if (!GetUserObjectInformation(station, UOI_NAME, buffer, (uint)buffer.Capacity * 2, out needed))
+                {
+                    return "unknown";
+                }
+
+                return buffer.ToString();
+            }
+            catch (Exception)
+            {
+                return "unknown";
+            }
+        }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetProcessWindowStation();
+
+        /// <summary>
+        /// Has the desktop manager cloaked this window?
+        ///
+        /// A cloaked window is one the desktop manager is not showing: it is on
+        /// a virtual desktop that is not the one being looked at. It is
+        /// "visible" as far as Windows is concerned and nobody sees it.
+        /// </summary>
+        private string IsCloaked()
+        {
+            try
+            {
+                int cloaked;
+                var hr = DwmGetWindowAttribute(Handle, DWMWA_CLOAKED, out cloaked, sizeof(int));
+                if (hr != 0) return "unknown";
+                return cloaked != 0 ? "yes" : "no";
+            }
+            catch (Exception)
+            {
+                return "unknown";
+            }
+        }
+
+        private const int DWMWA_CLOAKED = 14;
+
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
+
+        /// <summary>
+        /// Is this window transparent?
+        ///
+        /// A window is transparent if it is layered and its alpha is below
+        /// full. A window that is not layered is opaque by definition. This is
+        /// the difference between a window that is there and a window that
+        /// cannot be seen, and the form's own Visible property cannot tell
+        /// them apart.
+        /// </summary>
+        private string IsTransparent()
+        {
+            try
+            {
+                var exStyle = GetWindowLong(Handle, GWL_EXSTYLE);
+                if ((exStyle & WS_EX_LAYERED) == 0) return "no";
+
+                uint key;
+                byte alpha;
+                uint flags;
+                if (!GetLayeredWindowAttributes(Handle, out key, out alpha, out flags)) return "unknown";
+                return alpha == 255 ? "no" : "yes";
+            }
+            catch (Exception)
+            {
+                return "unknown";
+            }
+        }
+
+        private const int GWL_EXSTYLE = -20;
+        private const int WS_EX_LAYERED = 0x00080000;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern int GetWindowLong(IntPtr hwnd, int index);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool GetLayeredWindowAttributes(IntPtr hwnd, out uint key, out byte alpha, out uint flags);
+
+        /// <summary>Is this window the one in the foreground right now?</summary>
+        private string IsForeground()
+        {
+            try
+            {
+                return GetForegroundWindow() == Handle ? "yes" : "no";
+            }
+            catch (Exception)
+            {
+                return "unknown";
+            }
+        }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetForegroundWindow(IntPtr hwnd);
 
         private static string ScreenCount()
         {
@@ -403,12 +533,53 @@ namespace BetterBeeper.UpdateHelper
             base.OnFormClosing(e);
         }
 
+        /// <summary>
+        /// Brings the window to the front and keeps it there.
+        ///
+        /// Called when the app has gone. That is the moment the user is
+        /// looking for something, and it is the first moment at which this
+        /// window can be sure of being seen: while the app was still on
+        /// screen it was activated, but Windows does not always let a window
+        /// that is not the foreground one come to the front.
+        ///
+        /// TopMost is on for as long as the install runs, because a window
+        /// behind whatever the user was working in is the same as no window
+        /// at all. It comes off again when the work is done.
+        ///
+        /// The window can still be dragged out of the way, which is what the
+        /// mouse handling above is for.
+        /// </summary>
+        public void ComeToFront()
+        {
+            try
+            {
+                TopMost = true;
+                Show();
+                Activate();
+                SetForegroundWindow(Handle);
+                _trace.Write("brought-to-front foreground=" + IsForeground() + " topmost=yes");
+            }
+            catch (Exception ex)
+            {
+                // A window that cannot take the focus is still a window.
+                _trace.Write("bring-to-front-failed " + ex.Message);
+            }
+        }
+
         private void OnTick(object sender, EventArgs e)
         {
             if (!_ticked)
             {
                 _ticked = true;
                 _trace.Write("tick " + Describe());
+            }
+
+            // The app has gone: put the window in front, so it is the thing
+            // the user finds rather than something behind their other windows.
+            if (Volatile.Read(ref _state.BringToFront) == 1)
+            {
+                Volatile.Write(ref _state.BringToFront, 0);
+                ComeToFront();
             }
 
             var status = _state.Status;
@@ -435,6 +606,18 @@ namespace BetterBeeper.UpdateHelper
             _elapsed.Text = "";
             _stop.Enabled = false;
             _stop.Visible = false;
+
+            // The install is over, so the window stops insisting on being in
+            // front. It is about to close, but it lingers for a moment and
+            // there is no reason for it to be in the way of anything.
+            try
+            {
+                TopMost = false;
+            }
+            catch (Exception)
+            {
+                // A window that cannot give up the top is still a window.
+            }
 
             // The update could not be started at all. There is no install to
             // report on, and the window is the only place the reason exists, so

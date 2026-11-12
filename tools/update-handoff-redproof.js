@@ -25,6 +25,8 @@ const FILES = {
   updater: path.join(ROOT, 'src', 'main', 'updater.js'),
   helper: path.join(ROOT, 'tools', 'update-helper', 'Program.cs'),
   form: path.join(ROOT, 'tools', 'update-helper', 'StatusForm.cs'),
+  nsis: path.join(ROOT, 'tools', 'nsis', 'installer.nsh'),
+  builder: path.join(ROOT, 'electron-builder.yml'),
 };
 
 const hash = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -40,6 +42,21 @@ function applyEdit(original, from, to) {
 }
 
 const MUTATIONS = [
+  {
+    what: 'the update uninstalls the old version again',
+    file: 'nsis',
+    from: `  SetErrorLevel 0
+  Quit`,
+    to: `  ; The old version is uninstalled as usual.`,
+    expect: 'the script makes the old uninstaller give up',
+  },
+  {
+    what: 'the installer script is not included',
+    file: 'builder',
+    from: '  include: tools/nsis/installer.nsh',
+    to: '  # include: tools/nsis/installer.nsh',
+    expect: 'the installer includes the script that installs over the top',
+  },
   {
     what: 'the window is never built',
     file: 'helper',
@@ -58,34 +75,47 @@ const MUTATIONS = [
     expect: 'the window is visible',
   },
   {
-    what: 'the taskbar pin is never put back',
+    what: 'the update writes into the pinned items folder',
     file: 'helper',
     from: `            if (!options.NoWindow)
             {
-                TaskbarPin.Restore(options.RelaunchPath, options.ShortcutPath, options.PinFolder, trace);
+                TaskbarPin.Inspect(options.ShortcutPath, options.PinFolder, trace);
             }`,
-    to: `            // The pin is left as the installer left it.`,
-    expect: 'the taskbar pin is put back after the install',
+    to: `            if (!options.NoWindow)
+            {
+                TaskbarPin.Inspect(options.ShortcutPath, options.PinFolder, trace);
+                if (!string.IsNullOrEmpty(options.PinFolder))
+                {
+                    System.IO.Directory.CreateDirectory(options.PinFolder);
+                    System.IO.File.Copy(options.ShortcutPath, System.IO.Path.Combine(options.PinFolder, "Better Beeper.lnk"), true);
+                }
+            }`,
+    expect: 'the update does not touch the taskbar pin',
   },
   {
-    what: 'the taskbar pin is only put back when the install worked',
+    what: 'the installer is not told it is an update',
     file: 'helper',
-    from: `            if (!options.NoWindow)
-            {
-                TaskbarPin.Restore(options.RelaunchPath, options.ShortcutPath, options.PinFolder, trace);
-            }`,
-    to: `            if (!options.NoWindow && code == ResultCodes.Installed)
-            {
-                TaskbarPin.Restore(options.RelaunchPath, options.ShortcutPath, options.PinFolder, trace);
-            }`,
-    expect: 'the taskbar pin is put back even when the install fails',
+    from: '                Arguments = "/S --updated",',
+    to: '                Arguments = "/S",',
+    expect: 'the installer is told this is an update',
   },
   {
-    what: 'a stale pinned shortcut is left alone',
-    file: 'helper',
-    from: '                File.Copy(shortcut, pinned, true);',
-    to: '                if (!File.Exists(pinned)) File.Copy(shortcut, pinned, true);',
-    expect: 'a pinned shortcut that has gone stale is replaced',
+    what: 'the window is made transparent again',
+    file: 'form',
+    from: `                StartPosition = FormStartPosition.Manual;
+                ShowInTaskbar = false;`,
+    to: `                StartPosition = FormStartPosition.Manual;
+                ShowInTaskbar = false;
+                Opacity = 0.0;`,
+    expect: 'the window is not transparent',
+  },
+  {
+    what: 'the window is never brought to the front',
+    file: 'form',
+    from: `                Volatile.Write(ref _state.BringToFront, 0);
+                ComeToFront();`,
+    to: '                Volatile.Write(ref _state.BringToFront, 0);',
+    expect: 'the window comes to the front once the app has gone',
   },
   {
     what: 'the helper runs from the install folder again',

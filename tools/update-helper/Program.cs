@@ -169,23 +169,28 @@ namespace BetterBeeper.UpdateHelper
     /// <summary>
     /// The app's place on the taskbar.
     ///
-    /// The taskbar pin is a copy of the Start Menu shortcut. Explorer's pinned
-    /// copy and the Start Menu shortcut are the same file, byte for byte, and
-    /// that was measured on a real machine rather than assumed: the pinned
-    /// "Better Beeper.lnk" and the Start Menu "Better Beeper.lnk" had the same
-    /// SHA-256.
+    /// This used to put the pin back: it copied the Start Menu shortcut over
+    /// Explorer's pinned copy and told the shell the item had changed. That
+    /// was the wrong idea, and it was measured rather than argued about.
     ///
-    /// Which means the pin does not survive the installer rewriting the
-    /// shortcut. The uninstaller deletes it and the installer creates it again,
-    /// and Explorer is left with a pin whose item it can no longer match, so
-    /// the app has to be pinned by hand again. The copy that is put back here
-    /// is the same copy Explorer would have made, so the pin comes back with
-    /// the app still in the same place.
+    /// The taskbar pin is not a file that happens to be in a folder. It is
+    /// Explorer's own state - the list of pinned items, their order, and the
+    /// identity each one carries - and the file in the pinned folder is
+    /// Explorer's copy of that state. Writing over it does not restore a pin:
+    /// Explorer notices the file changed, treats it as a new item, and adds it
+    /// at the end of the list. On the machine this was measured on, that is
+    /// exactly what happened: the pinned "Better Beeper.lnk" was overwritten,
+    /// Explorer registered a second item called "Better Beeper (2).lnk", and
+    /// the pin moved to the end of the list and stopped matching the app.
     ///
-    /// Doing it here rather than in the app is deliberate. The installer is
-    /// what breaks the pin, and the installer runs between the app closing and
-    /// the app starting again. This program is the only thing alive across
-    /// that gap.
+    /// So nothing is written here now. The update installs over the top of the
+    /// old version rather than uninstalling it, which means the Start Menu
+    /// shortcut is not rewritten and the app's identity is never unregistered,
+    /// which means the shell is never given a reason to touch the pin.
+    ///
+    /// What is left is a description of the pin as it is, written to the trace.
+    /// A report that the pin is gone needs evidence about what the shell
+    /// thinks the pin is, and the trace is where that belongs.
     /// </summary>
     internal static class TaskbarPin
     {
@@ -197,70 +202,47 @@ namespace BetterBeeper.UpdateHelper
             return Path.Combine(appData, "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar");
         }
 
-        /// <summary>The Start Menu shortcut for an installed program.</summary>
-        private static string DefaultShortcut(string appExePath)
-        {
-            var programs = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
-            if (string.IsNullOrEmpty(programs) || string.IsNullOrEmpty(appExePath)) return null;
-            return Path.Combine(programs, Path.GetFileNameWithoutExtension(appExePath) + ".lnk");
-        }
-
-        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-        private static extern void SHChangeNotify(int wEventId, uint uFlags, string dwItem1, IntPtr dwItem2);
-
         /// <summary>
-        /// Puts the app back on the taskbar if it fell off.
+        /// What the shell thinks the pin is, in one line.
         ///
-        /// Returns the pinned shortcut's path when it is there afterwards, and
-        /// null when it is not. Never throws: a failed pin must not stop an
-        /// update, and the update has already happened by the time this runs.
+        /// Never throws and never writes: this only looks.
         /// </summary>
-        public static string Restore(string appExePath, string shortcutPath, string pinFolder, TraceLog trace)
+        public static string Inspect(string shortcutPath, string pinFolder, TraceLog trace)
         {
             try
             {
-                if (string.IsNullOrEmpty(appExePath))
+                var folder = string.IsNullOrEmpty(pinFolder) ? DefaultPinFolder() : pinFolder;
+                if (string.IsNullOrEmpty(folder))
                 {
-                    trace.Write("pin skipped no-app-path");
-                    return null;
+                    trace.Write("pin unknown no-folder");
+                    return "unknown";
                 }
 
-                var shortcut = shortcutPath;
-                if (string.IsNullOrEmpty(shortcut)) shortcut = DefaultShortcut(appExePath);
-
-                var folder = pinFolder;
-                if (string.IsNullOrEmpty(folder)) folder = DefaultPinFolder();
-
-                if (string.IsNullOrEmpty(shortcut) || string.IsNullOrEmpty(folder))
+                if (!Directory.Exists(folder))
                 {
-                    trace.Write("pin skipped no-paths shortcut=" + shortcut + " folder=" + folder);
-                    return null;
+                    trace.Write("pin unknown no-folder " + folder);
+                    return "no-folder";
                 }
 
-                if (!File.Exists(shortcut))
+                var name = string.IsNullOrEmpty(shortcutPath)
+                    ? null
+                    : Path.GetFileName(shortcutPath);
+                if (string.IsNullOrEmpty(name)) name = "Better Beeper.lnk";
+
+                var pinned = Path.Combine(folder, name);
+                if (!File.Exists(pinned))
                 {
-                    // No shortcut means there is nothing to copy. That is not an
-                    // error worth stopping for: the app is installed either way.
-                    trace.Write("pin skipped no-shortcut " + shortcut);
-                    return null;
+                    trace.Write("pin missing " + pinned);
+                    return "missing";
                 }
 
-                Directory.CreateDirectory(folder);
-
-                var pinned = Path.Combine(folder, Path.GetFileName(shortcut));
-                File.Copy(shortcut, pinned, true);
-
-                // Tell the shell the item changed, or Explorer keeps showing
-                // what it had cached.
-                SHChangeNotify(0x2000, 0x0005, pinned, IntPtr.Zero);
-
-                trace.Write("pin restored " + pinned);
-                return pinned;
+                trace.Write("pin present " + pinned);
+                return "present";
             }
             catch (Exception ex)
             {
-                trace.Write("pin failed " + ex.Message);
-                return null;
+                trace.Write("pin unknown " + ex.Message);
+                return "unknown";
             }
         }
     }
@@ -355,20 +337,18 @@ namespace BetterBeeper.UpdateHelper
                 detail = ex.Message;
             }
 
-            // The taskbar pin is put back before the app comes back, and whether
-            // or not the install worked. The installer is what breaks the pin -
-            // it rewrites the Start Menu shortcut the pin is a copy of - so a
-            // failed install can break it just as well as a good one.
+            // The taskbar pin is looked at, never touched.
             //
-            // Not in --no-window mode. That mode exists so the check suite can
-            // drive this program end to end, and a check must never touch the
-            // user's own taskbar - the same reason it must never put a window
-            // on their screen. The helper is the only thing alive across the
-            // gap the installer makes, so this is the only place the pin can
-            // be put back.
+            // The update installs over the top of the old version instead of
+            // uninstalling it, so the Start Menu shortcut is not rewritten and
+            // the app's identity is never unregistered - which means the shell
+            // is never given a reason to touch the pin. What is left is a
+            // description of the pin as it is, for the trace: a report that
+            // the pin is gone needs evidence about what the shell thinks the
+            // pin is, and that is what this is for.
             if (!options.NoWindow)
             {
-                TaskbarPin.Restore(options.RelaunchPath, options.ShortcutPath, options.PinFolder, trace);
+                TaskbarPin.Inspect(options.ShortcutPath, options.PinFolder, trace);
             }
 
             // The result is written BEFORE the app is started again, because the
@@ -424,6 +404,18 @@ namespace BetterBeeper.UpdateHelper
             // silent partial install into a clean one.
             WaitForProcessExit(options.ParentPid);
             trace.Write("parent-gone pid=" + options.ParentPid);
+
+            // The app has gone, so this is the moment the user is looking for
+            // something and the window has to be the thing they find.
+            //
+            // The window was activated when it was shown, but that was while
+            // the app was still on screen and in the foreground, and Windows
+            // does not always let a window that is not the foreground one come
+            // to the front. Now the helper is the only thing left, so the
+            // window is put in front again - and kept there, because a window
+            // that is behind whatever the user was working in is the same as
+            // no window at all.
+            Volatile.Write(ref state.BringToFront, 1);
 
             // And this is the wait that decides whether the install is attempted
             // at all. The old code waited for the files to be free and then
@@ -498,7 +490,19 @@ namespace BetterBeeper.UpdateHelper
             var installer = Process.Start(new ProcessStartInfo
             {
                 FileName = path,
-                Arguments = "/S",
+                // "--updated" is not decoration. The installer decides what
+                // "keep the shortcuts" means from its own command line: the
+                // flag makes it an update, and an update keeps the Start Menu
+                // shortcut and the app's registered identity instead of
+                // deleting them and writing new ones.
+                //
+                // That matters more than it looks. The taskbar pin is the
+                // shell's entry for the app's identity, and the uninstaller -
+                // which the installer runs first - deletes that identity and
+                // the shortcut it belongs to unless it is told to keep them.
+                // With the flag missing, the update removed the pin every
+                // time and the app had to be pinned by hand again.
+                Arguments = "/S --updated",
                 UseShellExecute = false,
                 CreateNoWindow = true,
             });
@@ -1026,6 +1030,15 @@ namespace BetterBeeper.UpdateHelper
         /// atomically by the runtime.
         /// </summary>
         public int CancelRequested;
+
+        /// <summary>
+        /// Set when the app has gone and the window should come to the front.
+        ///
+        /// An int rather than a bool because Volatile.Read and Volatile.Write
+        /// work on ints and bools are not guaranteed to be read and written
+        /// atomically by the runtime.
+        /// </summary>
+        public int BringToFront;
     }
 
     /// <summary>
