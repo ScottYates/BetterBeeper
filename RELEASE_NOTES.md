@@ -1,11 +1,11 @@
-Better Beeper 1.30.4
+Better Beeper 1.30.5
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.30.4-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.30.5-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,8 +17,7 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
-- fix: the proxy check can see the lookup it exists to catch (`1a7ed31`)
-- docs: the update window and the taskbar pin (`e887304`)
-- fix: the update shows its window and keeps the taskbar pin (`ab4c303`)
+- docs: the window's place, and the wpad record is not an issue (`2135695`)
+- fix: the window opens exactly where it was closed (`1f8a6e7`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.
