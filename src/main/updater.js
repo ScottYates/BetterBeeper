@@ -65,6 +65,45 @@ const PENDING_FILE = 'update-pending.json';
 const INSTALL_RESULT_FILE = 'update-result.txt';
 
 /**
+ * What the helper's result code means, in the user's terms.
+ *
+ * The helper writes `code<TAB>detail`. The code says which of these happened;
+ * the detail says the specifics - how long the installer ran, what it exited
+ * with, what is still holding the files. The code is the part that has to have
+ * a fixed meaning, because the helper writes it and this reads it, and the two
+ * have to agree.
+ *
+ * These are the helper's ResultCodes (tools/update-helper/Program.cs). They
+ * are not the installer's own exit code: that number is kept in the detail,
+ * because "exit code 5" means nothing to the person reading it and "the
+ * installer stopped with an error" means something.
+ *
+ * The message says what happened and the detail says why, and the two are
+ * written to read as one sentence: the detail never repeats the message.
+ */
+const INSTALL_OUTCOMES = {
+  0: 'The update is installed.',
+  1: 'The update did not install: the installer stopped with an error.',
+  2: 'The update did not install: the installer was stopped.',
+  3: 'The update did not install and Better Beeper could not be started.',
+  4: 'Better Beeper could not be started again.',
+  '-1': 'Something went wrong with the update.',
+};
+
+/**
+ * The sentence for a result code.
+ *
+ * An unknown code - an older helper, or a file that is not a result at all -
+ * gets the general sentence rather than nothing, because the user needs to
+ * know that the update did not happen either way.
+ */
+function describeInstallOutcome(code) {
+  const known = INSTALL_OUTCOMES[code];
+  if (known) return known;
+  return 'The last update did not install.';
+}
+
+/**
  * The program that takes the install from here.
  *
  * A small WinForms app (tools/update-helper) rather than a batch file, and the
@@ -356,18 +395,45 @@ function stageUpdate(installerPath) {
 
 
 
-/** Read and clear how the last install went.
+/**
+ * Read and clear how the last install went.
  *
  * The process that could not install itself is gone, so a silent failure has no
  * other chance of being reported - the next launch is the first moment anyone
  * can be told.
+ *
+ * The file is `code<TAB>detail`. The code says which outcome it was; the
+ * detail says why, in words: how long the installer ran, what it exited with,
+ * what is still holding the app's files.
+ *
+ * The detail used to be thrown away. `Number(raw)` over the whole file turns
+ * "-1<TAB>The installer did not finish within 15 minutes." into NaN, so the
+ * code came back null and the reason was never shown - the user was told the
+ * installer exited with an unknown code, which is the one thing they could not
+ * do anything with. The one piece of information the helper had written down
+ * for them was the piece that got dropped.
  */
 function readInstallResult() {
   const file = path.join(app.getPath('userData'), INSTALL_RESULT_FILE);
   try {
     const raw = fs.readFileSync(file, 'utf8').trim();
-    const code = Number(raw);
-    return { ok: Number.isFinite(code) && code === 0, code: Number.isFinite(code) ? code : null };
+    const tab = raw.indexOf('\t');
+    const codeText = tab === -1 ? raw : raw.slice(0, tab);
+    const detail = tab === -1 ? '' : raw.slice(tab + 1).trim();
+
+    const code = Number(codeText);
+    if (!Number.isFinite(code)) {
+      // Not a result this build understands. The file is still a sign that
+      // something went wrong, so it is reported rather than ignored.
+      return { ok: false, code: null, detail: detail || null, message: describeInstallOutcome(null) };
+    }
+
+    return {
+      ok: code === 0,
+      code,
+      detail: detail || null,
+      message: describeInstallOutcome(code),
+    };
   } catch {
     return null; // no marker, or one we cannot read: nothing to report
   } finally {
@@ -501,6 +567,11 @@ function quitAndInstall(deps) {
  *
  * Reported so the UI can say "restart to finish updating" instead of letting
  * the user quit and find nothing changed.
+ *
+ * `lastInstall` is how the last install went, with a sentence attached: the
+ * detail the helper wrote is the reason, and the message is what it means.
+ * The UI shows the message and the detail together - the message says what
+ * happened, the detail says why.
  */
 function pendingStatus() {
   const pending = readPending();
@@ -514,6 +585,7 @@ function pendingStatus() {
 module.exports = {
   REPO,
   RELEASES_URL: `https://github.com/${REPO}/releases`,
+  INSTALL_OUTCOMES,
   compareVersions,
   pickInstallerAsset,
   isNewerRelease,
@@ -523,6 +595,8 @@ module.exports = {
   applyPendingUpdate,
   quitAndInstall,
   pendingStatus,
+  readInstallResult,
+  describeInstallOutcome,
   helperPath,
   HELPER_EXE,
 };

@@ -369,9 +369,22 @@ add('the handoff is a program, and it is a WinExe', () => {
 add('the helper waits for the app to go before installing', () => {
   // The app is the thing being replaced, so installing while it is alive locks
   // its files and lands a half-applied update.
+  //
+  // The release is a call of its own now - ReleaseAppFiles() waits for the
+  // executable to be free and stops the app's own leftovers if it is not - and
+  // it is that call which has to happen before the installer is started. The
+  // names are matched with their arguments, so the definition of the method
+  // cannot satisfy the check on its own.
   const src = fs.readFileSync(path.join(HELPER_PROJECT, 'Program.cs'), 'utf8');
-  return (src.includes('WaitForProcessExit') && src.includes('WaitForFileFree')
-      && src.indexOf('WaitForFileFree') < src.indexOf('Process.Start'))
+  const wait = src.indexOf('WaitForProcessExit(options.ParentPid)');
+  const release = src.indexOf('ReleaseAppFiles(options.RelaunchPath');
+  const start = src.indexOf('StartInstaller(options.InstallerPath');
+
+  if (wait === -1) return 'the helper does not wait for the app to go';
+  if (release === -1) return "the app's files are never released";
+  if (start === -1) return 'the installer is never started';
+
+  return (wait < start && release < start)
     || 'the helper starts the installer before the app has released its files';
 });
 
@@ -380,17 +393,31 @@ add('the helper starts the app again afterwards', () => {
   // the definition alone, so commenting out the only call site leaves the check
   // green while the app never comes back - which is the exact bug that started
   // this, one layer up.
+  //
+  // The app is started again whatever the install did. A failed update that
+  // leaves the user with no app at all is the worst outcome there is, and the
+  // old version is still on disk and still runnable.
   const src = fs.readFileSync(path.join(HELPER_PROJECT, 'Program.cs'), 'utf8');
-  return /StartRelaunch\(options\.RelaunchPath\)/.test(src)
-    || 'the helper defines StartRelaunch but nothing ever calls it';
+  return /TryRelaunch\(options,\s*out\s+why\)/.test(src)
+    || 'the helper defines the relaunch but nothing ever calls it';
 });
 
 add('the helper records how the install went', () => {
   // The process that could not install itself is gone; the next launch is the
-  // only other chance to say what happened. Again the call, not the definition.
+  // only other chance to say what happened.
+  //
+  // And it has to be recorded before the app is started again, because the
+  // app reads it on its way up. Written afterwards, the app can look for the
+  // file and find nothing, and the failure is never reported to anybody.
   const src = fs.readFileSync(path.join(HELPER_PROJECT, 'Program.cs'), 'utf8');
-  return /WriteResult\(options, state\.ExitCode, state\.Detail\)/.test(src)
-    || 'the helper defines WriteResult but the outcome is never written';
+  const body = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  const write = body.indexOf('WriteResult(options, code, detail);');
+  const relaunch = body.indexOf('TryRelaunch(options, out why)');
+
+  if (write === -1) return 'the outcome is never written';
+  if (relaunch === -1) return 'the app is never started again';
+  return (write < relaunch)
+    || 'the outcome is written after the app has been started again';
 });
 
 add('the updater hands the install to the helper, not to a shell', () => {
@@ -434,7 +461,7 @@ add('the installer is started without a console', () => {
   // it, and UseShellExecute = false is what keeps the shell out of the path.
   const src = fs.readFileSync(path.join(HELPER_PROJECT, 'Program.cs'), 'utf8');
   const code = src.replace(/\/\/.*$/gm, '');
-  const start = code.indexOf('StartInstaller(string path)');
+  const start = code.indexOf('StartInstaller(string path');
   if (start === -1) return 'the helper has no way to start the installer';
   const end = code.indexOf('private static void WaitForProcessExit', start);
   const body = code.slice(start, end === -1 ? start + 1200 : end);

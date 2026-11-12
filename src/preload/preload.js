@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('beeper', {
     check: () => invoke('updater:check'),
     download: () => invoke('updater:download'),
     quit: () => invoke('updater:quit'),
+    status: () => invoke('updater:status'),
   },
   auth: {
     status: () => invoke('auth:status'),

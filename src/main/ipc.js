@@ -226,6 +226,20 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
     return ok(true);
   }));
 
+  // How the last install went, with no network call.
+  //
+  // The failed-install report used to ride on the update check, and the update
+  // check is skipped when automatic updates are off. So the one person who had
+  // turned them off, and had an update fail anyway because they asked for one
+  // by hand, was never told: the app came back on the old version and said
+  // nothing about why.
+  //
+  // This asks the question directly, so the answer does not depend on whether
+  // anybody wants to hear about new releases.
+  ipcMain.handle('updater:status', handle(async () => {
+    return ok({ ...updater.pendingStatus(), current: app.getVersion() });
+  }));
+
   ipcMain.handle('auth:status', handle(async () => {
     const token = tokenStore.read();
     if (!token?.accessToken) return ok({ authenticated: false });

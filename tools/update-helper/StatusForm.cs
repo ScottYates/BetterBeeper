@@ -9,6 +9,19 @@
 // number this program does not have. The elapsed seconds are the honest part:
 // they go up, which is what tells the user nothing has wedged.
 //
+// It also has a Stop button, because the failure this program exists to handle
+// is an installer that does not finish, and waiting out the full timeout with
+// nothing to do about it is the worst way to spend that time. The button asks
+// the work to stop; the work stops the installer and its whole tree, checks
+// that the app's files are free again, and starts the app back on the old
+// version.
+//
+// The text it ends on has to be true. The old version of this window said
+// "Better Beeper will reopen on the old version" whatever had happened, and
+// the code only reopened the app when the install had worked - so on a failed
+// install it promised something it did not do, and the user was left with no
+// app at all. The wording now comes from the result code.
+//
 // This reads ProgressState on a timer rather than being called into from the
 // worker. See the note on ProgressState in Program.cs for why: Invoke would
 // deadlock when the work finishes before the message loop starts pumping.
@@ -28,6 +41,7 @@ namespace BetterBeeper.UpdateHelper
         private readonly Label _elapsed = new Label { AutoSize = false, ForeColor = Color.FromArgb(150, 156, 166) };
         private readonly Label _warning = new Label { AutoSize = false, ForeColor = Color.FromArgb(224, 108, 117) };
         private readonly ProgressBar _bar = new ProgressBar { Style = ProgressBarStyle.Marquee };
+        private readonly Button _stop = new Button { Text = "Stop the update" };
         // Fully qualified: System.Threading is imported for Volatile, and the two
         // frameworks each have a Timer. This one has to be the Forms one, because
         // its Tick runs on the UI thread - a Threading.Timer would fire the repaint
@@ -48,7 +62,8 @@ namespace BetterBeeper.UpdateHelper
             // No X button and no Alt+F4. Closing this window mid-install orphans the
             // install and leaves the app half replaced, so the one action that can
             // break it is not offered. Program.cs bounds the installer instead, so
-            // this can never become a window with no way out.
+            // this can never become a window with no way out - and the Stop button
+            // is the way out that does not break anything.
             ControlBox = false;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -57,7 +72,7 @@ namespace BetterBeeper.UpdateHelper
             // that insists on being in front is a window someone cannot get out
             // of the way of.
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(470, 200);
+            ClientSize = new Size(470, 250);
             BackColor = Color.FromArgb(24, 26, 30);
             ForeColor = Color.White;
             Font = new Font("Segoe UI", 9F);
@@ -82,11 +97,19 @@ namespace BetterBeeper.UpdateHelper
             _elapsed.Location = new Point(24, 102);
             _elapsed.Size = new Size(420, 18);
 
-            _warning.Text = "Do not close Better Beeper or this window. The app restarts by itself.";
+            _warning.Text = "Do not close Better Beeper or this window. The app restarts by itself when this is done.";
             _warning.Location = new Point(24, 130);
-            _warning.Size = new Size(420, 44);
+            _warning.Size = new Size(420, 66);
 
-            Controls.AddRange(new Control[] { title, _status, _bar, _elapsed, _warning });
+            _stop.Location = new Point(330, 204);
+            _stop.Size = new Size(114, 28);
+            _stop.FlatStyle = FlatStyle.Flat;
+            _stop.FlatAppearance.BorderColor = Color.FromArgb(70, 74, 82);
+            _stop.ForeColor = Color.White;
+            _stop.BackColor = Color.FromArgb(40, 44, 52);
+            _stop.Click += OnStopClicked;
+
+            Controls.AddRange(new Control[] { title, _status, _bar, _elapsed, _warning, _stop });
 
             _timer.Tick += OnTick;
 
@@ -104,6 +127,28 @@ namespace BetterBeeper.UpdateHelper
             _status.MouseDown += DragFrom;
             _elapsed.MouseDown += DragFrom;
             _warning.MouseDown += DragFrom;
+        }
+
+        /// <summary>
+        /// The Stop button.
+        ///
+        /// It asks the work to stop; it does not kill anything itself. The work
+        /// owns the installer and the job that holds it, and only it knows how to
+        /// stop them in the right order - stop the tree, check the files are
+        /// free, then start the app back.
+        /// </summary>
+        private void OnStopClicked(object sender, EventArgs e)
+        {
+            if (_state.Fatal)
+            {
+                _finished = true;
+                Close();
+                return;
+            }
+
+            Volatile.Write(ref _state.CancelRequested, 1);
+            _stop.Enabled = false;
+            _stop.Text = "Stopping...";
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
@@ -188,17 +233,55 @@ namespace BetterBeeper.UpdateHelper
             _bar.Style = ProgressBarStyle.Blocks;
             _bar.Value = _bar.Maximum;
             _elapsed.Text = "";
+            _stop.Enabled = false;
+            _stop.Visible = false;
 
-            if (Volatile.Read(ref _state.Ok))
+            // The update could not be started at all. There is no install to
+            // report on, and the window is the only place the reason exists, so
+            // it stays up with a Close button rather than closing itself.
+            if (_state.Fatal)
             {
-                _status.Text = "Install finished. Better Beeper is starting now.";
+                _status.Text = "The update could not be started.";
+                _warning.Text = _state.Detail ?? "";
+                _stop.Text = "Close";
+                _stop.Enabled = true;
+                _stop.Visible = true;
+                _finished = true;
+                return;
             }
-            else
+
+            // The wording comes from the result code, so it says what happened
+            // rather than what usually happens. The old text claimed the app
+            // would reopen on the old version on every failure, including the
+            // ones where it did not reopen at all.
+            switch (_state.ExitCode)
             {
-                // Kept up rather than vanishing: a failure nobody sees is the worst
-                // outcome, and the next launch cannot show this one.
-                _status.Text = "The update did not finish. Better Beeper will reopen on the old version.";
-                if (!string.IsNullOrEmpty(_state.Detail)) _warning.Text = _state.Detail;
+                case ResultCodes.Installed:
+                    _status.Text = "The update is installed. Better Beeper is starting now.";
+                    _warning.ForeColor = Color.FromArgb(126, 211, 133);
+                    _warning.Text = "";
+                    break;
+
+                case ResultCodes.FilesHeld:
+                    _status.Text = "Windows is still holding Better Beeper's files.";
+                    _warning.Text = "Restart Windows to use Better Beeper again.";
+                    break;
+
+                case ResultCodes.RelaunchFailed:
+                    _status.Text = "Better Beeper could not be started again.";
+                    _warning.Text = "Open it by hand once the files are free.";
+                    break;
+
+                default:
+                    _status.Text = "The update did not install. Better Beeper is reopening on the old version.";
+                    break;
+            }
+
+            if (!string.IsNullOrEmpty(_state.Detail))
+            {
+                _warning.Text = string.IsNullOrEmpty(_warning.Text)
+                    ? _state.Detail
+                    : _warning.Text + " " + _state.Detail;
             }
 
             _finished = true;

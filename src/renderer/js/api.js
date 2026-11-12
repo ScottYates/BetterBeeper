@@ -62,6 +62,7 @@ export const api = {
   updateCheck: () => window.beeper.updater.check(),
   updateDownload: () => window.beeper.updater.download(),
   updateQuit: () => window.beeper.updater.quit(),
+  updateStatus: () => window.beeper.updater.status(),
 
   authStatus: () => window.beeper.auth.status(),
   connect: () => window.beeper.auth.connect(),

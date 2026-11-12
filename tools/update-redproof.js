@@ -111,22 +111,28 @@ const MUTATIONS = [
   {
     what: 'the helper installs before the app has released its files',
     file: 'helper',
-    from: '            WaitForProcessExit(options.ParentPid);\n            WaitForFileFree(options.RelaunchPath);',
-    to: '            WaitForProcessExit(options.ParentPid);',
+    from: `            if (!ReleaseAppFiles(options.RelaunchPath, options.ReleaseTimeoutSeconds))
+            {
+                state.Detail = "Something is still holding Better Beeper's files. Restart Windows to use "
+                    + "Better Beeper again.";
+                return ResultCodes.FilesHeld;
+            }`,
+    to: '            // The install is attempted whatever is holding the app\'s files.',
     expect: 'the helper waits for the app to go before installing',
   },
   {
     what: 'the helper never restarts the app',
     file: 'helper',
-    from: '            if (state.Ok && options.RelaunchPath != null)\n            {\n                StartRelaunch(options.RelaunchPath);\n            }\n',
-    to: '',
+    from: '            string why;\n            if (!TryRelaunch(options, out why))',
+    to: '            string why;\n            why = "The app was not started again.";\n            if (false)',
     expect: 'the helper starts the app again afterwards',
   },
   {
     what: 'the helper stops recording the outcome',
     file: 'helper',
-    from: '            WriteResult(options, state.ExitCode, state.Detail);\n',
-    to: '',
+    from: `            // the 1.28.8 wedge invisible - the result existed, but not yet.
+            WriteResult(options, code, detail);`,
+    to: `            // the 1.28.8 wedge invisible - the result existed, but not yet.`,
     expect: 'the helper records how the install went',
   },
   {
@@ -233,7 +239,38 @@ for (const [k, p] of Object.entries(FILES)) before[k] = hash(p);
 
 let caught = 0;
 const holes = [];
-console.log(`baseline: ${runCheck().out.match(/(\d+\/\d+) checks passed/)?.[1] || '?'}\n`);
+
+// The baseline is asserted, not printed and trusted.
+//
+// A harness that prints a baseline and moves on is trusting it, and a
+// mutation can then be reported as "caught" against a case that was already
+// failing - a false catch, and a proof that looked green for the wrong
+// reason. So the baseline has to be N/N, and every named case has to be PASS
+// in it, or this refuses to run.
+const baselineRun = runCheck();
+const baselineCount = baselineRun.out.match(/(\d+)\/(\d+) checks passed/);
+
+if (!baselineCount) {
+  console.log('the check suite did not report a count - it died before printing one');
+  console.log(baselineRun.out.split(/\r?\n/).slice(-8).join('\n'));
+  process.exit(1);
+}
+
+if (baselineCount[1] !== baselineCount[2]) {
+  console.log(`the baseline is not green: ${baselineCount[1]}/${baselineCount[2]}`);
+  console.log(baselineRun.out.split(/\r?\n/).filter((l) => l.trim().startsWith('FAIL')).join('\n'));
+  process.exit(1);
+}
+
+const namedCases = [...new Set(MUTATIONS.map((m) => m.expect))];
+const notGreen = namedCases.filter((name) => verdictFor(baselineRun.out, name) !== 'PASS');
+if (notGreen.length) {
+  console.log('these named cases are not green in the baseline, so a mutation could not be caught by them:');
+  for (const name of notGreen) console.log(`  - ${name}`);
+  process.exit(1);
+}
+
+console.log(`baseline: ${baselineCount[1]}/${baselineCount[2]} checks passed, ${namedCases.length} named cases green\n`);
 
 for (const m of MUTATIONS) {
   const target = FILES[m.file];
@@ -251,7 +288,15 @@ for (const m of MUTATIONS) {
 
     const { out } = runCheck();
     const verdict = verdictFor(out, m.expect);
-    if (verdict === null) {
+    const after = out.match(/(\d+)\/(\d+) checks passed/);
+
+    if (!after) {
+      holes.push(`${m.what} -- the suite did not report a count`);
+      console.log(`HOLE  ${m.what}\n      the suite died before printing a count`);
+    } else if (after[2] !== baselineCount[2]) {
+      holes.push(`${m.what} -- the suite reported ${after[2]} cases, not ${baselineCount[2]}`);
+      console.log(`HOLE  ${m.what}\n      the suite lost cases: ${after[2]} instead of ${baselineCount[2]}`);
+    } else if (verdict === null) {
       holes.push(`${m.what} -- "${m.expect}" never printed`);
       console.log(`HOLE  ${m.what}\n      the named check never printed`);
     } else if (verdict === 'FAIL') {

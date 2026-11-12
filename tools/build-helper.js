@@ -28,7 +28,13 @@ const { execFileSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'tools', 'update-helper');
-const OUT_DIR = path.join(ROOT, 'build', 'update-helper');
+// --out puts the build somewhere else. The check suite builds its own copy
+// into its own sandbox, so a check run cannot clobber the build the release
+// is about to package, and cannot fail because that build is in use.
+const outIndex = process.argv.indexOf('--out');
+const OUT_DIR = outIndex === -1
+  ? path.join(ROOT, 'build', 'update-helper')
+  : path.resolve(process.argv[outIndex + 1]);
 // Matches AssemblyName in the csproj, and HELPER_EXE in src/main/updater.js.
 const EXE = path.join(OUT_DIR, 'BetterBeeper.UpdateHelper.exe');
 const SOURCES = ['Program.cs', 'StatusForm.cs'].map((name) => path.join(SRC, name));
@@ -104,7 +110,20 @@ function main() {
   ];
 
   console.log('update helper: compiling with the .NET Framework compiler');
-  execFileSync(compiler, args, { stdio: 'inherit' });
+
+  // The compiler's own output is captured and passed on rather than inherited.
+  // Inherited output is invisible to anything that runs this as a child
+  // process, which is how a red proof ends up saying "the suite died" without
+  // saying why - and "why" is the only useful part of a compiler message.
+  try {
+    const output = execFileSync(compiler, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    if (output) process.stdout.write(output);
+  } catch (err) {
+    const text = `${err.stdout || ''}${err.stderr || ''}`;
+    if (text) process.stderr.write(text);
+    console.error('\nthe compiler failed. The messages above say why.\n');
+    process.exit(1);
+  }
 
   if (!fs.existsSync(EXE)) {
     console.error(`\nthe compiler reported success but produced no ${path.basename(EXE)}\n`);
@@ -114,4 +133,9 @@ function main() {
   console.log(`update helper: ${path.relative(ROOT, EXE)} (${kb} KB)`);
 }
 
-main();
+// Exported for the check suite, which compiles its own small programs with the
+// same compiler: tools/update-failure-check.js needs a way to find it, and
+// there should be one way to find it rather than two.
+module.exports = { findCompiler, EXE, build: main };
+
+if (require.main === module) main();

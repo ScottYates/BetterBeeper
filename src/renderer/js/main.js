@@ -12,7 +12,7 @@ import { initThread, openChat, applyMessageEvent, closeThread, markReadOnReturn 
 import { initJobs } from './jobs.js';
 import { openNewChat, openSettings, showToolsCatalog, applyTheme } from './modals.js';
 import { initLayout } from './layout.js';
-import { checkForUpdatesOnLaunch } from './updates.js';
+import { checkForUpdatesOnLaunch, reportInstallOutcome } from './updates.js';
 import { newestPreviewEntry, mergeChatSummary } from './chat-preview.js';
 import { markAllTargets, inBatches } from './mark-all-read.js';
 import { newChats, refreshOutcome } from './chat-list-refresh.js';
@@ -633,6 +633,13 @@ async function boot() {
   setTimeout(() => {
     checkForUpdatesOnLaunch().catch(() => {});
   }, 12000);
+
+  // Say so, sooner, if the last update did not take. This does not wait for
+  // the check above and does not care whether automatic updates are on: an
+  // update that failed is a fact about this machine, not about new releases.
+  setTimeout(() => {
+    reportInstallOutcome().catch(() => {});
+  }, 2500);
 }
 
 boot();

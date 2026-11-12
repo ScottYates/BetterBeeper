@@ -24,6 +24,14 @@ const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 let lastCheckAt = 0;
 
+/**
+ * Has the failed install already been reported this session?
+ *
+ * The outcome can be read from two places - the launch check and the direct
+ * status call - and the user should be told once, not twice.
+ */
+let installFailureReported = false;
+
 /** Release notes, rendered as plain text. Never as markup from the network. */
 function notesBlock(notes) {
   const text = String(notes || '').trim();
@@ -221,15 +229,45 @@ function wasDismissed(version) {
  * The app that could not install itself is gone by the time anyone could be
  * told, so this is read on the next launch. Without it a failed install is
  * indistinguishable from an update that was never offered.
+ *
+ * Two things are shown, because they answer two different questions. The
+ * message says what happened - the installer was stopped, the app's files are
+ * held, the app could not be started again - and the detail says why, in the
+ * helper's own words: how long the installer ran, what it exited with. The
+ * old version of this showed an exit code, which is a number the reader
+ * cannot do anything with, and threw away the one sentence that could have
+ * told them what to do.
  */
 function reportFailedInstall(info) {
+  if (installFailureReported) return;
+
   const last = info?.lastInstall;
   if (!last || last.ok !== false) return;
-  toast(
-    `The last update did not install (installer exit ${last.code ?? 'unknown'}). Still on ${info.current}.`,
-    'error',
-    8000,
-  );
+
+  installFailureReported = true;
+  const what = last.message || 'The last update did not install.';
+  const why = last.detail ? ` ${last.detail}` : '';
+  toast(`${what}${why} Still on ${info.current}.`, 'error', 10000);
+}
+
+/**
+ * Say so, at startup, when the last install did not take.
+ *
+ * This does not go through the update check, and does not care whether
+ * automatic updates are on. The report used to ride on the update check, and
+ * the update check is skipped when automatic updates are off - so the person
+ * who had turned them off and had an update fail anyway, because they asked
+ * for one by hand, was the one who was never told. The app came back on the
+ * old version and said nothing about why.
+ *
+ * No network call either: this is a question about the last install, and
+ * asking GitHub about the latest release has nothing to do with the answer.
+ */
+export async function reportInstallOutcome() {
+  const info = await call(() => api.updateStatus(), { context: 'update status', fallback: null });
+  if (!info) return null;
+  reportFailedInstall(info);
+  return info;
 }
 
 /**
