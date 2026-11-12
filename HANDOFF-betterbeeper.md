@@ -30,7 +30,7 @@ one person's machine.
 ## Git state
 
 Branch `main`, in sync with origin. The work described under "Work done
-2026-11-09" is committed and released.
+2026-11-11" is committed and released.
 
 **This section does not name a version, on purpose.** `git describe --tags
 --abbrev=0` names it, and the `Release x.y.z` commit at the top of the list
@@ -45,24 +45,28 @@ The last few commits, most recent first. The commit that carries this
 paragraph is above them:
 
 ```
-8531761  Release 1.28.4
-5a95c18  docs: correct the suite count in the verification history
-d7b9f9f  Release 1.28.3
-6e40f87  docs: the TLS warning was a proxy lookup, and the console windows were a batch file
-8017e89  fix: the update path cannot put a console on the desktop
-de191d8  fix: Chromium does not go looking for a proxy
-73284bd  Release 1.28.2
+740cfe8  fix: the update failure path leaves a runnable app behind
+ec78511  Release 1.30.1
+053a424  docs: the handoff and the README for the icon drawing scale
+b57c493  fix: the icon is drawn in device pixels, so the display's scaling cannot change it
+dd70e91  Release 1.30.0
+4d7eb76  feat: the app icon is now a balloon with BB knocked out of it
 ```
 
 The newest tag is on the topmost `Release` commit, so `main` is not left
 ahead of its own tag, and `package.json` agrees with it.
 
-**v1.28.3** carried the two things this file had left outstanding: the TLS
-warning, which was Chromium's proxy auto-discovery rather than anything to do
-with GitHub, and the checks that say the update path cannot put a console
-window on the desktop. It was a patch bump, because `tools/release.js`
-derives the level from the commit subjects since the last tag and both of the
-commits it carried were `fix:`. **v1.28.2** carried the composer growing to
+**v1.30.2** carried the update failure path: the handoff helper can now give
+up on a wedged installer, the app comes back on the old version whatever
+happened, and the reason is written down before it does. It was a patch bump,
+because `tools/release.js` derives the level from the commit subjects since
+the last tag and the commit it carried was a `fix:`. **v1.28.3** carried the
+two things this file had left outstanding: the TLS warning, which was
+Chromium's proxy auto-discovery rather than anything to do with GitHub, and
+the checks that say the update path cannot put a console window on the
+desktop. It was a patch bump, because `tools/release.js` derives the level
+from the commit subjects since the last tag and both of the commits it
+carried were `fix:`. **v1.28.2** carried the composer growing to
 fit the message being edited. **v1.28.0** carried the composer edit itself.
 v1.27.0 carried the arrows in the sidebar's search. v1.26.0 carried the
 in-conversation search. v1.25.0 carried the notification click. v1.24.0
@@ -1564,13 +1568,114 @@ and wrote a report, but it could not abandon the wedged installer, and the
 app it was updating was left unable to start. That is a defect in the
 updater, not a one-off, and it is listed under "Still outstanding".
 
+### The failure path is fixed, and the helper can be stopped
+
+**The ask.** "closed. fix the failure path" - the handoff helper needs a way to
+give up on a wedged installer, and the updater needs a failure path that
+leaves the previous executable runnable.
+
+**Four things were wrong, and all four are fixed.**
+
+1. **The installer was killed one process at a time.** `Process.Kill()` stops
+   the process it is given. An NSIS installer spawns children, and they are
+   what keep the app's files open. The installer and everything it starts are
+   now put in a **job object** (`tools/update-helper/Program.cs`, the `Job`
+   class), which is the only thing Windows offers that stops a whole tree at
+   once. The job is created with `KILL_ON_JOB_CLOSE`, so anything still in it
+   when the handle closes dies as well - which covers the helper itself being
+   killed, which would otherwise leave an installer running with the app's
+   files open.
+
+2. **The install was attempted even while the app's files were held.** The old
+   code waited for the files to be free and then installed regardless of the
+   answer. That is how an installer ended up fighting a lock it could not
+   take: it wedged, holding the very file the app needs to start. The wait is
+   now a decision (`ReleaseAppFiles`): if the app's executable is still held
+   after the wait, the app's own leftover processes are stopped, and if it is
+   still held after that, **the install is not attempted at all**. The helper
+   says what is holding it and that Windows has to be restarted.
+
+3. **The app was only started again when the install had worked.** A failed
+   install therefore left the user with **no app at all**, which is the worst
+   outcome available: the old version is still on disk and still runnable, and
+   nothing was starting it. The app is now started again whatever happened,
+   and the outcome says which version came back.
+
+4. **The result was written after the app was started.** The app reads the
+   result on its way up, so it could start, look for the file, and find
+   nothing - and the failure was never reported to anybody. The result is now
+   written first.
+
+**The window stopped lying.** The old status window said "Better Beeper will
+reopen on the old version" whatever had happened, and the code only reopened
+the app when the install had worked. The wording now comes from the result
+code, so it says what happened rather than what usually happens. There is
+also a **Stop the update** button: waiting out a fifteen minute timeout with
+nothing to do about it is the worst way to spend the time an installer is
+hanging.
+
+**The reason is no longer thrown away.** The result file is `code<TAB>detail`,
+and `readInstallResult()` used to do `Number(raw)` over the whole file, which
+turns `-1<TAB>The installer did not finish within 15 minutes.` into `NaN`. The
+code came back null and the reason was dropped: the user was told the
+installer exited with an unknown number, which is the one thing they could not
+do anything with. The detail is kept now, and the app says the outcome in
+words - the installer was stopped, the app's files are held, the app could not
+be started again.
+
+**A failed install is reported even with automatic updates off.** The report
+used to ride on the update check, and the update check is skipped when
+automatic updates are off - so the person who had turned them off and had an
+update fail anyway, because they asked for one by hand, was never told. There
+is a new `updater:status` handler that answers the question directly, with no
+network call, and the renderer asks it at startup.
+
+**The codes are the helper's and the app's to agree on.** `ResultCodes` in
+`Program.cs` and `INSTALL_OUTCOMES` in `src/main/updater.js` have to mean the
+same thing, and there is nothing that keeps them agreeing except a check that
+reads one and compares it with the other.
+
+| Code | What happened | What the app says |
+| --- | --- | --- |
+| 0 | It installed | nothing - it worked |
+| 1 | The installer ran and failed | "The update did not install: the installer stopped with an error." |
+| 2 | The installer was stopped | "The update did not install: the installer was stopped." |
+| 3 | Something is holding the app's files | "Windows is still holding Better Beeper's files, so it could not be started. Restart Windows to use it again." |
+| 4 | The app could not be started again | "Better Beeper could not be started again." |
+| -1 | Something else went wrong | "Something went wrong with the update." |
+
+**The check runs the real helper.** `check:updatefailure` builds the helper
+that ships in the app and runs it against real executables built for the
+purpose: an installer that hangs and starts a child, a child that hangs from a
+*different* path, one that exits 0, one that exits 3, one that reads the
+result file, and one that holds a file open so nothing else can. The child is
+at a different path on purpose, so the sweep by path cannot find it and only
+the job object can stop it - which is what makes the check mean something.
+
+**What that check found.** It found a bug in the fix itself: the branch that
+gives up on a held folder returned `InstallerFailed` instead of `FilesHeld`,
+so the app was told the installer had failed rather than that Windows was
+holding its files. That is the whole reason the suite runs the program rather
+than reading it.
+
+**One rule is checked in the source, deliberately.** "The result is written
+before the app is started again" is a race, and .NET's own start-up time is
+long enough that the app usually wins it even when the order is wrong. A
+behavioural check there would be green against a bug, so that one is checked
+in the source instead. Every other rule is checked by running the thing.
+
+**The helper shows a window even when it cannot start.** It used to exit
+silently when it could not even work out what it was asked to do, which is
+indistinguishable from never having been started. It now says so, on a window
+with a Close button, and waits for it to be read.
+
 ## Verification status
-`npm run check:all` sweeps **53 suites**, and all 53 of them pass on a release
-commit. On the tree carrying the work, before the release is cut, 52 of them
+`npm run check:all` sweeps **54 suites**, and all 54 of them pass on a release
+commit. On the tree carrying the work, before the release is cut, 53 of them
 pass: the one that does not is `check:released`, which is red until the release
-is cut, because `main` is ahead of the newest tag. It was 51 suites on the
-tree carrying the 2026-11-09 work, 50 of them passing; 49 suites on the tree
-carrying the 2026-11-08 work, 48 of them passing; 47/47 on the tree
+is cut, because `main` is ahead of the newest tag. It was 53 suites on the
+tree carrying the 2026-11-09 work, 52 of them passing; 51 suites on the tree
+carrying the 2026-11-08 work, 50 of them passing; 47/47 on the tree
 carrying the 2026-11-02 work, 2026-11-02. It was
 45/45 on the v1.26.0 release commit, 44/44 on the v1.25.0 release commit and
 on the v1.24.0 release commit, 2026-10-27; 43/43 on the v1.23.0 release
@@ -1587,6 +1692,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | Check | Result |
 | --- | --- |
 | `check:update` | 62/62, after `check:update` gained a built helper to read the PE header of |
+| `check:updatefailure` | 23/23 checks passed, running the real helper against real executables, with no window (new) |
 | `check:proxy` | 5/5 checks passed, with a control run that has to show the proxy lookup |
 | `check:composeredit` | 58/58 checks passed |
 | `check:composereditrules` | 45/45 checks passed, with no Electron and no window |
@@ -1595,6 +1701,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:readreceipts` | 14/14 checks passed, with no Electron and no window (new) |
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
 | `tools/update-redproof.js` | 21/21 mutations caught, no holes |
+| `tools/update-failure-redproof.js` | 15/15 mutations caught, no holes, with an asserted baseline (new) |
 | `tools/proxy-redproof.js` | 5/5 mutations caught, no holes |
 | `tools/search-nav-redproof.js` | 12/12 mutations caught, no holes |
 | `tools/syntax-redproof.js` | 3/3 mutations caught, no holes |
@@ -1714,15 +1821,19 @@ keeping:
    mxc:// or localmxc://". Twenty-four of the twenty-five attachments probed
    were fine, so it is a narrow fault in Beeper's Google Voice bridge. Not
    fixable here; worth a report to Beeper if it is still true.
-7. **The update handoff can leave the app unable to start.** On 2026-11-11
-   the 1.28.8 installer wedged in a kernel termination state while holding an
-   exclusive lock on `Better Beeper.exe`, and the app could not be launched
-   afterwards. Nothing could clear it but a reboot. The helper gave up
-   after fifteen minutes and wrote a report, but it has no way to abandon a
-   wedged installer, and the app it was updating was left locked out. The
-   updater needs a failure path that leaves the previous executable
-   runnable, and the handoff helper needs a way to give up on the installer
-   it started. See "The app would not launch" above.
+7. **The update handoff can leave the app unable to start.** Closed in
+   v1.30.2 - see "The failure path is fixed, and the helper can be stopped"
+   above. The helper now puts the installer in a job object and stops the
+   whole tree, refuses to install at all while the app's files are held,
+   starts the app again whatever the install did, and writes the reason
+   before it does. The app reads that reason and shows it.
+   **One thing it cannot do:** if the installer is already in kernel
+   termination, as it was on 2026-11-11, no process of ours can stop it, and
+   the lock stays until Windows is restarted. The helper now says exactly
+   that - "Windows is still holding Better Beeper's files. Restart Windows to
+   use Better Beeper again." - rather than leaving the user with a dead app
+   and no explanation. The old version of the app is still on disk and is
+   still runnable once the lock is gone.
 
 Not outstanding any more, but still true and easy to trip over: the updater
 asks GitHub for a **Release**, not for a commit. It calls `releases/latest` and

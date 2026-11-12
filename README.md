@@ -110,6 +110,10 @@ The chat UI talks to Beeper's REST API and its live WebSocket event stream. Beep
 - The install has to straddle a restart. The NSIS installer cannot replace the executable of a
   running process, so the downloaded file is stashed and the installer is spawned detached on the
   next launch, before any window is created. This is why the update is not applied in place
+- A small window says what is happening while the installer runs, and it has a **Stop** button if
+  the installer is hanging. If the install fails, the app comes back on the old version and says
+  why, in words rather than an exit code. If something is holding the app's files, it says that
+  too, because that is the one case where Windows has to be restarted
 - Version comparison is numeric and pre-release aware: 1.10.0 is newer than 1.9.0, and 1.4.0 is
   newer than 1.4.0-beta.1, so an app on a final release is never offered a beta as an "update"
 
@@ -264,6 +268,7 @@ npm run check:rich      # message HTML sanitizing keeps the markup's structure
 npm run check:pin       # pinning moves the row and flags it, notes included
 npm run check:unread    # an unread row reads louder than a read one, in both themes
 npm run check:update    # version comparison and installer selection, no network needed
+npm run check:updatefailure # the update failure path, running the real handoff helper end to end
 npm run check:archive   # archiving survives a Beeper that accepts and ignores it
 npm run check:layout    # message bubbles use the full width of the chat pane
 npm run check:composer  # the composer placeholder names one person and stays one line
@@ -511,6 +516,8 @@ src/
     icon-format.js    the .ico container, written and read back in plain JavaScript
     app-icon-check.js check: the icon files still match the artwork, and the app uses them
     app-icon-redproof.js  prove the icon check fails when the files are broken on purpose
+    update-failure-check.js  check: run the real handoff helper against real executables, and see what it leaves behind
+    update-failure-redproof.js  prove the failure-path checks fail when the rules are broken
     ascii-check.js    check: markdown and code comments stay ASCII
     badge-probe.js    dev helper: prove glyph badges stay square and monograms stay pills
     glyph-sheet.js    dev helper: render every shipped glyph large, on real badge colours
