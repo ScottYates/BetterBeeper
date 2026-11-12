@@ -327,6 +327,12 @@ repository, byte for byte, so an edited artwork that was never regenerated is ca
 quietly shipping the old picture. `node tools/app-icon-redproof.js` breaks the files on purpose
 in a copy of the tree and insists the check notices.
 
+The drawing is in device pixels, one for one. A capture is the size of the window **times the
+display's scale factor**, so on a display set to 150% a 16 pixel window captures 24 pixels and the
+icon would come out at the wrong size - the same artwork giving a different file on every
+machine. The renderer forces the scale factor to one, so the files are the same size everywhere
+and the check reproduces the repository's files wherever it runs.
+
 ## Releasing
 
 **Every push to `main` gets a release.** `npm run release` does the whole thing, and the

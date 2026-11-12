@@ -1481,7 +1481,37 @@ drawing, and compares it with the file in the repository byte for byte. An
 artwork that was edited without the files being regenerated is caught instead
 of quietly shipping the old picture. `tools/app-icon-redproof.js` breaks the
 files on purpose in a copy of the tree and insists the check notices each
-one: six mutations, six caught.
+one: seven mutations, seven caught.
+
+### The icon check only passed on a display set to 100%
+
+Pulled onto this machine, `check:appicon` was the one red suite out of 53:
+`rendered 24x24, wanted 16x16`. The files in the repository were right - the
+other 14 cases passed, and the committed `.ico` and `.png` are the correct
+sizes. The **check** was wrong here, and wrong in a way that would have
+shipped a wrong icon.
+
+**Why.** A capture is the size of the window **times the display's scale
+factor**. The renderer puts the SVG in a page of exactly 16 pixels and
+captures the page; this display is set to 150% (`AppliedDPI` 144), so the
+capture came back 24 pixels. The same artwork therefore produced a different
+file on every machine, `npm run icon` on a scaled display would have written
+files of the wrong sizes, and the check could not reproduce the repository's
+files at all - it was comparing two different pictures and reporting the
+difference as a byte number.
+
+**The fix.** `tools/icon-render.js` forces `force-device-scale-factor=1`
+before the app is ready, so the drawing is in device pixels one for one. The
+redraw on this machine now reproduces the committed `.ico` and `.png` **byte
+for byte**, which is also the proof that the committed files are the right
+ones - the check had been comparing the wrong thing, and now it compares the
+right thing.
+
+The size is a **named case** now - "the artwork is drawn at the size it is
+wanted" - rather than an exception that killed the suite with a byte number.
+`tools/app-icon-redproof.js` is 7 caught, 0 missed: the new mutation draws
+the artwork at twice the size on purpose (`BB_ICON_FORCE_SCALE=2`), which is
+wrong on any machine, so the proof does not depend on the display it runs on.
 
 The windows are given the icon as well. `main.js` passes it to the main
 window, `auth.js` to the approval window, and the app now sets an explicit
