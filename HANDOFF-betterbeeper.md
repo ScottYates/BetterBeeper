@@ -1744,6 +1744,33 @@ keeps going.
 requires the check they were written for to catch it: 9/9, with an asserted
 baseline.
 
+### The proxy check's control had stopped being possible
+
+The `wpad` DNS record now points at `0.0.0.0` instead of resolving to a host
+that served a PAC file. That is the right thing to have done with it: it is
+what stopped Chromium reaching for a proxy at all, and the -202 certificate
+failure cannot come back while nothing is listening.
+
+It also broke `check:proxy`, which needs a control - a run with the proxy
+policy left off, in which Chromium *does* look for a proxy. With the record
+pointed at a black hole, Chromium never made the request, so the control saw
+no lookup and the check reported that it could not see the problem it exists
+to catch. The case that says "Chromium does not go looking for a proxy" was
+passing for the wrong reason: there was never going to be a lookup to find.
+
+The control now points "wpad" at the loopback address with Chromium's
+`--host-resolver-rules`, so the name resolves and Chromium's own proxy
+auto-discovery has something to find. Nothing is serving
+`http://wpad/wpad.dat`, so the fetch fails, and it does not matter: the point
+is that Chromium tried, and the net log says so. The control is now part of
+the check rather than a property of the network the check runs on.
+
+`tools/proxy-redproof.js` was 5/5 before and is 5/5 now, but one of those
+mutations is now caught for a different reason. "The proxy policy does
+nothing" used to leave the check green, because with no WPAD lookup possible
+there was nothing for the missing policy to cause. It goes red now, which is
+the whole point of the case.
+
 ## Verification status
 `npm run check:all` sweeps **55 suites**, and all 55 of them pass on a release
 commit. On the tree carrying the work, before the release is cut, 54 of them

@@ -116,8 +116,31 @@ function runProbe(label, extraArgs) {
 }
 
 console.log('running the proxy probe (about ten seconds)...');
-const fixed = runProbe('fixed', []);
-const control = runProbe('control', ['--no-policy']);
+
+// "wpad" is pointed at the loopback address, so that the name resolves and
+// Chromium's own proxy auto-discovery has something to find.
+//
+// The check needs a control: it has to be able to see a proxy lookup, or it
+// cannot tell "the policy stopped the lookup" from "there was never going to
+// be a lookup". That control used to come from the machine's own DNS - the
+// name "wpad" resolving to a host that served a PAC file - and it stopped
+// working the moment that record was pointed at 0.0.0.0. That was the right
+// thing to have done with the record: it is what stopped Chromium from
+// reaching for a proxy at all. But it also left the check unable to see the
+// thing it exists to see, and a check that cannot see the problem is not a
+// check.
+//
+// The host resolver rule makes the control part of the check rather than a
+// property of the network it runs on. Nothing is serving
+// http://wpad/wpad.dat, so the fetch fails, and it does not matter: the point
+// is that Chromium tried, and the net log says so.
+//
+// One argument, with the spaces inside it. Chromium reads the rule as a
+// single value, and a rule split across two arguments is not a rule.
+const HOST_RESOLVER = '--host-resolver-rules=MAP wpad 127.0.0.1';
+
+const fixed = runProbe('fixed', [HOST_RESOLVER]);
+const control = runProbe('control', [HOST_RESOLVER, '--no-policy']);
 
 // ---- the policy itself -----------------------------------------------------
 
