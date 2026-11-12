@@ -19,13 +19,32 @@
  * Everything here needs the app to be ready, because a window cannot be made
  * before then.
  */
-const { BrowserWindow } = require('electron');
+const { app, BrowserWindow } = require('electron');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 /** The sizes Windows actually asks for. */
 const SIZES = [16, 24, 32, 48, 64, 128, 256];
+
+/**
+ * The scale the drawing is made at.
+ *
+ * A capture is the size of the window **times the display's scale factor**,
+ * so on a display set to 150% a 16 pixel window captures 24 pixels, and the
+ * icon comes out at the wrong size. That is not a small difference: the same
+ * artwork then produces a different file on every machine, the check cannot
+ * reproduce the files in the repository, and the icon that ships is a
+ * different size from the one that was drawn.
+ *
+ * Forcing the factor to one makes the drawing the same size everywhere, so
+ * the files in the repository are the files this machine draws.
+ *
+ * The override exists so the red proof can draw the icon at the wrong size on
+ * purpose and prove that the check notices.
+ */
+const SCALE = Number(process.env.BB_ICON_FORCE_SCALE || '1');
+app.commandLine.appendSwitch('force-device-scale-factor', String(SCALE > 0 ? SCALE : 1));
 
 /**
  * Render the SVG at one size.

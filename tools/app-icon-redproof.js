@@ -49,7 +49,7 @@ function makeTree() {
 }
 
 /** Run the check against a tree and say what it said. */
-function runCheck(tree) {
+function runCheck(tree, extraEnv) {
   try {
     const stdout = execFileSync(
       electronBin(),
@@ -58,7 +58,12 @@ function runCheck(tree) {
         path.join(ROOT, 'tools', 'app-icon-check.js'),
         `--root=${tree}`,
       ],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      {
+        cwd: ROOT,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+      }
     );
     return { code: 0, output: stdout };
   } catch (err) {
@@ -130,6 +135,18 @@ const CASES = [
       fs.writeFileSync(file, text, 'utf8');
     },
   },
+  {
+    // The drawing has to come out at the size it was asked for.
+    //
+    // A capture is the size of the window times the display's scale factor,
+    // so on a display set to 150% a 16 pixel window captures 24 pixels - and
+    // the check would then be comparing two different pictures, on one
+    // machine and not another. The override draws the artwork at twice the
+    // size on purpose, which is wrong on any machine.
+    name: 'the artwork is drawn at the wrong size',
+    expect: 'the artwork is drawn at the size it is wanted',
+    env: { BB_ICON_FORCE_SCALE: '2' },
+  },
 ];
 
 let caught = 0;
@@ -148,8 +165,8 @@ if (cleanRun.code === 0) {
 
 for (const testCase of CASES) {
   const tree = makeTree();
-  testCase.break(tree);
-  const run = runCheck(tree);
+  if (testCase.break) testCase.break(tree);
+  const run = runCheck(tree, testCase.env);
   const caughtIt = run.code !== 0 && failedOn(run.output, testCase.expect);
   if (caughtIt) {
     caught += 1;

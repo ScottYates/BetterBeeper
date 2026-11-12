@@ -165,25 +165,49 @@ async function main() {
   // This is the part that catches the artwork being edited without the files
   // being regenerated. The artwork is drawn again here and put through the
   // same builder, and the result is compared with what is in the repository.
-  const fresh = await renderAll(svg, SIZES);
-  const freshIco = buildIco(fresh);
-  const at = firstDifference(freshIco, icoBytes);
+  //
+  // The drawing has to come out at the size it was asked for. A capture is
+  // the size of the window times the display's scale factor, so on a display
+  // set to 150% a 16 pixel window captures 24 pixels - and the check would
+  // then be comparing two different pictures, on one machine and not another.
+  // The renderer forces the scale factor to one for that reason; this case
+  // says so out loud rather than letting the comparison fail with a byte
+  // number nobody can read.
+  let fresh = null;
+  let renderError = '';
+  try {
+    fresh = await renderAll(svg, SIZES);
+  } catch (err) {
+    renderError = err && err.message ? err.message : String(err);
+  }
   ok(
-    'the .ico is what the artwork produces today',
-    at === -1,
-    at === -1
-      ? `${icoBytes.length} bytes`
-      : `first difference at byte ${at}; run "npm run icon"`
+    'the artwork is drawn at the size it is wanted',
+    fresh !== null,
+    renderError
   );
 
-  const freshBig = fresh.find((image) => image.size === 256);
-  const pngAt = firstDifference(freshBig.png, pngBytes);
+  const freshIco = fresh ? buildIco(fresh) : null;
+  const at = freshIco ? firstDifference(freshIco, icoBytes) : -1;
+  ok(
+    'the .ico is what the artwork produces today',
+    fresh !== null && at === -1,
+    fresh === null
+      ? 'the artwork could not be drawn'
+      : at === -1
+        ? `${icoBytes.length} bytes`
+        : `first difference at byte ${at}; run "npm run icon"`
+  );
+
+  const freshBig = fresh ? fresh.find((image) => image.size === 256) : null;
+  const pngAt = freshBig ? firstDifference(freshBig.png, pngBytes) : -1;
   ok(
     'the window png is what the artwork produces today',
-    pngAt === -1,
-    pngAt === -1
-      ? `${pngBytes.length} bytes`
-      : `first difference at byte ${pngAt}; run "npm run icon"`
+    freshBig !== null && pngAt === -1,
+    !freshBig
+      ? 'the artwork could not be drawn'
+      : pngAt === -1
+        ? `${pngBytes.length} bytes`
+        : `first difference at byte ${pngAt}; run "npm run icon"`
   );
 
   // ---- the wiring ----
