@@ -22,6 +22,7 @@ const updater = require('./updater');
 const { wireSpellContextMenu } = require('./context-menu');
 const mediaPath = require('./media-path');
 const { applyProxyPolicy } = require('./proxy-config');
+const { resolveWindowBounds, boundsToRemember, MIN_WIDTH, MIN_HEIGHT } = require('./window-bounds');
 
 // Chromium must not go looking for a proxy. The app has no use for one, and
 // the search is not free: Chromium's proxy auto-discovery fetches
@@ -234,8 +235,8 @@ function contentTypeFor(filePath) {
   return known[ext] || 'application/octet-stream';
 }
 
-const MIN_WIDTH = 720;
-const MIN_HEIGHT = 520;
+// The smallest window the app will open at lives with the geometry that
+// restores it, in window-bounds.js.
 
 // Text size is applied as Chromium page zoom rather than a CSS font-size
 // override. Zoom scales type, icons, padding and hit targets together and keeps
@@ -273,55 +274,61 @@ function applyTextScale(value) {
 let boundsTimer = 0;
 
 /**
- * Where the window was last left. Clamped to whichever display currently owns
- * that position, so unplugging a monitor cannot strand the window off-screen.
+ * Where the window was last left.
+ *
+ * It goes back exactly where it was. The only thing that moves it is a
+ * display that has gone away: then the window would open in the void with no
+ * way to get it back, so it is brought onto the primary display instead.
+ *
+ * It used to be clamped into the work area of whichever display owned the
+ * position, and that is what made a window closed near an edge come back
+ * slightly off - by exactly how far it had been over the edge. See
+ * window-bounds.js, which holds the geometry and says why.
  */
 function restoreBounds() {
   const saved = services?.settings?.read().windowBounds;
   if (!saved || typeof saved !== 'object') return {};
 
   try {
-    const area = screen.getDisplayMatching({
-      x: saved.x,
-      y: saved.y,
-      width: saved.width,
-      height: saved.height,
-    }).workArea;
-
-    const width = Math.max(MIN_WIDTH, Math.min(saved.width || area.width, area.width));
-    const height = Math.max(MIN_HEIGHT, Math.min(saved.height || area.height, area.height));
-
-    return {
-      width,
-      height,
-      x: Math.round(Math.min(Math.max(saved.x, area.x), area.x + area.width - width)),
-      y: Math.round(Math.min(Math.max(saved.y, area.y), area.y + area.height - height)),
-    };
+    const primary = screen.getPrimaryDisplay();
+    const displays = screen.getAllDisplays().map((display) => ({
+      bounds: display.bounds,
+      workArea: display.workArea,
+      primary: display.id === primary.id,
+    }));
+    return (
+      resolveWindowBounds(saved, displays, { minWidth: MIN_WIDTH, minHeight: MIN_HEIGHT }) || {}
+    );
   } catch {
     return {}; // stored bounds were nonsense; fall back to the defaults
   }
 }
 
-function persistBounds() {
+/**
+ * Remember where the window is now, so that it opens here again.
+ */
+function saveBounds() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
+  const remembered = boundsToRemember(mainWindow);
+  if (!remembered) return;
+  try {
+    services?.settings?.write(remembered);
+  } catch {
+    /* a failed write just means we open at the default size next time */
+  }
+}
+
+/**
+ * Remember the size and position across runs.
+ *
+ * The write is debounced, because dragging a window fires a move event for
+ * every pixel it travels. The window closing is not debounced: a window
+ * closed within 400ms of being dragged would otherwise come back where it
+ * was before the drag, rather than where it was left.
+ */
+function persistBounds() {
   clearTimeout(boundsTimer);
-  boundsTimer = setTimeout(() => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    // Minimised and full-screen bounds would be saved as the "normal" size.
-    if (mainWindow.isMinimized() || mainWindow.isFullScreen()) return;
-    try {
-      // getNormalBounds() is deliberately the pre-maximize rectangle, so a
-      // maximized window restores to the size it had before it was maximized.
-      // The maximized flag is saved alongside it, otherwise closing a maximized
-      // window and reopening it would quietly un-maximize it.
-      services?.settings?.write({
-        windowBounds: mainWindow.getNormalBounds(),
-        windowMaximized: mainWindow.isMaximized(),
-      });
-    } catch {
-      /* a failed write just means we open at the default size next time */
-    }
-  }, 400);
+  boundsTimer = setTimeout(saveBounds, 400);
 }
 
 // ---------------------------------------------------------------------------
@@ -503,6 +510,13 @@ function createWindow() {
   mainWindow.on('move', persistBounds);
   mainWindow.on('maximize', persistBounds);
   mainWindow.on('unmaximize', persistBounds);
+  // ...and when it closes. The moves above are debounced, so a window closed
+  // straight after being dragged would otherwise reopen where it was before
+  // the drag rather than where it was left.
+  mainWindow.on('close', () => {
+    clearTimeout(boundsTimer);
+    saveBounds();
+  });
 
   // Never open app windows or arbitrary files in-app; send them to the OS.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

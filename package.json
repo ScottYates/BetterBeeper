@@ -61,6 +61,7 @@
     "check:participants": "node tools/participants-check.mjs",
     "check:contactrefresh": "node tools/contact-refresh-check.mjs",
     "check:settings": "node tools/settings-check.js",
+    "check:windowbounds": "electron tools/run-check.js tools/window-bounds-check.js",
     "check:imagecopy": "node tools/image-copy-check.js",
     "check:imagecopy-live": "node tools/image-copy-live.js",
     "check:gif": "electron tools/run-check.js tools/gif-check.js",
