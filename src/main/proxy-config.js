@@ -12,12 +12,13 @@
  * auto-discovery looks for a WPAD file, and it looks for it by fetching
  * `http://wpad/wpad.dat`. On a machine where `wpad` resolves to something, the
  * fetch is followed wherever it leads - and where it leads here is a redirect
- * to `https://wpad/...`, on a host whose certificate does not cover the name
- * `wpad`. The handshake fails with `net_error -202`
- * (`ERR_CERT_ALT_NAME_INVALID`), and that failure is what was reported as a
- * TLS warning in the app's log. It was never the GitHub call: that one goes
- * to api.github.com, which serves a certificate for itself and was never
- * involved.
+ * to `https://wpad/...`, on a host that answers with YunoHost's own default
+ * self-signed certificate (`CN=yunohost.org`, issuer `O=yunohost`). The chain
+ * was issued by an authority that is not trusted, so the handshake fails with
+ * `net_error -202` (`ERR_CERT_AUTHORITY_INVALID`), and that failure is what
+ * was reported as a TLS warning in the app's log. It was never the GitHub
+ * call: that one goes to api.github.com, which serves a certificate for
+ * itself and was never involved.
  *
  * The fix is to stop the search rather than to argue with the certificate:
  * `--proxy-server=direct://` says every request goes straight out, so there is

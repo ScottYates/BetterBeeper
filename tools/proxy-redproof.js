@@ -1,11 +1,12 @@
 /**
  * Red proof for the proxy checks in check:proxy.
  *
- * The TLS warning this work fixed - `net_error -202`, a certificate that does
- * not cover the name it was asked for - was not the GitHub call failing. It
- * was Chromium's proxy auto-discovery: it fetches `http://wpad/wpad.dat`,
- * follows the redirect to a host whose certificate does not cover `wpad`, and
- * the handshake fails. The fix is to stop the search.
+ * The TLS warning this work fixed - `net_error -202`, a certificate whose chain
+ * was issued by an authority that is not trusted - was not the GitHub call
+ * failing. It was Chromium's proxy auto-discovery: it fetches
+ * `http://wpad/wpad.dat`, follows the redirect to a host that answers with
+ * YunoHost's default self-signed certificate, and the handshake fails. The fix
+ * is to stop the search.
  *
  * A check that says "no proxy lookup happened" is only worth something if it
  * can see one when there is one, so the suite runs the probe twice: once with

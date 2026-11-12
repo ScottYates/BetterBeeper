@@ -3,9 +3,10 @@
  *
  * The app has no use for a proxy, and Chromium's search for one was not free.
  * The proxy auto-discovery fetches `http://wpad/wpad.dat`; where that leads
- * on this machine is a redirect to a host whose certificate does not cover the
- * name it was asked for, and the handshake fails with `net_error -202`
- * (`ERR_CERT_ALT_NAME_INVALID`). That failure is what was reported as a TLS
+ * on this machine is a redirect to a host whose certificate was issued by an
+ * authority that is not trusted - YunoHost's own default self-signed one, with
+ * `CN=yunohost.org` - and the handshake fails with `net_error -202`
+ * (`ERR_CERT_AUTHORITY_INVALID`). That failure is what was reported as a TLS
  * warning in the app's log. It was never the GitHub call - api.github.com
  * serves a certificate for itself and was never involved.
  *
@@ -170,11 +171,13 @@ add('Chromium does not go looking for a proxy', () => {
 });
 
 add('the certificate failure is gone from the log', () => {
-  // net_error -202 is ERR_CERT_ALT_NAME_INVALID: the handshake against a
-  // certificate that does not cover the name. This is the warning itself.
+  // net_error -202 is ERR_CERT_AUTHORITY_INVALID: the chain was issued by an
+  // authority that is not trusted. That is what the box serves for this name -
+  // YunoHost's own default self-signed certificate - and it is the warning
+  // itself.
   if (fixed.error) return fixed.error;
   if (fixed.badCerts > 0) {
-    return `the net log still has ${fixed.badCerts} certificate name failures`;
+    return `the net log still has ${fixed.badCerts} certificate failures`;
   }
   return true;
 });

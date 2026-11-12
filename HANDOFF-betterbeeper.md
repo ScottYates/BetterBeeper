@@ -1152,26 +1152,45 @@ day.
 
 ### The TLS warning was Chromium looking for a proxy
 
-The log said `handshake failed ... net_error -202`, which is
-`ERR_CERT_ALT_NAME_INVALID`: a certificate that does not cover the name it was
-asked for. The handoff had guessed "probably a different endpoint or an
-intercepting proxy". It was neither, and it was never the GitHub call -
-api.github.com serves a certificate for itself, was reachable with a plain
-`https.get` from this machine, and was never in the log.
+The log said `handshake failed ... net_error -202`. That code is
+`ERR_CERT_AUTHORITY_INVALID`: the certificate chain was issued by an authority
+that is not trusted. (It is not `ERR_CERT_ALT_NAME_INVALID`, which is -200 -
+this file said so until 2026-11-11, and the difference matters, because the
+cause is an untrusted authority rather than a name that does not match.) The
+handoff had guessed "probably a different endpoint or an intercepting proxy".
+It was neither, and it was never the GitHub call - api.github.com serves a
+certificate for itself, was reachable with a plain `https.get` from this
+machine, and was never in the log.
 
 It was **Chromium's proxy auto-discovery**. Chromium looks for a WPAD file by
 fetching `http://wpad/wpad.dat`. On this machine `wpad` resolves to
-`wpad.yatesframe.com`, which is Scott's own YunoHost box. The fetch is
-answered with a redirect to `https://wpad/yunohost/admin`, and the certificate
-that answers does not cover the name `wpad`, so the handshake fails with
--202. The net log of an Electron process started here says so in as many
-words: the name `wpad` is in it, and so are the -202 errors.
+`wpad.yatesframe.com`, which is Scott's own YunoHost box at 139.64.176.66.
+The fetch is answered with a redirect to `https://wpad/yunohost/admin`, and
+the certificate that answers is **YunoHost's default self-signed one** -
+`CN=yunohost.org`, issuer `O=yunohost, CN=yunohost.org` - because no vhost
+serves that name, so nginx falls back to the default server. The chain is not
+trusted, so the handshake fails with -202. The net log of an Electron process
+started here says so in as many words: the name `wpad` is in it, and so are
+the -202 errors. The real `yatesframe.com` certificate is a Let's Encrypt one
+(`CN=yatesframe.com`) and does not cover the name either, so the redirect is
+broken either way - it is only the reason that is different.
 
 The fix is `src/main/proxy-config.js`: `--proxy-server=direct://`, applied
 before `app.whenReady()`. A switch set after the network stack has started is
 accepted by Electron and ignored by Chromium, so the timing is part of the
 rule. The app has no use for a proxy - the renderer makes no network requests
 at all, and the only outbound call in the app is the GitHub release feed.
+
+**What is left is on the DNS, and it is a record to delete.** `wpad` is
+resolved as an alias of `wpad.yatesframe.com`, and both resolve to
+139.64.176.66. WPAD is a legacy way for a machine to be told about a proxy by
+a name in DHCP or DNS; a personal domain has no business having one, and
+nothing on this network is a proxy. Delete the `wpad.yatesframe.com` record
+and the `wpad` alias in front of it at whatever serves the DNS for
+`yatesframe.com`, and the lookup fails at once with NXDOMAIN instead of
+failing slowly with a certificate error. Until it is deleted, **any browser
+that does proxy auto-discovery will still make the lookup** - Chrome and Edge
+do it by default - and will still show the certificate warning on it.
 
 **The check has a control, and the control is the point.** "No proxy lookup
 happened" is also what a Chromium that never looks would produce, on a machine
@@ -1789,10 +1808,10 @@ keeping:
    looking for a proxy" above. The cause is fixed in the app. The *root* cause
    is still on the server: the DNS record `wpad.yatesframe.com`, and the
    `wpad` alias in front of it, point at the YunoHost box, where no vhost
-   serves that name - so the host answers with a redirect to the admin login
-   over HTTPS with a certificate that covers `yatesframe.com` and not `wpad`.
-   The app no longer goes looking, so the app is quiet about it. **A browser
-   that auto-discovers a proxy will still find it.** That is a DNS record to
+   serves that name - so nginx answers with its default self-signed
+   `CN=yunohost.org` certificate and the chain is not trusted. The app no
+   longer goes looking, so the app is quiet about it. **A browser that
+   auto-discovers a proxy will still find it.** That is a DNS record to
    delete, on the DNS, and it is not in this repository.
 2. **The empty command windows were the old status window.** Closed in
    v1.28.3 - see "The empty command windows were a batch file's status window"
