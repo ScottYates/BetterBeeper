@@ -21,6 +21,7 @@ import {
   deliveryText,
 } from './read-receipts.js';
 import { initThreadSearch, applyThreadSearchHighlights, closeThreadSearch } from './thread-search.js';
+import { shouldMarkOnTyping } from './type-read.js';
 import {
   initComposerEdit,
   handleComposerKey,
@@ -91,6 +92,14 @@ let settleUntil = 0;
 // while, because the bridge may recover, but not on every single re-render.
 const failedMarks = new Map();
 const MARK_RETRY_AFTER = 60_000;
+// The chats whose mark-read call is in flight right now.
+//
+// Typing is the reason this exists. Every keystroke asks the same question -
+// "is there anything unread in this chat" - and the answer is still "yes"
+// until the call that is already on its way comes back, so without this every
+// letter of a word would put another call on the bridge. One call per chat at
+// a time is the whole rule.
+const marksInFlight = new Set();
 let pendingAttachments = [];
 // Distinguishes two optimistic bubbles created in the same millisecond.
 let txnSeq = 0;
@@ -186,6 +195,10 @@ export function initThread() {
 
   composer.addEventListener('input', () => {
     updateReplyPreview();
+    // Typing in a chat is the user saying they are looking at it. A message
+    // that arrived in it while the window was elsewhere is unread until
+    // something asks again, and this is the thing that asks.
+    markReadOnTyping();
   });
 
   composer.addEventListener('keydown', (event) => {
@@ -966,7 +979,17 @@ async function markRead() {
   const failedAt = failedMarks.get(key);
   if (failedAt && Date.now() - failedAt < MARK_RETRY_AFTER) return;
 
-  const result = await callOk(() => api.chats.markRead(chat.id), { context: 'mark read' });
+  // One call per chat at a time. Typing asks this question on every
+  // keystroke, and the count stays where it is until the call comes back.
+  if (marksInFlight.has(key)) return;
+  marksInFlight.add(key);
+
+  let result;
+  try {
+    result = await callOk(() => api.chats.markRead(chat.id), { context: 'mark read' });
+  } finally {
+    marksInFlight.delete(key);
+  }
   if (result === FAILED) {
     failedMarks.set(key, Date.now());
     return;
@@ -979,6 +1002,42 @@ async function markRead() {
   state.chats.set(chat.id, { ...summary, unreadCount: 0 });
   currentChat = { ...currentChat, unreadCount: 0 };
   renderChats();
+}
+
+/**
+ * Typing in the open chat counts as having read it.
+ *
+ * The render path marks a thread read only when the document has focus at the
+ * moment it runs, and the return path covers the window coming back. Typing
+ * is the third thing that says the user is looking at this chat: they have it
+ * open, they are answering in it, and a message that arrived in it is on the
+ * screen in front of them.
+ *
+ * It is also the only thing that clears a badge which should not be there. A
+ * message that arrives while the window has focus is marked read, and then
+ * the sidebar is refreshed from the server - and the server's answer can
+ * still carry the old count, because the mark had not reached it when the
+ * refresh was issued. The badge comes back on a chat that is open, and
+ * nothing else asks again.
+ *
+ * Returns whether a mark was actually attempted, so a caller can tell "there
+ * was nothing to read" from "it was marked read".
+ */
+export function markReadOnTyping() {
+  const chat = currentChat;
+
+  const should = shouldMarkOnTyping({
+    hasOpenChat: Boolean(chat),
+    chatUnread: chatIsUnread(chat ? state.chats.get(chat.id) || chat : null),
+    markReadEnabled: state.settings.markReadOnOpen !== false,
+  });
+  if (!should) return false;
+
+  // Not awaited: this runs from an input handler, and markRead() has its own
+  // retry backoff, its own in-flight guard and its own optimistic state
+  // update.
+  markRead();
+  return true;
 }
 
 /**

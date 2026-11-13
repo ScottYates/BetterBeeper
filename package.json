@@ -24,6 +24,7 @@
     "check:share": "electron tools/run-check.js tools/share-check.js",
     "check:download": "electron tools/run-check.js tools/download-check.js",
     "check:focusread": "electron tools/run-check.js tools/focusread-check.js",
+    "check:typeread": "electron tools/run-check.js tools/typeread-check.js",
     "check:rich": "electron tools/run-check.js tools/rich-text-check.js",
     "check:entity": "node tools/entity-check.mjs",
     "check:pin": "electron tools/run-check.js tools/pin-check.js",
