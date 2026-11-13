@@ -45,12 +45,13 @@ The last few commits, most recent first. The commit that carries this
 paragraph is above them:
 
 ```
+261029b  feat: typing in a chat marks it read
+206f7f8  fix: no check may put a console window on the desktop
 5b3c229  fix: the update installs over the top, so the taskbar pin survives
 9f342c6  Release 1.30.5
 2135695  docs: the window's place, and the wpad record is not an issue
 1f8a6e7  fix: the window opens exactly where it was closed
 3fe318a  Release 1.30.4
-1a7ed31  fix: the proxy check can see the lookup it exists to catch
 ```
 
 The newest tag is on the topmost `Release` commit, so `main` is not left
@@ -2020,12 +2021,87 @@ check can ask the questions that matter: is it transparent, is it cloaked (on
 a virtual desktop nobody is looking at), is it on the interactive window
 station (`WinSta0`), and is it above the others.
 
+## Work done 2026-11-13
+
+### Typing in a chat marks it read
+
+**What was asked:** "if there is a new message in a chat, mark it as read also
+after i type anything in it's chat window."
+
+**What the app did.** There were three ways to mark a chat read: opening it,
+the window coming back to the front, and a message arriving while the window
+had focus. Typing was not one of them.
+
+That leaves two gaps, and they are different gaps.
+
+The first is the one the ask is about. A message that arrives while the window
+is in the background is rendered with no focus and deliberately not marked -
+correct, because nobody was looking at it then. When you come back, the focus
+handler asks again. But if you do not come back, because you were already
+looking at the chat in another window, or because the focus never moved,
+nothing asks again and the message stays unread in a chat you are sitting in.
+Typing is the signal that says "I am here and I have this open" and the app
+was not listening for it.
+
+The second is a race, and it is the one that puts a badge on a chat that is
+open and on screen. The order on a live message is:
+
+    applyMessageEvent(frame)      -> renders, and marks read if the window has focus
+    refreshChatSummary(frame)     -> reads the chat back from the server
+
+The mark-read call and the read-back are both on their way at the same moment,
+and the read-back can carry the count as it was *before* the mark reached the
+server. The mark then clears the local count, the read-back writes the old
+count back over it, and the badge is on a chat the user is looking at. Nothing
+asks again after that: the next render only happens when another message
+arrives.
+
+**What it is now.** Typing in the composer of the open chat marks that chat
+read - the whole chat, with no message id, which is what
+`POST /v1/chats/{chatID}/read` means when the id is left off, and the same
+call the mark-all-read button makes. The rule is three conditions, in
+`src/renderer/js/type-read.js`:
+
+- there is an open chat,
+- that chat still has unread messages,
+- the "mark a chat as read when I open it" setting is on.
+
+The setting gates it, like it gates opening and returning. Someone who turned
+that off does not want the app deciding what they have read, and typing is
+still the app deciding. It is on by default.
+
+**One call per chat at a time.** Typing asks the same question on every
+keystroke, and the answer is still "yes" until the call that is already on
+its way comes back - so without a guard, every letter of every word would put
+another call on the bridge. `marksInFlight` holds the chats whose mark-read
+call is in flight, and a second request for one of them is dropped. The
+in-flight call clears the count when it lands, which is the same answer the
+dropped one would have given.
+
+**What proves it.** `npm run check:typeread` (18/18) drives the real
+`thread.js` in a browser harness with only the IPC boundary replaced, and
+types into the real composer: a chat with a message waiting is marked read by
+typing, the count comes back to zero, a burst of six keystrokes is **one**
+call and not six, an already-read chat is not marked again, a chat with
+nothing unread is not marked, the setting is respected, and a chat with no
+chat open is not marked. It also reproduces the race above - the count written
+back by the server's answer - and shows that typing clears it.
+
+The rule itself is driven directly as well, including the case that flips each
+condition in turn, because a condition written into the signature and never
+consulted is a condition that does nothing.
+
+`tools/typeread-redproof.js` breaks each rule in turn - the call site removed,
+the rule ignoring the open chat, the rule ignoring the unread count, the rule
+ignoring the setting, and the in-flight guard taken out - and requires the
+check to catch it: 5/5, no holes, with the baseline asserted.
+
 ## Verification status
-`npm run check:all` sweeps **57 suites**, and all 57 of them pass on a release
-commit. On the tree carrying the work, before the release is cut, 56 of them
+`npm run check:all` sweeps **58 suites**, and all 58 of them pass on a release
+commit. On the tree carrying the work, before the release is cut, 57 of them
 pass: the one that does not is `check:released`, which is red until the release
-is cut, because `main` is ahead of the newest tag. It was 56 suites on the
-tree carrying the 2026-11-12 work, 55 of them passing; it was 55 suites on the
+is cut, because `main` is ahead of the newest tag. It was 57 suites on the
+tree carrying the 2026-11-12 work, 56 of them passing; it was 56 suites on the
 tree carrying the 2026-11-11 work, 54 of them passing; it was 54 suites on the
 tree carrying the 2026-11-09 work, 53 of them passing; 53 suites on the tree
 carrying the 2026-11-08 work, 52 of them passing; 47/47 on the tree
@@ -2049,6 +2125,8 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:handoff` | 20/20 checks passed, running the real helper with the real window, off the screen and opaque |
 | `check:proxy` | 5/5 checks passed, with a control run that has to show the proxy lookup |
 | `check:windowbounds` | 28/28 checks passed, against made-up displays and against the real one (new) |
+| `check:typeread` | 18/18 checks passed, typing into the real composer in a browser harness (new) |
+| `tools/typeread-redproof.js` | 5/5 mutations caught, no holes, with an asserted baseline (new) |
 | `check:composeredit` | 58/58 checks passed |
 | `check:composereditrules` | 45/45 checks passed, with no Electron and no window |
 | `check:bridgeplaceholder` | 12/12 checks passed, with no Electron and no window (new) |
