@@ -79,7 +79,7 @@ const MUTATIONS = [
 
 function runCheck() {
   try {
-    const out = execFileSync('npm.cmd', ['run', 'check:harness', '--silent'], {
+    const out = execFileSync('npm.cmd', ['run', 'check:harness', '--silent'], { windowsHide: true,
       cwd: ROOT, encoding: 'utf8', timeout: 120000, shell: true,
     });
     return { code: 0, out };

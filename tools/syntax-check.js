@@ -135,7 +135,7 @@ function main() {
 
       let bad = null;
       try {
-        execFileSync(process.execPath, ['--check', staged], { stdio: ['ignore', 'ignore', 'pipe'] });
+        execFileSync(process.execPath, ['--check', staged], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
       } catch (err) {
         // Node reports "file:line" against the staged copy; map it back.
         const detail = String(err.stderr || err.message)

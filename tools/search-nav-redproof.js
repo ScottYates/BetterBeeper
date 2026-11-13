@@ -179,7 +179,7 @@ const MUTATIONS = [
 
 function runCheck(suite) {
   try {
-    const out = execFileSync('npm.cmd', ['run', suite, '--silent'], {
+    const out = execFileSync('npm.cmd', ['run', suite, '--silent'], { windowsHide: true,
       cwd: ROOT, encoding: 'utf8', timeout: 600000, shell: true,
     });
     return { code: 0, out };

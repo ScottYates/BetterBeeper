@@ -71,7 +71,7 @@ for ($x = 0; $x -lt $w; $x += 3) {
 $bmp.Dispose()
 Write-Output ($row -join ',')
 `;
-  const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], {
+  const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], { windowsHide: true,
     encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
   });
   const line = out.trim().split(/\r?\n/).pop();

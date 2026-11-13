@@ -59,7 +59,11 @@ const REPO = 'ScottYates/BetterBeeper';
 const CONVENTIONAL = /^(?<type>[a-z]+)(?<scope>\([^)]*\))?(?<bang>!)?:\s+(?<subject>.+)$/s;
 
 function run(cmd, args, opts = {}) {
-  return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', ...opts });
+  // windowsHide comes after the spread on purpose: git and gh are console
+  // programs, and a console program started from a process with no console of
+  // its own is given one - which is a window on the user's desktop. The flag
+  // is not something a caller may turn off.
+  return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', ...opts, windowsHide: true });
 }
 
 function git(args) {
@@ -208,7 +212,7 @@ function findGh() {
   for (const c of candidates) {
     if (path.isAbsolute(c) ? fs.existsSync(c) : true) {
       try {
-        execFileSync(c, ['--version'], { stdio: 'ignore' });
+        execFileSync(c, ['--version'], { windowsHide: true, stdio: 'ignore' });
         return c;
       } catch {
         /* try the next one */

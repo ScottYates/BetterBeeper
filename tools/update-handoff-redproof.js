@@ -27,6 +27,7 @@ const FILES = {
   form: path.join(ROOT, 'tools', 'update-helper', 'StatusForm.cs'),
   nsis: path.join(ROOT, 'tools', 'nsis', 'installer.nsh'),
   builder: path.join(ROOT, 'electron-builder.yml'),
+  runner: path.join(ROOT, 'tools', 'private-desktop-runner.cs'),
 };
 
 const hash = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -60,7 +61,7 @@ const MUTATIONS = [
   {
     what: 'the window is never built',
     file: 'helper',
-    from: `            using (var form = new StatusForm(state, trace, options.Offscreen))
+    from: `            using (var form = new StatusForm(state, trace, options.Offscreen, options.Place))
             {
                 form.Pump();
             }`,
@@ -115,7 +116,45 @@ const MUTATIONS = [
     from: `                Volatile.Write(ref _state.BringToFront, 0);
                 ComeToFront();`,
     to: '                Volatile.Write(ref _state.BringToFront, 0);',
-    expect: 'the window comes to the front once the app has gone',
+    expect: 'the window is put in front once the app has gone',
+  },
+  {
+    // The opposite failure, and the one that was measured: a test that takes
+    // the focus away from the user. The window is off the screen, so there is
+    // nothing to see - but it would still swallow the user's keystrokes.
+    what: 'a test takes the focus from the user',
+    file: 'form',
+    from: `                if (_offscreen)
+                {
+                    // A check must never take the focus.`,
+    to: `                if (false)
+                {
+                    // A check must never take the focus.`,
+    expect: 'a test never takes the focus from the user',
+  },
+  {
+    // The rule the user asked for: never pop up a window. Ever.
+    //
+    // The runner gives the helper a desktop of its own, so every window the
+    // helper creates is on a desktop Windows does not draw. Point the runner
+    // at the desktop the user is looking at and that guarantee is gone - and
+    // the trace says so, which is what this case reads.
+    what: 'the helper is run on the desktop the user is looking at',
+    file: 'runner',
+    from: 'startup.lpDesktop = "WinSta0\\\\" + desktopName;',
+    to: 'startup.lpDesktop = "WinSta0\\\\Default";',
+    expect: 'a check never puts a window on the desktop the user is looking at',
+  },
+  {
+    // The other half of the same guarantee: the desktop has to be the one
+    // the run was given, not one the runner decided on. A hard-coded name
+    // would still be a private desktop - and still not the one the check
+    // asked for, so the check would be measuring the wrong run.
+    what: 'the runner decides the desktop for itself',
+    file: 'runner',
+    from: 'startup.lpDesktop = "WinSta0\\\\" + desktopName;',
+    to: 'startup.lpDesktop = "WinSta0\\\\" + "bb-fixed";',
+    expect: "the runner cannot be pointed at the user's desktop by accident",
   },
   {
     what: 'the helper runs from the install folder again',
@@ -159,7 +198,7 @@ const MUTATIONS = [
 
 function runCheck() {
   try {
-    const out = execFileSync('npm', ['run', 'check:handoff', '--silent'], {
+    const out = execFileSync('npm', ['run', 'check:handoff', '--silent'], { windowsHide: true,
       cwd: ROOT, encoding: 'utf8', timeout: 600000, shell: true,
     });
     return { code: 0, out };

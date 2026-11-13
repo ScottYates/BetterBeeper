@@ -63,6 +63,7 @@ function runCheck(tree, extraEnv) {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
         env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+        windowsHide: true,
       }
     );
     return { code: 0, output: stdout };

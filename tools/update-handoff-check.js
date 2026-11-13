@@ -11,11 +11,19 @@
  * meant the window path had never once been run. "The window shows" was an
  * assumption with nothing behind it.
  *
- * This suite runs the real helper with the real window, off the screen and
- * fully transparent, and reads what the window did out of the trace the
- * helper leaves behind. The trace is the only way to observe it: the window
- * exists on the interactive desktop, and there is no other place its behaviour
- * can be recorded.
+ * This suite runs the real helper with the real window and reads what the
+ * window did out of the trace the helper leaves behind. The trace is the only
+ * way to observe it: the window exists on the interactive desktop, and there
+ * is no other place its behaviour can be recorded.
+ *
+ * The runs happen on a desktop of their own - WinSta0, but not the desktop
+ * the user is looking at - so every window the helper creates is on a desktop
+ * Windows does not draw. That is the difference between a promise ("the code
+ * will not show a window") and a guarantee (there is nowhere for a window to
+ * be shown). The off-screen mode is asked for as well, so there are two
+ * independent reasons for the user not to see anything, and the window is
+ * still created, shown, sized and placed for real, so the trace is a record
+ * of a real window and not of a rehearsal.
  *
  * The pin is the other half. The taskbar pin is a copy of the Start Menu
  * shortcut - measured, not assumed: on a real machine the pinned
@@ -96,7 +104,7 @@ function compileFake(name, source) {
     '/optimize+',
     `/out:${out}`,
     cs,
-  ], { stdio: 'pipe' });
+  ], { stdio: 'pipe', windowsHide: true });
   return out;
 }
 
@@ -106,7 +114,7 @@ function compileFake(name, source) {
 const HELPER_DIR = path.join(sandbox, 'helper');
 execFileSync(process.execPath, [
   path.join(ROOT, 'tools', 'build-helper.js'), '--force', '--out', HELPER_DIR,
-], { stdio: 'pipe' });
+], { stdio: 'pipe', windowsHide: true });
 const HELPER_EXE = path.join(HELPER_DIR, 'BetterBeeper.UpdateHelper.exe');
 
 // An installer that takes a moment, so the window is genuinely up while the
@@ -156,17 +164,81 @@ const FAKE_RELAUNCH = compileFake('FakeRelaunch', `internal static class FakeRel
 // Running the helper for real, with the real window
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Running the helper for real, with the real window, on a desktop of its own
+// ---------------------------------------------------------------------------
+
+// The runner that gives the helper a desktop of its own.
+//
+// This is the whole answer to "never put a window on my screen". Moving the
+// window off the screen is a promise about what the code will do; a desktop
+// of its own is a fact about where the code runs. Every window the helper
+// creates is on that desktop, so Windows never draws it and it can never be
+// the foreground window - whatever the helper does with TopMost, Activate or
+// SetForegroundWindow.
+//
+// It is compiled here, into this suite's own sandbox, for the same reason the
+// helper is: a run must never be a stale binary.
+const PRIVATE_DESKTOP_RUNNER = path.join(sandbox, 'PrivateDesktopRunner.exe');
+execFileSync(compiler, [
+  '/nologo',
+  '/target:winexe',
+  '/optimize+',
+  `/out:${PRIVATE_DESKTOP_RUNNER}`,
+  path.join(ROOT, 'tools', 'private-desktop-runner.cs'),
+], { stdio: 'pipe', windowsHide: true });
+
+// The desktop the runs below happen on. The name is in the trace, so the check
+// can prove afterwards that the helper really was somewhere else.
+const PRIVATE_DESKTOP = 'bb-check-' + process.pid;
+
 /**
- * Runs the helper with its window on, off the screen and fully transparent.
+ * Whether the runner really gives the helper a desktop of its own.
  *
- * The window is put off the screen and made transparent so that a test never
- * puts anything in front of the user. It is still created, still shown and
- * still visible in every sense Windows cares about, which is what the trace
- * records.
+ * This is read from the runner's source *before* the helper is started, and
+ * the helper is only started if it is true.
+ *
+ * That order matters, and it is not tidiness. A check that proves a rule
+ * works has to break the rule, and the rule here is "the helper's window can
+ * never reach the user's desktop". Breaking it in the source is harmless;
+ * breaking it at run time is not - that is a window on someone's screen, and
+ * the proof of the rule would be the popup it is about.
+ *
+ * So the containment is established before the contained thing is used.
+ */
+function runnerGivesAPrivateDesktop() {
+  const src = fs.readFileSync(path.join(ROOT, 'tools', 'private-desktop-runner.cs'), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+  if (!/CreateDesktop\(/.test(code)) return false;
+  // Exactly one program is started, and it is started on the desktop it was
+  // given. A second CreateProcess, or a second lpDesktop, would be a way for
+  // the rule to be broken without the line that states it changing.
+  //
+  // The call is counted, not the declaration of it: the runner declares
+  // CreateProcess and calls it, and only the call starts anything.
+  if ((code.match(/=\s*CreateProcess\s*\(/g) || []).length !== 1) return false;
+  if ((code.match(/lpDesktop\s*=/g) || []).length !== 1) return false;
+  if (!/lpDesktop\s*=\s*"WinSta0\\\\"\s*\+\s*desktopName/.test(code)) return false;
+  if (/lpDesktop\s*=\s*"WinSta0\\\\Default"/.test(code)) return false;
+  return true;
+}
+
+const RUNNER_IS_PRIVATE = runnerGivesAPrivateDesktop();
+
+/**
+ * Runs the helper with its real window, on a desktop of its own.
+ *
+ * The window is created and shown for real - that is the only way to find out
+ * whether the window works - but it is on a desktop Windows does not draw, so
+ * a test can never put anything in front of the user or take the focus away
+ * from them. The off-screen mode is still asked for as well, so the window is
+ * moved off the screen as well as being on a hidden desktop: two independent
+ * reasons for the user not to see it.
  *
  * Returns the trace's lines.
  */
-function runHelperWithWindow({ installer = FAKE_INSTALLER, label = 'run' } = {}) {
+function runHelperWithWindow({ installer = FAKE_INSTALLER, label = 'run', place = null } = {}) {
   const dir = path.join(sandbox, label);
   fs.mkdirSync(dir, { recursive: true });
 
@@ -174,27 +246,57 @@ function runHelperWithWindow({ installer = FAKE_INSTALLER, label = 'run' } = {})
   const result = path.join(dir, 'result.txt');
   const shortcut = path.join(dir, 'Better Beeper.lnk');
   const pinFolder = path.join(dir, 'TaskBar');
+  const pidFile = path.join(dir, 'child.pid');
 
   // The Start Menu shortcut, as the installer would have left it.
   fs.writeFileSync(shortcut, 'the shortcut as the installer left it', 'utf8');
 
-  const run = spawnSync(HELPER_EXE, [
+  const run = spawnSync(PRIVATE_DESKTOP_RUNNER, [
+    PRIVATE_DESKTOP,
+    HELPER_EXE,
     '--installer', installer,
     '--relaunch', FAKE_RELAUNCH,
     '--result', result,
     '--pid', '0',
     '--trace', trace,
     '--offscreen',
+    // A short wait for the app's files. The real helper waits two minutes,
+    // because the app might genuinely be slow to let go of them; here the
+    // thing it is waiting for is a file in this suite's own sandbox, and a
+    // helper still waiting after ten seconds is a helper still running after
+    // the check has finished.
+    '--release-timeout', '10',
     '--shortcut', shortcut,
     '--pin-folder', pinFolder,
-  ], { timeout: 25000, windowsHide: true, stdio: 'ignore' });
+    ...(place ? ['--place', place] : []),
+  ], {
+    timeout: 90000,
+    windowsHide: true,
+    stdio: 'ignore',
+    env: { ...process.env, BB_PRIVATE_DESKTOP_PID_FILE: pidFile },
+  });
 
   let text = '';
   try { text = fs.readFileSync(trace, 'utf8'); } catch { /* no trace at all */ }
 
+  // A helper that is still running is a helper with a window on the desktop.
+  //
+  // The runner stops one that overstays, and this is the check that the
+  // runner was asked to do it: a process left behind after a check is a
+  // process whose window is still on the user's screen.
+  let leftover = null;
+  try {
+    const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+    if (pid && pidAlive(pid)) {
+      leftover = pid;
+      try { process.kill(pid); } catch { /* already gone */ }
+    }
+  } catch { /* no pid file: the program never started */ }
+
   return {
     run,
     trace: text,
+    leftover,
     lines: text.split(/\r?\n/).filter((l) => l.trim()),
     result: (() => { try { return fs.readFileSync(result, 'utf8'); } catch { return null; } })(),
     shortcut,
@@ -203,8 +305,119 @@ function runHelperWithWindow({ installer = FAKE_INSTALLER, label = 'run' } = {})
   };
 }
 
-const good = runHelperWithWindow({ label: 'good' });
-const failed = runHelperWithWindow({ installer: FAKE_FAIL, label: 'failed' });
+/** Is this process still running? */
+function pidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    // EPERM means it is there and belongs to somebody else.
+    return e.code === 'EPERM';
+  }
+}
+
+/**
+ * A run with no window in it, for when the runner cannot be trusted.
+ *
+ * The helper is not started at all: the containment has to be established
+ * before the contained thing is used.
+ */
+function noRun(label) {
+  const dir = path.join(sandbox, label);
+  fs.mkdirSync(dir, { recursive: true });
+  return {
+    run: { status: null },
+    trace: '',
+    leftover: null,
+    lines: [],
+    result: null,
+    shortcut: path.join(dir, 'Better Beeper.lnk'),
+    pinFolder: path.join(dir, 'TaskBar'),
+    pinned: path.join(dir, 'TaskBar', 'Better Beeper.lnk'),
+  };
+}
+
+const good = RUNNER_IS_PRIVATE ? runHelperWithWindow({ label: 'good' }) : noRun('good');
+const failed = RUNNER_IS_PRIVATE
+  ? runHelperWithWindow({ installer: FAKE_FAIL, label: 'failed' })
+  : noRun('failed');
+// A run where the app says where the window should go.
+const placed = RUNNER_IS_PRIVATE
+  ? runHelperWithWindow({ label: 'placed', place: '1000,500' })
+  : noRun('placed');
+
+/**
+ * The name of the desktop the helper's window was on, as the trace said.
+ */
+function desktopFrom(lines) {
+  const tick = lines.find((l) => l.startsWith('tick '));
+  if (!tick) return null;
+  const m = /desktop=(\S+)/.exec(tick);
+  return m ? m[1] : null;
+}
+
+/**
+ * The window station the helper's window was on, as the trace said.
+ */
+function stationFrom(lines) {
+  const tick = lines.find((l) => l.startsWith('tick '));
+  if (!tick) return null;
+  const m = /station=(\S+)/.exec(tick);
+  return m ? m[1] : null;
+}
+
+/**
+ * Where the window was put, as the trace recorded it.
+ *
+ * The trace holds the bounds read back from the window after it was placed,
+ * so this is what the window actually did rather than what the code meant.
+ */
+function placementFrom(lines) {
+  const line = lines.find((l) => l.startsWith('place handle-created'));
+  if (!line) return null;
+  const m = /x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+) display=(.+)$/.exec(line);
+  if (!m) return null;
+  return {
+    x: Number(m[1]), y: Number(m[2]), w: Number(m[3]), h: Number(m[4]),
+    display: m[5].trim(),
+  };
+}
+
+/** The primary display's work area, as the trace recorded it. */
+function primaryWorkFrom(lines) {
+  const line = lines.find((l) => l.startsWith('primary-work='));
+  if (!line) return null;
+  const m = /primary-work=(-?\d+),(-?\d+),(\d+),(\d+)/.exec(line);
+  if (!m) return null;
+  return { left: Number(m[1]), top: Number(m[2]), width: Number(m[3]), height: Number(m[4]) };
+}
+
+/**
+ * Where a window centred on a point ends up.
+ *
+ * The same arithmetic the helper does: centred on the point, and never
+ * hanging over the edge of the work area.
+ */
+function centredOn(work, point, w, h) {
+  const x = Math.min(Math.max(point.x - Math.floor(w / 2), work.left), work.left + work.width - w);
+  const y = Math.min(Math.max(point.y - Math.floor(h / 2), work.top), work.top + work.height - h);
+  return { x, y };
+}
+
+/**
+ * Where a window centred in an area ends up.
+ *
+ * The helper divides by two and truncates, and so does this: the two have to
+ * agree on the rounding, or the check is measuring its own arithmetic rather
+ * than the window.
+ */
+function centredIn(work, w, h) {
+  return {
+    x: work.left + Math.floor((work.width - w) / 2),
+    y: work.top + Math.floor((work.height - h) / 2),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // The window
@@ -234,19 +447,88 @@ add('the window is visible', () => {
   return true;
 });
 
-add('the window is on the desktop the user is looking at', () => {
-  // A window on some other desktop is created and painted and nobody sees it.
-  // That is a different failure from a window that was never created, and the
-  // two need different fixes.
+add('a check never puts a window on the desktop the user is looking at', () => {
+  // The rule the user asked for: never pop up a window. Ever.
   //
-  // The desktop name alone is not enough: every window station has a desktop
-  // called "Default", and a window on another station is invisible. The
-  // station is the interactive one - WinSta0 - on the desktop the user is
-  // looking at.
-  const tick = good.lines.find((l) => l.startsWith('tick '));
-  if (!tick) return 'the window never ticked';
-  if (!/desktop=Default/.test(tick)) return 'the window was not on the interactive desktop: ' + tick;
-  if (!/station=WinSta0/.test(tick)) return 'the window was not on the interactive window station: ' + tick;
+  // This is not a promise about what the helper's code will do - it is a fact
+  // about where the helper runs. The run happens on a desktop of its own, so
+  // every window it creates is on a desktop Windows does not draw, whatever
+  // the helper does with TopMost, Activate or SetForegroundWindow. The user
+  // cannot see it and it cannot take their keyboard.
+  //
+  // The trace says which desktop the window was on, so this is measured
+  // rather than assumed.
+  if (!RUNNER_IS_PRIVATE) {
+    return 'the runner does not give the helper a desktop of its own, so the window was not run at all';
+  }
+
+  const desktop = desktopFrom(good.lines);
+  if (!desktop) return 'the trace says nothing about which desktop the window was on';
+  if (desktop === 'Default') {
+    return 'the helper ran on the desktop the user is looking at';
+  }
+  if (desktop !== PRIVATE_DESKTOP) {
+    return `the helper ran on the desktop "${desktop}" and not on the one it was given`;
+  }
+  return true;
+});
+
+add('a check never leaves a window behind', () => {
+  // A helper that is still running after a check is a helper whose window is
+  // still on the user's screen - it just happens to be on a desktop Windows
+  // is not drawing. The runner stops one that overstays, and this is the
+  // check that it was asked to.
+  if (!RUNNER_IS_PRIVATE) return 'the window was not run at all, so nothing was left behind';
+  if (good.leftover) return 'the helper was still running when the check finished: ' + good.leftover;
+  if (failed.leftover) return 'the helper was still running after a failed install: ' + failed.leftover;
+  if (placed.leftover) return 'the helper was still running after a placed run: ' + placed.leftover;
+  return true;
+});
+
+add('the runner cannot be pointed at the user\'s desktop by accident', () => {
+  // The guarantee is only as good as the runner. If the runner ever hard-codes
+  // "Default" - or if the desktop name it is given is ignored - every window
+  // in every check goes straight back onto the user's screen.
+  //
+  // The comments are stripped first: this file explains at length why the
+  // desktop is not the user's, and a search that read the prose would find
+  // the word and call the rule satisfied.
+  if (!RUNNER_IS_PRIVATE) {
+    return 'the runner does not build the desktop name from the name it was given';
+  }
+  return true;
+});
+
+add('the window is on the interactive window station', () => {
+  // The station is what makes the desktop trick a fair test rather than a
+  // different program entirely. "WinSta0" is the interactive station - the
+  // session the user is in - so the window is a real window, on the real
+  // station, with a real size and a real position. It is only the desktop
+  // within it that is not the one being looked at.
+  //
+  // A window on another station would be invisible for a different reason
+  // entirely, and could not even be measured the way a real update measures
+  // it.
+  const station = stationFrom(good.lines);
+  if (!station) return 'the trace says nothing about which window station the window was on';
+  if (station !== 'WinSta0') return 'the window was not on the interactive window station: ' + station;
+  return true;
+});
+
+add('the real update still shows its window on the user\'s screen', () => {
+  // The private desktop is for checks. A real update is the one moment a
+  // window is supposed to appear: the app has gone and the user is waiting.
+  //
+  // So the app must not use the private desktop runner, and it must not ask
+  // for the off-screen mode. If either of those ever changes, the update
+  // becomes a silent one and the user is left staring at nothing.
+  const src = fs.readFileSync(updaterPath, 'utf8');
+  if (/private-desktop/i.test(src)) {
+    return 'the app runs the helper on a private desktop, so its window would never be seen';
+  }
+  if (/--offscreen/.test(src)) {
+    return 'the app asks for the off-screen mode, so its window would never be seen';
+  }
   return true;
 });
 
@@ -272,7 +554,7 @@ add('the window is not hidden on another desktop', () => {
   return true;
 });
 
-add('the window comes to the front once the app has gone', () => {
+add('the window is put in front once the app has gone', () => {
   // The window is activated when it is shown, but that is while the app is
   // still on screen and in the foreground, and Windows does not always let a
   // window that is not the foreground one come to the front. The app being
@@ -280,16 +562,59 @@ add('the window comes to the front once the app has gone', () => {
   // put in front then - and a window that is behind whatever the user was
   // working in is the same as no window at all.
   //
-  // "Topmost" is the part that is guaranteed. Windows may refuse
-  // SetForegroundWindow - it is a privilege, and the helper is not the
-  // foreground process - so the trace records whether the window became the
-  // foreground one, but the window being *above* the others is what the user
-  // sees, and that is what is required here.
-  if (!good.lines.some((l) => l.startsWith('brought-to-front'))) {
-    return 'the window was never brought to the front';
+  // This cannot be *run* to prove it, and that is deliberate: putting a window
+  // in front takes the focus, and a test must never take the focus from the
+  // person it is supposed to be helping. So the proof is the wiring - the flag
+  // is set once the app has gone, and the front is taken by TopMost, Show,
+  // Activate and SetForegroundWindow - and the trace of a real update, which
+  // is the only place where taking the focus is what the user asked for.
+  const src = fs.readFileSync(path.join(HELPER_PROJECT, 'StatusForm.cs'), 'utf8');
+  if (!/TopMost = true;/.test(src)) return 'the window is never put above the others';
+  if (!/Activate\(\);/.test(src)) return 'the window is never activated';
+  if (!/SetForegroundWindow\(Handle\);/.test(src)) return 'the window is never put in the foreground';
+
+  // And the tick has to actually make the call.
+  //
+  // The three lines above are the means; the tick is the moment. A helper
+  // that has the code and never calls it has a window that is up and behind
+  // everything else, which is the same as no window - and a check that only
+  // looks for the code would call that a pass.
+  const tickStart = src.indexOf('private void OnTick(');
+  if (tickStart === -1) return 'the window has no tick, so it never looks at the flag';
+  const tickEnd = src.indexOf('private void Finish(', tickStart);
+  const tick = tickEnd === -1 ? src.slice(tickStart) : src.slice(tickStart, tickEnd);
+  if (!/BringToFront/.test(tick)) return 'the tick never looks at the flag';
+  if (!/ComeToFront\(\);/.test(tick)) {
+    return 'the tick never brings the window to the front when the app has gone';
   }
+
+  const helper = fs.readFileSync(path.join(HELPER_PROJECT, 'Program.cs'), 'utf8');
+  if (!/Volatile\.Write\(ref state\.BringToFront, 1\)/.test(helper)) {
+    return 'the helper never asks for the window to be brought to the front';
+  }
+  if (!/parent-gone[\s\S]{0,1500}BringToFront, 1\)/.test(helper)) {
+    return 'the window is brought to the front before the app has gone';
+  }
+  return true;
+});
+
+add('a test never takes the focus from the user', () => {
+  // The window is off the screen, so there is nothing to see - but activating
+  // it would still take the focus, and the user's keystrokes would go to a
+  // window they cannot see. That is worse than a popup: it is a popup that
+  // also takes over the keyboard.
+  //
+  // So the off-screen mode must not activate the window, and must not put it
+  // above the others either. The trace says which it did.
   const front = good.lines.find((l) => l.startsWith('brought-to-front'));
-  if (!/topmost=yes/.test(front)) return 'the window was not put above the others: ' + front;
+  if (!front) return 'the trace says nothing about the front of the window';
+  if (!/skipped offscreen/.test(front)) {
+    return 'the off-screen run put the window in front anyway: ' + front;
+  }
+  const tick = good.lines.find((l) => l.startsWith('tick '));
+  if (tick && /foreground=yes/.test(tick)) {
+    return 'the off-screen window took the focus: ' + tick;
+  }
   return true;
 });
 
@@ -312,6 +637,74 @@ add('the window is taken off the screen when a test asks for it', () => {
   const shown = good.lines.find((l) => l.startsWith('offscreen shown'));
   if (!shown) return 'the window was not moved off the screen';
   if (!/bounds=-32000,-32000/.test(shown)) return 'the window is not off the screen: ' + shown;
+  return true;
+});
+
+// ---------------------------------------------------------------------------
+// Where the window goes
+// ---------------------------------------------------------------------------
+
+add('the window is put in the middle of the primary display', () => {
+  // Windows used to do this, and Windows centres on the display the *mouse* is
+  // on. That is a display nobody chose: on the update that was measured, the
+  // window came up on the far-left display while the user was at the primary.
+  // It was up and visible for the whole install and nobody saw it, which is
+  // exactly the report "the helper window does not show".
+  //
+  // So the window is placed explicitly, on the primary display, in the middle
+  // of its work area.
+  const place = placementFrom(good.lines);
+  if (!place) return 'the trace says nothing about where the window was put';
+  const work = primaryWorkFrom(good.lines);
+  if (!work) return 'the trace does not say where the primary display is';
+
+  const want = centredIn(work, place.w, place.h);
+  if (place.x !== want.x || place.y !== want.y) {
+    return `the window was put at ${place.x},${place.y} and the middle of the primary display is ${want.x},${want.y}`;
+  }
+  if (place.display !== 'primary') return 'the window was not on the primary display: ' + place.display;
+  return true;
+});
+
+add('the window is put where the app says it should be', () => {
+  // The app knows which display the user was looking at - it was on screen.
+  // The helper is told, and puts the window in the middle of that point.
+  const place = placementFrom(placed.lines);
+  if (!place) return 'the trace says nothing about where the window was put';
+  const work = primaryWorkFrom(placed.lines);
+  if (!work) return 'the trace does not say where the primary display is';
+
+  const want = centredOn(work, { x: 1000, y: 500 }, place.w, place.h);
+  if (place.x !== want.x || place.y !== want.y) {
+    return `the window was put at ${place.x},${place.y} and it should have been at ${want.x},${want.y}`;
+  }
+  return true;
+});
+
+add('the window does not follow the mouse', () => {
+  // The rule, in the source: Windows must not be asked to centre the window,
+  // because Windows centres on the display the mouse is on.
+  //
+  // The comments are stripped first. This file says at length why the window
+  // is placed explicitly rather than by Windows, and the explanation contains
+  // the very words being looked for - a search that read the prose would find
+  // them and report a rule that is not broken.
+  const src = fs.readFileSync(path.join(HELPER_PROJECT, 'StatusForm.cs'), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  if (/FormStartPosition\.CenterScreen/.test(code)) {
+    return 'the window is centred by Windows, which centres it on the display the mouse is on';
+  }
+  if (!/StartPosition\s*=\s*FormStartPosition\.Manual/.test(code)) {
+    return 'the window is not placed explicitly';
+  }
+  return true;
+});
+
+add('the app tells the helper where to put the window', () => {
+  // Without this, the window goes on the primary display whatever the user is
+  // looking at - better than following the mouse, and still not right.
+  const src = fs.readFileSync(updaterPath, 'utf8');
+  if (!/'--place'/.test(src)) return 'the app never tells the helper where to put the window';
   return true;
 });
 
@@ -356,15 +749,18 @@ add('a pinned shortcut is left exactly as it was', () => {
   fs.writeFileSync(pinned, 'the pinned shortcut, byte for byte', 'utf8');
   const before = sha(pinned);
 
-  spawnSync(HELPER_EXE, [
+  spawnSync(PRIVATE_DESKTOP_RUNNER, [
+    PRIVATE_DESKTOP,
+    HELPER_EXE,
     '--installer', FAKE_INSTALLER,
     '--relaunch', FAKE_RELAUNCH,
     '--result', path.join(dir, 'result.txt'),
     '--pid', '0',
     '--offscreen',
+    '--release-timeout', '10',
     '--shortcut', shortcut,
     '--pin-folder', pinFolder,
-  ], { timeout: 25000, windowsHide: true, stdio: 'ignore' });
+  ], { timeout: 90000, windowsHide: true, stdio: 'ignore' });
 
   if (!fs.existsSync(pinned)) return 'the pinned shortcut was taken away';
   if (sha(pinned) !== before) return 'the pinned shortcut was rewritten';

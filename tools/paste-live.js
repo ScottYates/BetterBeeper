@@ -37,7 +37,7 @@ function ps1(name) {
   return execFileSync(
     'powershell.exe',
     ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, name)],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', windowsHide: true },
   ).trim();
 }
 

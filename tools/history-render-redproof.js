@@ -81,7 +81,7 @@ const MUTATIONS = [
 
 function runCheck() {
   try {
-    const out = execFileSync('npm.cmd', ['run', 'check:historyrender', '--silent'], {
+    const out = execFileSync('npm.cmd', ['run', 'check:historyrender', '--silent'], { windowsHide: true,
       cwd: ROOT, encoding: 'utf8', timeout: 300000, shell: true,
     });
     return { code: 0, out };

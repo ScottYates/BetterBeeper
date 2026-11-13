@@ -127,7 +127,7 @@ function compileFake(name, source) {
     '/optimize+',
     `/out:${out}`,
     cs,
-  ], { stdio: 'pipe' });
+  ], { windowsHide: true, stdio: 'pipe' });
   return out;
 }
 
@@ -137,7 +137,7 @@ function compileFake(name, source) {
 const HELPER_DIR = path.join(sandbox, 'helper');
 execFileSync(process.execPath, [
   path.join(ROOT, 'tools', 'build-helper.js'), '--force', '--out', HELPER_DIR,
-], { stdio: 'pipe' });
+], { windowsHide: true, stdio: 'pipe' });
 const HELPER_EXE = path.join(HELPER_DIR, 'BetterBeeper.UpdateHelper.exe');
 
 const FAKE_INSTALLER = compileFake('FakeInstaller', `using System;

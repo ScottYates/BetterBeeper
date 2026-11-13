@@ -36,7 +36,11 @@ const arg = (name) => {
 };
 
 function run(cmd, args, opts = {}) {
-  return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', ...opts });
+  // windowsHide comes after the spread on purpose: this is a console program
+  // (electron-builder), and a console program started from a process with no
+  // console of its own is given one - which is a window on the user's
+  // desktop. The flag is not something a caller may turn off.
+  return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', ...opts, windowsHide: true });
 }
 
 /** The electron-builder output directory: a fresh scratch name by default. */

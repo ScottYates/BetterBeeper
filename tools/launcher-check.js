@@ -52,7 +52,7 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-launcher-'));
 const broken = path.join(scratch, 'broken-check.js');
 fs.writeFileSync(broken, "const harness = `a line with a 'flex: 1' in it`;`nconst x = 1;`n", 'utf8');
 
-const brokenRun = spawnSync(process.execPath, [LAUNCHER, broken], { encoding: 'utf8' });
+const brokenRun = spawnSync(process.execPath, [LAUNCHER, broken], { windowsHide: true, encoding: 'utf8' });
 
 add('a file that does not parse is reported',
   brokenRun.status === 1 && /does not parse/.test(brokenRun.stdout + brokenRun.stderr),
@@ -66,7 +66,7 @@ add('and the message names the file',
 const throws = path.join(scratch, 'throwing-check.js');
 fs.writeFileSync(throws, "throw new Error('this check is broken');\n", 'utf8');
 
-const throwRun = spawnSync(process.execPath, [LAUNCHER, throws], { encoding: 'utf8' });
+const throwRun = spawnSync(process.execPath, [LAUNCHER, throws], { windowsHide: true, encoding: 'utf8' });
 
 add('a check that throws when it starts is reported',
   throwRun.status === 1 && /failed to start/.test(throwRun.stdout + throwRun.stderr),
@@ -76,7 +76,7 @@ add('a check that throws when it starts is reported',
 const fine = path.join(scratch, 'fine-check.js');
 fs.writeFileSync(fine, "console.log('the check ran');\n", 'utf8');
 
-const fineRun = spawnSync(process.execPath, [LAUNCHER, fine], { encoding: 'utf8' });
+const fineRun = spawnSync(process.execPath, [LAUNCHER, fine], { windowsHide: true, encoding: 'utf8' });
 
 add('a check that is fine still runs',
   fineRun.status === 0 && /the check ran/.test(fineRun.stdout),

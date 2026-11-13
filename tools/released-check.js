@@ -18,7 +18,7 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 
 function git(args) {
-  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
+  return execFileSync('git', args, { windowsHide: true, cwd: ROOT, encoding: 'utf8' }).trim();
 }
 
 function tryGit(args) {

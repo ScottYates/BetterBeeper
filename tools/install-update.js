@@ -41,7 +41,7 @@ function ps(script, env = {}) {
     return execFileSync(
       'powershell',
       ['-NoProfile', '-NonInteractive', '-Command', script],
-      { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 60000 },
+      { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 60000, windowsHide: true },
     ).trim();
   } catch {
     return '';
@@ -239,7 +239,7 @@ function main() {
 
   // electron-builder's NSIS is a standard NSIS build, so /S is a silent reinstall.
   console.log('\n  installing silently...');
-  const run = spawnSync(installer, ['/S'], { stdio: 'inherit', timeout: 10 * 60 * 1000 });
+  const run = spawnSync(installer, ['/S'], { windowsHide: true, stdio: 'inherit', timeout: 10 * 60 * 1000 });
 
   if (run.error) {
     console.error(`\n✗ Could not run the installer: ${run.error.message}`);

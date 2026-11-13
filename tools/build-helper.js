@@ -116,7 +116,7 @@ function main() {
   // process, which is how a red proof ends up saying "the suite died" without
   // saying why - and "why" is the only useful part of a compiler message.
   try {
-    const output = execFileSync(compiler, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const output = execFileSync(compiler, args, { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     if (output) process.stdout.write(output);
   } catch (err) {
     const text = `${err.stdout || ''}${err.stderr || ''}`;

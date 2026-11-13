@@ -63,7 +63,7 @@ if ('${action}' -eq 'restore') {
 }
 Write-Output 'ok'
 `;
-  return execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], { encoding: 'utf8' }).trim();
+  return execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], { windowsHide: true, encoding: 'utf8' }).trim();
 }
 
 async function findPage() {

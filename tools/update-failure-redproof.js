@@ -243,7 +243,7 @@ const MUTATIONS = [
 
 function runCheck() {
   try {
-    const out = execFileSync('npm', ['run', 'check:updatefailure', '--silent'], {
+    const out = execFileSync('npm', ['run', 'check:updatefailure', '--silent'], { windowsHide: true,
       cwd: ROOT, encoding: 'utf8', timeout: 600000, shell: true,
     });
     return { code: 0, out };

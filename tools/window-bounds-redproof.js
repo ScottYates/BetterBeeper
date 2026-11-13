@@ -113,7 +113,7 @@ const MUTATIONS = [
 
 function runCheck() {
   try {
-    const out = execFileSync('npm', ['run', 'check:windowbounds', '--silent'], {
+    const out = execFileSync('npm', ['run', 'check:windowbounds', '--silent'], { windowsHide: true,
       cwd: ROOT, encoding: 'utf8', timeout: 600000, shell: true,
     });
     return { code: 0, out };
