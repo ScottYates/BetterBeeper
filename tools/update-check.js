@@ -50,6 +50,26 @@ const appStub = {
   get isQuitting() { return false; },
 };
 
+// The window the update's own window should be placed against, and the
+// conversion from Electron's DIP to the screen's own pixels.
+//
+// The display here is scaled 200%, so a point in DIP is twice as many
+// pixels. The helper works in physical pixels, and a point that is not
+// converted puts the window on the wrong display - or on none of them.
+const SCALE = 2;
+const windowStub = {
+  getBounds: () => ({ x: 100, y: 200, width: 800, height: 600 }),
+  isVisible: () => true,
+  isMinimized: () => false,
+};
+const screenStub = {
+  dipToScreenPoint: (point) => ({ x: point.x * SCALE, y: point.y * SCALE }),
+};
+const browserWindowStub = {
+  getAllWindows: () => [windowStub],
+  getFocusedWindow: () => windowStub,
+};
+
 const Module = require('module');
 const realLoad = Module._load;
 Module._load = function patched(request, parent, isMain) {
@@ -57,6 +77,8 @@ Module._load = function patched(request, parent, isMain) {
     return {
       app: appStub,
       net: { fetch: async () => { throw new Error('network is not available in check:update'); } },
+      screen: screenStub,
+      BrowserWindow: browserWindowStub,
     };
   }
   return realLoad.call(this, request, parent, isMain);
@@ -695,6 +717,29 @@ add('quitting with an update staged hands the install off', () => {
   const r = quitRun;
   return (r.handed === true && r.spawned.length === 1)
     || ('handed=' + r.handed + ' spawned=' + r.spawned.length);
+});
+
+add('the app tells the helper where to put its window', () => {
+  // The helper used to let Windows centre the window, and Windows centres on
+  // the display the *mouse* is on. On the update that was measured, the
+  // window came up on the far-left display while the user was at the primary:
+  // up, visible, and nowhere the user was looking.
+  //
+  // So the app says where the window goes - the middle of its own window.
+  // The point is in the screen's own pixels, because that is what the helper
+  // works in, and Electron's bounds are DIP.
+  const place = quitRun.argOf('--place');
+  if (!place) return 'the app did not tell the helper where to put the window';
+
+  const bounds = windowStub.getBounds();
+  const centreX = Math.round(bounds.x + bounds.width / 2);
+  const centreY = Math.round(bounds.y + bounds.height / 2);
+  const want = `${centreX * SCALE},${centreY * SCALE}`;
+
+  if (place !== want) {
+    return `the app said "${place}" and the middle of its own window is "${want}"`;
+  }
+  return true;
 });
 
 add('what is spawned is the helper, not a shell', () => {

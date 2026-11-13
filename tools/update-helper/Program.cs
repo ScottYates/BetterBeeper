@@ -75,6 +75,7 @@
 
 using System;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -309,7 +310,7 @@ namespace BetterBeeper.UpdateHelper
                 return state.ExitCode == 0 ? 0 : 1;
             }
 
-            using (var form = new StatusForm(state, trace, options.Offscreen))
+            using (var form = new StatusForm(state, trace, options.Offscreen, options.Place))
             {
                 form.Pump();
             }
@@ -799,7 +800,7 @@ namespace BetterBeeper.UpdateHelper
 
             trace.Write("fatal " + message);
 
-            using (var form = new StatusForm(state, trace, false))
+            using (var form = new StatusForm(state, trace, false, null))
             {
                 form.Pump();
             }
@@ -1099,6 +1100,19 @@ namespace BetterBeeper.UpdateHelper
         /// </summary>
         public string PinFolder { get; private set; }
 
+        /// <summary>
+        /// Where the app says the window should go.
+        ///
+        /// The centre of the app's own window, in the screen's own pixels. Null
+        /// means "nobody said", and the primary display is used instead.
+        ///
+        /// It is here because of a measurement: the window used to be centred by
+        /// Windows on the display the *mouse* was on, and on the update that was
+        /// measured it came up on the far-left display while the user was at the
+        /// primary. The window was up the whole time and nobody saw it.
+        /// </summary>
+        public Point? Place { get; private set; }
+
         private Options(
             string installer,
             string relaunch,
@@ -1110,7 +1124,8 @@ namespace BetterBeeper.UpdateHelper
             string tracePath,
             bool offscreen,
             string shortcutPath,
-            string pinFolder)
+            string pinFolder,
+            Point? place)
         {
             InstallerPath = installer;
             RelaunchPath = relaunch;
@@ -1123,6 +1138,7 @@ namespace BetterBeeper.UpdateHelper
             Offscreen = offscreen;
             ShortcutPath = shortcutPath;
             PinFolder = pinFolder;
+            Place = place;
         }
 
         public static Options Parse(string[] args)
@@ -1138,6 +1154,7 @@ namespace BetterBeeper.UpdateHelper
             var offscreen = false;
             string shortcutPath = null;
             string pinFolder = null;
+            Point? place = null;
 
             for (var i = 0; i < args.Length; i++)
             {
@@ -1218,6 +1235,12 @@ namespace BetterBeeper.UpdateHelper
                     pinFolder = args[++i];
                     continue;
                 }
+
+                if (flag == "--place" && i + 1 < args.Length)
+                {
+                    place = ParsePlace(args[++i]);
+                    continue;
+                }
             }
 
             // `installer == null` rather than only IsNullOrWhiteSpace: the
@@ -1229,7 +1252,31 @@ namespace BetterBeeper.UpdateHelper
                 throw new ArgumentException("--installer is required.");
             }
 
-            return new Options(installer, relaunch, result, pid, noWindow, installTimeout, releaseTimeout, tracePath, offscreen, shortcutPath, pinFolder);
+            return new Options(installer, relaunch, result, pid, noWindow, installTimeout, releaseTimeout, tracePath, offscreen, shortcutPath, pinFolder, place);
+        }
+
+        /// <summary>
+        /// Reads "x,y" - where the app says the update window should go.
+        ///
+        /// A malformed value is no place at all rather than a place at the
+        /// origin: the origin is the top left corner of the primary display,
+        /// which is a real place and would put the window in the corner of the
+        /// screen. "No place" means the primary display's centre, which is
+        /// where the window belongs when nobody says otherwise.
+        /// </summary>
+        private static Point? ParsePlace(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return null;
+
+            var parts = value.Split(',');
+            if (parts.Length != 2) return null;
+
+            int x;
+            int y;
+            if (!int.TryParse(parts[0].Trim(), out x)) return null;
+            if (!int.TryParse(parts[1].Trim(), out y)) return null;
+
+            return new Point(x, y);
         }
     }
 }

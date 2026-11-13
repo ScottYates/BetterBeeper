@@ -60,6 +60,20 @@ const MUTATIONS = [
     expect: 'quitting with an update staged hands the install off',
   },
   {
+    what: 'the app stops telling the helper where to put its window',
+    file: 'updater',
+    from: "  if (place) args.push('--place', `${place.x},${place.y}`);",
+    to: '  // The helper is left to decide where the window goes.',
+    expect: 'the app tells the helper where to put its window',
+  },
+  {
+    what: 'the app tells the helper the wrong place',
+    file: 'updater',
+    from: "  if (place) args.push('--place', `${place.x},${place.y}`);",
+    to: "  if (place) args.push('--place', `${place.x},${place.y + 1}`);",
+    expect: 'the app tells the helper where to put its window',
+  },
+  {
     what: 'the handoff is spawned through cmd again',
     file: 'updater',
     from: '    const child = spawnProcess(helper, args, {',
@@ -234,7 +248,7 @@ const MUTATIONS = [
 
 function runCheck() {
   try {
-    const out = execFileSync('npm', ['run', 'check:update', '--silent'], {
+    const out = execFileSync('npm', ['run', 'check:update', '--silent'], { windowsHide: true,
       cwd: ROOT, encoding: 'utf8', timeout: 300000, shell: true,
     });
     return { code: 0, out };

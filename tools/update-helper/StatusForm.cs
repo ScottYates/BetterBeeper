@@ -66,13 +66,38 @@ namespace BetterBeeper.UpdateHelper
         /// </summary>
         private readonly bool _offscreen;
 
-        public StatusForm(ProgressState state, TraceLog trace, bool offscreen)
+        /// <summary>
+        /// Where the app says this window should go.
+        ///
+        /// The centre of the app's own window, in the screen's own pixels. Null
+        /// means "nobody said", and the primary display is used instead.
+        ///
+        /// This exists because of a measurement, not a theory. The window used to
+        /// be centred by Windows on the display the *mouse* was on, and on the
+        /// update that was measured it came up on the far-left display while the
+        /// user was at the primary. The report was "the helper window does not
+        /// show", and the window was up and visible the whole time - just not
+        /// anywhere the user was looking.
+        /// </summary>
+        private readonly Point? _place;
+
+        public StatusForm(ProgressState state, TraceLog trace, bool offscreen, Point? place)
         {
             _state = state;
             _trace = trace ?? new TraceLog(null);
             _offscreen = offscreen;
+            _place = place;
 
             _trace.Write("form-constructed");
+
+            // The primary display's work area, so a trace says where the window
+            // should have been - not only where it was.
+            var primary = Screen.PrimaryScreen;
+            if (primary != null)
+            {
+                var work = primary.WorkingArea;
+                _trace.Write("primary-work=" + work.X + "," + work.Y + "," + work.Width + "," + work.Height);
+            }
 
             Text = "Better Beeper Update";
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -85,11 +110,15 @@ namespace BetterBeeper.UpdateHelper
             ControlBox = false;
             MaximizeBox = false;
             MinimizeBox = false;
-            // Not TopMost. The window is the only thing on screen at this point -
-            // the app is gone - so there is nothing to stay above, and a window
-            // that insists on being in front is a window someone cannot get out
-            // of the way of.
-            StartPosition = FormStartPosition.CenterScreen;
+            // Not Windows' idea of the middle of the screen.
+            //
+            // FormStartPosition.CenterScreen centres on the display the mouse is
+            // on, which is a display nobody chose. On a machine with seven of
+            // them it is very often not the one the user is looking at - and a
+            // window on the wrong display is a window nobody sees, which is
+            // exactly the report this was measured against. The window is placed
+            // explicitly instead: where the app says, or on the primary display.
+            StartPosition = FormStartPosition.Manual;
             ClientSize = new Size(470, 250);
             BackColor = Color.FromArgb(24, 26, 30);
             ForeColor = Color.White;
@@ -232,6 +261,22 @@ namespace BetterBeeper.UpdateHelper
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
         /// <summary>
+        /// Shown without taking the focus, when the window is off the screen.
+        ///
+        /// Showing a window normally activates it, and an activated window that
+        /// is off the screen still takes the user's keystrokes and their
+        /// attention. A check must do neither, so the off-screen mode shows the
+        /// window without activating it.
+        ///
+        /// The real path does activate: the app has gone by then, and the user
+        /// asked for the update.
+        /// </summary>
+        protected override bool ShowWithoutActivation
+        {
+            get { return _offscreen; }
+        }
+
+        /// <summary>
         /// Moves the window off the screen before it is ever shown.
         ///
         /// OnHandleCreated runs when the window exists but before it is visible,
@@ -243,6 +288,15 @@ namespace BetterBeeper.UpdateHelper
         {
             base.OnHandleCreated(e);
 
+            // Placed here, while the window is still hidden.
+            //
+            // It has to be in the right place before it is ever seen: a window
+            // that is moved after it appears is a window that appears in the
+            // corner of the screen first, and a flash in the corner of the
+            // user's screen is the one thing this whole placement rule exists
+            // to stop.
+            PlaceWindow("handle-created");
+
             if (_offscreen)
             {
                 SetBounds(-32000, -32000, Width, Height);
@@ -251,11 +305,98 @@ namespace BetterBeeper.UpdateHelper
         }
 
         /// <summary>
+        /// Where the window goes.
+        ///
+        /// The app's place if it gave one - the display the app was on, which is
+        /// the display the user is looking at - and the primary display if it did
+        /// not. Either way the window is centred in that display's *work area*,
+        /// so it is never under the taskbar and never hanging over an edge.
+        /// </summary>
+        private Rectangle TargetBounds()
+        {
+            var screens = Screen.AllScreens;
+            Screen target = null;
+
+            if (_place.HasValue)
+            {
+                foreach (var screen in screens)
+                {
+                    if (screen.Bounds.Contains(_place.Value))
+                    {
+                        target = screen;
+                        break;
+                    }
+                }
+            }
+
+            if (target == null) target = Screen.PrimaryScreen;
+            if (target == null && screens.Length > 0) target = screens[0];
+
+            var area = target.WorkingArea;
+            var size = Size;
+
+            int x = area.Left + (area.Width - size.Width) / 2;
+            int y = area.Top + (area.Height - size.Height) / 2;
+
+            if (_place.HasValue)
+            {
+                x = _place.Value.X - size.Width / 2;
+                y = _place.Value.Y - size.Height / 2;
+            }
+
+            // Never over the edge of the work area. A window that hangs off the
+            // edge is a window the user cannot get at.
+            if (x < area.Left) x = area.Left;
+            if (y < area.Top) y = area.Top;
+            if (x + size.Width > area.Right) x = area.Right - size.Width;
+            if (y + size.Height > area.Bottom) y = area.Bottom - size.Height;
+
+            return new Rectangle(x, y, size.Width, size.Height);
+        }
+
+        /// <summary>
+        /// Puts the window where it belongs, and writes down where that was.
+        ///
+        /// The bounds are read back from the window rather than assumed, so the
+        /// trace says where the window actually is - which is the fact a report
+        /// about a missing window needs.
+        /// </summary>
+        private void PlaceWindow(string when)
+        {
+            var target = TargetBounds();
+            SetBounds(target.X, target.Y, target.Width, target.Height);
+            var landed = Bounds;
+
+            _trace.Write("place " + when
+                + " x=" + landed.X
+                + " y=" + landed.Y
+                + " w=" + landed.Width
+                + " h=" + landed.Height
+                + " display=" + DisplayNameFor(landed));
+        }
+
+        /// <summary>
+        /// Which display the window ended up on: "primary", or where it is.
+        /// </summary>
+        private static string DisplayNameFor(Rectangle bounds)
+        {
+            foreach (var screen in Screen.AllScreens)
+            {
+                if (screen.Bounds.IntersectsWith(bounds))
+                {
+                    return screen.Primary
+                        ? "primary"
+                        : ("other " + screen.Bounds.X + "," + screen.Bounds.Y);
+                }
+            }
+            return "unknown";
+        }
+
+        /// <summary>
         /// Moves the window off the screen once it has been shown.
         ///
         /// Something puts the window back at the top left of the screen after
-        /// the handle exists, so it is moved again here. The opacity is zero by
-        /// this time, so there is nothing to see even in between.
+        /// the handle exists, so it is moved again here.
         /// </summary>
         protected override void OnShown(EventArgs e)
         {
@@ -263,9 +404,32 @@ namespace BetterBeeper.UpdateHelper
 
             if (_offscreen)
             {
+                // Moved off the screen, and never placed where the user could
+                // see it.
+                //
+                // The placement above happened while the window was still
+                // hidden, so it cost nothing to look at. Placing it again here
+                // would put it on the screen for as long as it took to move it
+                // back off - and a check must never put a window on the
+                // desktop, not even for a moment.
                 SetBounds(-32000, -32000, Width, Height);
                 _trace.Write("offscreen shown bounds=" + Bounds.X + "," + Bounds.Y + "," + Bounds.Width + "," + Bounds.Height);
                 return;
+            }
+
+            // Placed again, in case something moved it while it was being
+            // created. Only when it is not already where it belongs: moving a
+            // window that is already in the right place is what makes it
+            // flash.
+            var target = TargetBounds();
+            if (Bounds.X != target.X || Bounds.Y != target.Y)
+            {
+                PlaceWindow("shown");
+            }
+            else
+            {
+                _trace.Write("place shown x=" + Bounds.X + " y=" + Bounds.Y + " w=" + Bounds.Width
+                    + " h=" + Bounds.Height + " display=" + DisplayNameFor(Bounds));
             }
 
             // The window comes to the front.
@@ -553,6 +717,23 @@ namespace BetterBeeper.UpdateHelper
         {
             try
             {
+                if (_offscreen)
+                {
+                    // A check must never take the focus.
+                    //
+                    // The window is off the screen, so there is nothing to see -
+                    // but activating it would still take the focus away from
+                    // whatever the user is doing, and their keystrokes would go
+                    // to a window they cannot see. That is worse than a popup:
+                    // it is a popup that also takes over the keyboard.
+                    //
+                    // So the off-screen mode says so and stops there. The real
+                    // path - the app has gone, the user asked for this - does
+                    // put the window in front.
+                    _trace.Write("brought-to-front skipped offscreen");
+                    return;
+                }
+
                 TopMost = true;
                 Show();
                 Activate();

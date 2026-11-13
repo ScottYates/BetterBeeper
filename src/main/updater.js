@@ -52,7 +52,7 @@ const { spawn } = require('node:child_process');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 
-const { app, net } = require('electron');
+const { app, net, screen, BrowserWindow } = require('electron');
 
 const REPO = 'ScottYates/BetterBeeper';
 const LATEST_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
@@ -514,6 +514,53 @@ function readInstallResult() {
 let previousInstall = null;
 
 /**
+ * Where the update window should go: the middle of this app's own window.
+ *
+ * The helper works in the screen's own pixels, and Electron's window bounds
+ * are in DIP, so the point is converted rather than copied.
+ *
+ * Returns null when there is no window to copy - the helper then uses the
+ * primary display's centre, which is where the window belongs when nobody
+ * says otherwise.
+ */
+function updateWindowPlace() {
+  try {
+    const windows = BrowserWindow.getAllWindows();
+    if (!windows.length) return null;
+
+    // The window the user was actually looking at.
+    //
+    // The focused one is the best answer. Failing that, a window that is on
+    // screen and not minimised - a hidden helper window would put the update
+    // window in the wrong place, and there is no point in the first window in
+    // the list when the list is not in the order the user sees.
+    const visible = windows.filter((w) => {
+      try {
+        return w.isVisible() && !w.isMinimized();
+      } catch {
+        return false;
+      }
+    });
+
+    const win = BrowserWindow.getFocusedWindow() || visible[0] || windows[0];
+    const bounds = win.getBounds();
+    if (!bounds || !bounds.width || !bounds.height) return null;
+
+    const centre = screen.dipToScreenPoint({
+      x: Math.round(bounds.x + bounds.width / 2),
+      y: Math.round(bounds.y + bounds.height / 2),
+    });
+    if (!centre || !Number.isFinite(centre.x) || !Number.isFinite(centre.y)) return null;
+
+    return { x: Math.round(centre.x), y: Math.round(centre.y) };
+  } catch {
+    // The screen module is only usable once the app is ready, and a window
+    // that cannot be placed is not a reason to refuse to update.
+    return null;
+  }
+}
+
+/**
  * Hand the install to the handoff helper and let it take it from there.
  *
  * The one place either entry point goes through. There used to be exactly one
@@ -552,6 +599,19 @@ function launchInstall(pending, { spawnProcess = spawn, helper = prepareHelper()
     // helper started saying so.
     '--trace', helperTracePath(),
   ];
+
+  // Where the update window should go: the middle of this app's own window.
+  //
+  // The helper used to let Windows centre it, and Windows centres on the
+  // display the *mouse* is on. On the update that was measured, the window came
+  // up on the far-left display while the user was at the primary - up,
+  // visible, and nowhere the user was looking, which is exactly the report
+  // "the helper window does not show".
+  //
+  // The point is in the screen's own pixels, because that is what the helper
+  // works in. Electron's window bounds are in DIP, so they are converted.
+  const place = updateWindowPlace();
+  if (place) args.push('--place', `${place.x},${place.y}`);
 
   try {
     const child = spawnProcess(helper, args, {
