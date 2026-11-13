@@ -2254,11 +2254,11 @@ establishes the containment first, and the proof breaks it in the source
 only.
 
 ## Verification status
-`npm run check:all` sweeps **58 suites**, and all 58 of them pass on a release
-commit. On the tree carrying the work, before the release is cut, 57 of them
+`npm run check:all` sweeps **59 suites**, and all 59 of them pass on a release
+commit. On the tree carrying the work, before the release is cut, 58 of them
 pass: the one that does not is `check:released`, which is red until the release
-is cut, because `main` is ahead of the newest tag. It was 57 suites on the
-tree carrying the 2026-11-12 work, 56 of them passing; it was 56 suites on the
+is cut, because `main` is ahead of the newest tag. It was 58 suites on the
+tree carrying the 2026-11-12 work, 57 of them passing; it was 57 suites on the
 tree carrying the 2026-11-11 work, 54 of them passing; it was 54 suites on the
 tree carrying the 2026-11-09 work, 53 of them passing; 53 suites on the tree
 carrying the 2026-11-08 work, 52 of them passing; 47/47 on the tree
@@ -2277,9 +2277,10 @@ working, not a defect, and it is why a docs-only push still gets a release.
 
 | Check | Result |
 | --- | --- |
-| `check:update` | 62/62, after `check:update` gained a built helper to read the PE header of |
+| `check:update` | 63/63, after `check:update` gained a built helper to read the PE header of |
 | `check:updatefailure` | 23/23 checks passed, running the real helper against real executables, with no window (new) |
-| `check:handoff` | 20/20 checks passed, running the real helper with the real window, off the screen and opaque |
+| `check:handoff` | 29/29 checks passed, running the real helper with the real window on a desktop of its own, so nothing can be seen |
+| `check:nowindow` | 7/7 checks passed, that no tool may put a window or a console on the desktop (new) |
 | `check:proxy` | 5/5 checks passed, with a control run that has to show the proxy lookup |
 | `check:windowbounds` | 28/28 checks passed, against made-up displays and against the real one (new) |
 | `check:typeread` | 18/18 checks passed, typing into the real composer in a browser harness (new) |
@@ -2290,9 +2291,10 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:threadopen` | 29/29 checks passed |
 | `check:readreceipts` | 14/14 checks passed, with no Electron and no window (new) |
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag |
-| `tools/update-redproof.js` | 23/23 mutations caught, no holes |
+| `tools/update-redproof.js` | 25/25 mutations caught, no holes |
 | `tools/update-failure-redproof.js` | 15/15 mutations caught, no holes, with an asserted baseline (new) |
-| `tools/update-handoff-redproof.js` | 12/12 mutations caught, no holes, with an asserted baseline (new) |
+| `tools/update-handoff-redproof.js` | 15/15 mutations caught, no holes, with an asserted baseline (new) |
+| `tools/window-safety-redproof.js` | 7/7 mutations caught, no holes, with an asserted baseline (new) |
 | `check:nsis` | 11/11 checks passed, with the hook built and run by NSIS itself, control included (new) |
 | `tools/nsis-install-over-top-redproof.js` | 2/2 mutations caught, no holes, with an asserted baseline (new) |
 | `tools/proxy-redproof.js` | 5/5 mutations caught, no holes |

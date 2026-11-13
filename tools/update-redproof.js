@@ -185,8 +185,8 @@ const MUTATIONS = [
     // the way of.
     what: 'the window insists on staying on top from the start',
     file: 'form',
-    from: '            StartPosition = FormStartPosition.CenterScreen;',
-    to: '            TopMost = true;\n            StartPosition = FormStartPosition.CenterScreen;',
+    from: '            StartPosition = FormStartPosition.Manual;\n            ClientSize = new Size(470, 250);',
+    to: '            TopMost = true;\n            StartPosition = FormStartPosition.Manual;\n            ClientSize = new Size(470, 250);',
     expect: 'the status window comes to the front when the app has gone, and lets go of it when it is done',
   },
   {
