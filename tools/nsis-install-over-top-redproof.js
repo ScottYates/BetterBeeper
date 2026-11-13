@@ -61,7 +61,7 @@ const MUTATIONS = [
 function runCheck() {
   try {
     const out = execFileSync('node', [path.join(ROOT, 'tools', 'nsis-install-over-top-check.js')], {
-      cwd: ROOT, encoding: 'utf8', timeout: 600000,
+      cwd: ROOT, encoding: 'utf8', timeout: 600000, windowsHide: true,
     });
     return { code: 0, out };
   } catch (err) {

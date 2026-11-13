@@ -35,6 +35,10 @@ for (const suite of targets) {
       stdio: 'pipe',
       timeout: 900000,
       shell: true,
+      // npm is a console program, and a console program started from a
+      // process that has no console of its own is given one - which is a
+      // window on the user's desktop. The sweep must never put one there.
+      windowsHide: true,
     });
   } catch (err) {
     code = typeof err.status === 'number' && err.status !== 0 ? err.status : 1;

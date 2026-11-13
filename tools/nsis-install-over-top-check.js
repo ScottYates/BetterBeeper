@@ -131,7 +131,10 @@ function runScenario(dir, source) {
 
   let build = null;
   try {
-    execFileSync(MAKENSIS, [nsi], { cwd: dir, stdio: 'pipe', timeout: 120000 });
+    // windowsHide: makensis is a console program, and a console program
+    // started from a process with no console of its own is given one - which
+    // is a window on the user's desktop. A check must never put one there.
+    execFileSync(MAKENSIS, [nsi], { cwd: dir, stdio: 'pipe', timeout: 120000, windowsHide: true });
     build = 'ok';
   } catch (err) {
     build = String(err.stderr || err.message).trim();
@@ -142,7 +145,7 @@ function runScenario(dir, source) {
   let install = null;
   const setup = path.join(dir, 'setup.exe');
   if (build === 'ok' && fs.existsSync(setup)) {
-    const result = spawnSync(setup, ['/S'], { cwd: dir, timeout: 120000 });
+    const result = spawnSync(setup, ['/S'], { cwd: dir, timeout: 120000, windowsHide: true });
     install = result.status === 0 ? 'ok' : `exit code ${result.status}`;
   }
 
@@ -159,7 +162,7 @@ function runScenario(dir, source) {
     // afterwards is looking before the uninstall has happened, and it sees a
     // program that did nothing. Run in place, the program does its work before
     // it returns.
-    const result = spawnSync(uninstaller, ['/S', `_?=${dir}`], { cwd: dir, timeout: 120000 });
+    const result = spawnSync(uninstaller, ['/S', `_?=${dir}`], { cwd: dir, timeout: 120000, windowsHide: true });
     code = typeof result.status === 'number' ? result.status : null;
     run = 'ran';
   }
