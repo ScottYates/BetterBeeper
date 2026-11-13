@@ -2096,6 +2096,163 @@ the rule ignoring the open chat, the rule ignoring the unread count, the rule
 ignoring the setting, and the in-flight guard taken out - and requires the
 check to catch it: 5/5, no holes, with the baseline asserted.
 
+### The update's window shows where the user is looking
+
+**What was asked:** "the helper window does not show still".
+
+**What it did.** The window was up for the whole install. The trace from the
+update that was measured says so: `tick visible=True handle=yes
+bounds=1042,556,476,279`, and it was up before the install, during it and
+after it. It was not missing. It was somewhere nobody was looking.
+
+The reason is `FormStartPosition.CenterScreen`. Windows centres a window on
+the **display the mouse is on**, and the mouse was on the far-left display -
+one of seven. The window came up at (1042, 556) on the display at
+(-1920, -18), which is the middle of that display's work area: the far left of
+a seven-display desk, while the user was at the primary.
+
+So the window was never placed at all. Windows placed it, and Windows places
+it on the display the mouse happens to be on.
+
+**What it is now.** The window is placed explicitly:
+
+- the app tells the helper where to put it - the centre of the app's own
+  window, converted from DIP to physical pixels with `screen.dipToScreenPoint`,
+  because Electron's bounds are DIP and the helper's screen API is physical
+  pixels;
+- the helper falls back to the centre of the primary display's work area when
+  the app says nothing;
+- the bounds are clamped inside that work area, so the window is never under
+  the taskbar and never hanging over an edge.
+
+The placement happens in `OnHandleCreated`, while the window is still hidden.
+A window that is moved after it appears is a window that appears in the
+corner of the screen first, and a flash in the corner of the user's screen is
+the one thing this rule exists to stop.
+
+`FormStartPosition.CenterScreen` is gone, and `npm run check:handoff` reads
+the source to make sure it does not come back - with the comments stripped
+first, because the comment that explains why it is not used contains the
+words the check looks for.
+
+### Nothing a check does can put a window on the desktop
+
+**What was asked:** "you keep popping up windows that are taking focus. NEVER
+pop up a window. EVER!!"
+
+**What it did.** Three different things, all of them windows.
+
+**The helper's own window.** `check:handoff` runs the real helper with the
+real window, because "the window shows" had been an assumption with nothing
+behind it. The off-screen mode moved it to (-32000, -32000) and asked Windows
+not to activate it - and the placement rule above put it at the centre of the
+primary display first, because the placement happened while the window was
+hidden and the off-screen move happened after it had been shown.
+
+**The focus.** Even off the screen, `Activate()` and `SetForegroundWindow()`
+took the foreground. The trace said `brought-to-front foreground=yes`. A
+window the user cannot see that has their keyboard is worse than a popup: it
+is a popup that also takes over the keyboard.
+
+**The consoles.** A console program started from a process with no console of
+its own is given one. `npm`, `git`, `csc` and `powershell` are all console
+programs, and twenty-five tool files were starting them without
+`windowsHide: true`.
+
+**What it is now: a guarantee, not a promise.**
+
+The helper's window is now run on **a desktop of its own**.
+`tools/private-desktop-runner.cs` creates a desktop (`CreateDesktop`) on the
+interactive window station (`WinSta0`) and starts the helper on it with
+`STARTUPINFO.lpDesktop` pointing there. Windows does not draw a window on a
+desktop nobody is looking at, and it cannot make it the foreground window
+either - so however the helper places it, activates it or sets `TopMost` on
+it, there is nowhere for the user to see it and nothing for it to take.
+
+That is the difference between a promise ("the code will not show a window")
+and a guarantee (there is nowhere for a window to be shown). The window is
+still created, shown, sized and placed for real, so the trace is a record of
+a real window and not a rehearsal: `visible=True handle=yes`, `cloaked=no`,
+`transparent=no`, `station=WinSta0`, and `desktop=bb-check-<pid>` rather than
+`Default`.
+
+The window station is deliberately still the interactive one. A different
+*station* would be a different session, and the window could not be measured
+there at all; a different *desktop* on the same station is the real session's
+desktop, just not the one being looked at. So the window is a genuine window,
+on the genuine station, with a genuine size and position.
+
+The off-screen mode stays as a second, independent reason for the user not to
+see anything, and the focus is never taken: the off-screen mode returns
+before `TopMost`, `Activate()` or `SetForegroundWindow()`, and the window is
+shown with `ShowWithoutActivation`.
+
+**Every console is hidden.** `windowsHide: true` is now on every process any
+tool starts - twenty-five files, and every one of `npm`, `git`, `csc`,
+`powershell`, the installer and the uninstaller among them.
+
+**What proves it.** Two new suites:
+
+- `npm run check:nowindow` (7/7) checks that no tool starts a process
+  without hiding its console, that no check suite shows a browser window,
+  that the tools which do show one are not in the sweep, that the helper is
+  never run on the user's desktop, that the private desktop is a desktop of
+  its own, and that the helper cannot take the focus while it is off the
+  screen.
+- `tools/window-safety-redproof.js` breaks each of those rules in turn and
+  requires the check to catch it: 6/6, no holes, with the baseline asserted.
+
+And it was measured, not argued about. A watcher recorded every visible
+top-level window and every change of the foreground window for the whole run
+of `check:handoff` - the suite that builds the helper, starts it three times
+with its real window, and reads back what it did. The result was 48 visible
+windows, every one of them the user's own, and one foreground window, the
+user's own browser. Nothing else appeared, and the focus never changed.
+
+### The proof of the rule was the popup it was about
+
+**What was asked:** "you are popping up windows AGAIN! stop it!!!!!"
+
+**What happened.** The red proof for the rule above breaks the rule to prove
+the check catches it - and one of the rules it breaks is the private desktop.
+Pointing the runner at `Default` is exactly how you prove the check notices,
+and pointing the runner at `Default` is exactly how a window appears on the
+user's desktop.
+
+Four helper processes were left running, on the desktop, taking the focus.
+The red proof had *worked*: the check went red, which is what it was asked to
+do. The proof of the rule was the popup.
+
+There was a second failure behind it. The runner was killed by the check's
+timeout while its child - the helper - was still running, and killing the
+runner does not kill the helper. So a run that timed out left a window
+behind, on the desktop, for as long as the helper lived.
+
+**What it is now.** Three changes, all of them about the order of things.
+
+1. **The containment is established before the contained thing is used.** The
+   check reads the runner's source and works out whether it really gives the
+   helper a desktop of its own - one `CreateProcess` call, one `lpDesktop`,
+   built from the name it was given, and not "Default". If it does not, the
+   helper is **not started at all**. A broken rule is then a broken rule in
+   the source, which is harmless, and the check goes red saying so.
+
+2. **The runner refuses the user's desktop.** It returns without starting
+   anything if it is asked for a desktop called "Default", whatever else it
+   has been asked to do.
+
+3. **Nothing is left running.** The runner writes the child's process id to a
+   file the check names, waits with a timeout instead of forever, and stops
+   the child if it overstays. The check reads the pid back and fails if the
+   helper was still alive - "a check never leaves a window behind".
+
+**The general lesson, because it will happen again.** A red proof that
+proves a *containment* rule works by breaking the containment is only safe if
+the break cannot reach the user. Breaking it in the source is safe; breaking
+it at run time is the thing the rule exists to prevent. So: the check
+establishes the containment first, and the proof breaks it in the source
+only.
+
 ## Verification status
 `npm run check:all` sweeps **58 suites**, and all 58 of them pass on a release
 commit. On the tree carrying the work, before the release is cut, 57 of them
