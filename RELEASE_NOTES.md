@@ -1,11 +1,11 @@
-Better Beeper 1.31.2
+Better Beeper 1.32.0
 
 A Windows desktop chat client for Beeper, built on Beeper's own Desktop REST API,
 its WebSocket event stream, and the built-in MCP server.
 
 ## Install
 
-Download `Better Beeper-1.31.2-x64-setup.exe` and run it. It installs per-user, so no
+Download `Better Beeper-1.32.0-x64-setup.exe` and run it. It installs per-user, so no
 administrator rights are needed, and it leaves Beeper Desktop itself alone: both can run
 at the same time.
 
@@ -17,6 +17,8 @@ This build is **not code-signed**, so Windows SmartScreen will warn you on first
 
 ## What changed
 
-- docs: the verification numbers, and a red proof that had stopped matching (`fd5076d`)
+- docs: the handoff for the GIF player, and the two checks that were wrong (`8113c96`)
+- feat: an animated GIF plays three times, then stops, with a button over it (`3620229`)
+- fix: the history progress check needed a slow machine to pass (`5422244`)
 
 Full notes and known limitations: <https://github.com/ScottYates/BetterBeeper>.
