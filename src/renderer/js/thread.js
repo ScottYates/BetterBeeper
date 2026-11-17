@@ -299,14 +299,23 @@ export function initThread() {
   // canvas, because a GIF in an <img> cannot be stopped. So the picture under
   // the pointer is either an <img> or that canvas, and both carry the address
   // of the file and the attachment behind it.
+  //
+  // A canvas that is being played also carries the player, which is how the
+  // menu offers to pause it. There is no button over the picture: a left
+  // click on a picture opens it in the viewer, and a control sitting on top
+  // of that would be a second thing to aim at.
   $('#message-list').addEventListener('contextmenu', (event) => {
     const picture = event.target.closest?.('img, canvas.att-gif-canvas');
     if (!picture) return;
     const src = picture.__srcURL || picture.src;
     if (!src) return;
+    const player = picture.__player || null;
     if (!imageMenu(picture, src, {
       pointer: { x: event.clientX, y: event.clientY },
       attachment: picture.__attachment,
+      animation: player
+        ? { paused: player.paused, toggle: () => player.toggle() }
+        : null,
     })) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1858,13 +1867,13 @@ function plainImageElement(attachment) {
 }
 
 /**
- * An animated GIF: a wrapper holding the picture, the frames the player
- * draws, and the button that stops them.
+ * An animated GIF: a wrapper holding the picture and the frames the player
+ * draws.
  *
  * The <img> is made first and it is what loads the file. It has two jobs:
  * it is the lazy-load trigger, so a GIF that is not near the viewport is not
  * read at all, and it is the fallback - a GIF with one frame, or one that
- * cannot be decoded, stays an ordinary picture with no button on it.
+ * cannot be decoded, stays an ordinary picture.
  *
  * Once the player has the first frame the <img> is taken out of the
  * document. Left in, the browser would keep playing the same animation
@@ -1888,22 +1897,7 @@ function gifElement(attachment) {
     openLightbox(canvas.__srcURL || '');
   });
 
-  const button = el(
-    'button',
-    {
-      class: 'att-gif-toggle',
-      type: 'button',
-      title: 'Pause animation',
-      'aria-label': 'Pause animation',
-      onClick: (event) => {
-        event.stopPropagation();
-        if (wrap.__player) wrap.__player.toggle();
-      },
-    },
-    el('span', { text: '\u23F8' }),
-  );
-
-  const wrap = el('div', { class: 'att-gif-wrap' }, img, canvas, button);
+  const wrap = el('div', { class: 'att-gif-wrap' }, img, canvas);
   // The wrapper carries the attachment as well, because the wrapper is the
   // thing that is cached and reused across a rebuild.
   wrap.__attachment = attachment;
@@ -1925,17 +1919,16 @@ function gifElement(attachment) {
  * Hand a GIF over to the player.
  *
  * If it turns out not to be an animation, or not to be a GIF we can read,
- * the wrapper gives up the canvas and the button and the picture is an
- * ordinary <img> again. A play button over a still picture would be a lie,
- * and a broken file still has to be visible and still saveable.
+ * the wrapper gives up the canvas and the picture is an ordinary <img>
+ * again. A play item over a still picture would be a lie, and a broken file
+ * still has to be visible and still saveable.
  */
 async function startGifPlayer(wrap, attachment, url) {
   const canvas = wrap.querySelector('canvas.att-gif-canvas');
-  const button = wrap.querySelector('.att-gif-toggle');
   const img = wrap.querySelector('img');
-  if (!canvas || !button || !img) return;
+  if (!canvas || !img) return;
 
-  const player = new GifPlayer({ canvas, button, url });
+  const player = new GifPlayer({ canvas, url });
   let animated = false;
   try {
     animated = await player.load();
@@ -1946,11 +1939,13 @@ async function startGifPlayer(wrap, attachment, url) {
   if (!animated) {
     player.dispose();
     canvas.remove();
-    button.remove();
     return;
   }
 
   wrap.__player = player;
+  // The canvas carries the player too, because the canvas is the element the
+  // right-click menu is built from and the menu is what pauses it.
+  canvas.__player = player;
   player.watchVisibility();
   player.start();
   // The automatic start is not the reader pressing play: the three loops are

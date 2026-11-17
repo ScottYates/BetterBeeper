@@ -158,7 +158,7 @@ const CASES = [
     },
   },
   {
-    // A play button over a still picture is a lie, and the reader would be
+    // A play item over a still picture is a lie, and the reader would be
     // pressing a control that does nothing.
     name: 'a file with one frame is treated as an animation',
     expect: 'a file with one frame is not an animation',
@@ -167,19 +167,6 @@ const CASES = [
         path.join(tree, 'src', 'renderer', 'js', 'gif-player.js'),
         /this\.animated = track\.animated === true && this\.frameCount > 1;/,
         'this.animated = true;'
-      );
-    },
-  },
-  {
-    // The button is meant to be hidden until the picture is hovered. A button
-    // that is always there is a button on every message.
-    name: 'the button is always visible',
-    expect: 'the button is invisible until the picture is hovered',
-    break: (tree) => {
-      replaceIn(
-        path.join(tree, 'src', 'renderer', 'styles.css'),
-        /(\.att-gif-toggle \{[^}]*?)opacity: 0; pointer-events: none;/,
-        '$1opacity: 1; pointer-events: auto;'
       );
     },
   },
@@ -210,15 +197,44 @@ const CASES = [
     },
   },
   {
-    // The button is the whole point of the feature: without it there is no
-    // way to start a GIF again.
-    name: 'the thread leaves the button out',
-    expect: 'the thread puts a button over it',
+    // The menu is the only way to stop a GIF now, so the thread has to hand
+    // the player to the menu. Without it there is no way to start a GIF
+    // again, or to stop one that is still going.
+    name: 'the menu never offers the play and pause item',
+    expect: 'the menu offers to play a paused animation',
     break: (tree) => {
       replaceIn(
         path.join(tree, 'src', 'renderer', 'js', 'thread.js'),
-        /  const wrap = el\('div', \{ class: 'att-gif-wrap' \}, img, canvas, button\);/,
-        "  const wrap = el('div', { class: 'att-gif-wrap' }, img, canvas);"
+        /      animation: player\r?\n        \? \{ paused: player\.paused, toggle: \(\) => player\.toggle\(\) \}\r?\n        : null,/,
+        '      animation: null,'
+      );
+    },
+  },
+  {
+    // The item has to say what the press will do. An item that always says
+    // Play would offer to play a picture that is already playing, and the
+    // reader would press it and nothing would happen.
+    name: 'the menu item always says the same thing',
+    expect: 'the menu offers to pause a playing animation',
+    break: (tree) => {
+      replaceIn(
+        path.join(tree, 'src', 'renderer', 'js', 'ui.js'),
+        /label: animation\.paused \? 'Play animation' : 'Pause animation',/,
+        "label: 'Play animation',"
+      );
+    },
+  },
+  {
+    // And the item has to do the thing it says. The first thing that breaks
+    // is the picture that will not start, because the menu was asked to play
+    // a picture that was paused.
+    name: 'the menu item does nothing',
+    expect: 'pressing it starts the picture again',
+    break: (tree) => {
+      replaceIn(
+        path.join(tree, 'src', 'renderer', 'js', 'ui.js'),
+        /onSelect: \(\) => \{ animation\.toggle\(\); \},/,
+        'onSelect: () => {},'
       );
     },
   },

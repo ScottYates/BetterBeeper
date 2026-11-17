@@ -36,35 +36,15 @@
 /** How many times a GIF plays before it stops on its own. */
 export const DEFAULT_LOOPS = 3;
 
-/**
- * The two states of the button.
- *
- * The glyphs are UI, not prose, so they are allowed to be symbols. The file's
- * comments stay ASCII; these live in string literals on purpose, because a
- * picture of a play triangle is the thing a reader recognises.
- */
-const GLYPH = {
-  play: '\u25B6',
-  pause: '\u23F8',
-};
-
-/** What the button says it will do, in each state. */
-const LABEL = {
-  play: 'Play animation',
-  pause: 'Pause animation',
-};
-
 export class GifPlayer {
   /**
    * @param {object} options
    * @param {HTMLCanvasElement} options.canvas  where the frames are drawn
-   * @param {HTMLButtonElement} options.button   the play/pause control
    * @param {string} options.url                 where the GIF's bytes are
    * @param {number} options.loops               how many loops before it stops
    */
-  constructor({ canvas, button, url, loops = DEFAULT_LOOPS }) {
+  constructor({ canvas, url, loops = DEFAULT_LOOPS }) {
     this.canvas = canvas;
-    this.button = button;
     this.url = url;
     this.limit = loops;
 
@@ -166,6 +146,18 @@ export class GifPlayer {
   }
 
   /**
+   * Whether the reader has it paused.
+   *
+   * This is the reader's intent, not whether it happens to be running: a
+   * picture that has scrolled out of sight is paused by the observer but the
+   * reader has not asked for it to stop, and a menu that said "Play" for that
+   * would be wrong.
+   */
+  get paused() {
+    return !this.wanted;
+  }
+
+  /**
    * Whether the picture should be running right now.
    *
    * Off screen counts as not running. A GIF that has scrolled away is still
@@ -179,7 +171,6 @@ export class GifPlayer {
       this.playing = shouldRun;
       this._wake();
     }
-    this._setButton(this.wanted ? 'pause' : 'play');
   }
 
   /**
@@ -333,14 +324,5 @@ export class GifPlayer {
       this.resume = null;
       resume();
     }
-  }
-
-  /** Say on the button what it will do. */
-  _setButton(state) {
-    if (!this.button) return;
-    const glyph = this.button.firstElementChild;
-    if (glyph) glyph.textContent = GLYPH[state] || GLYPH.play;
-    this.button.title = LABEL[state] || LABEL.play;
-    this.button.setAttribute('aria-label', LABEL[state] || LABEL.play);
   }
 }

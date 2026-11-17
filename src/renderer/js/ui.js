@@ -393,8 +393,14 @@ export async function saveAttachments(attachments) {
  * size and nothing the save dialog can hand to the main process, so an item
  * that appears anyway would open a dialog offering to save a file named after
  * nothing. Without it, the menu is the same menu it always was.
+ *
+ * `animation` is optional too, and is what makes the play/pause item appear.
+ * It is an animated GIF that the app is playing itself, and the item is how
+ * the reader stops it: there is no button over the picture, because a left
+ * click on a picture opens it in the viewer and a button over it would be a
+ * second control sitting on top of the first one.
  */
-export function imageMenu(anchor, srcUrl, { pointer, attachment } = {}) {
+export function imageMenu(anchor, srcUrl, { pointer, attachment, animation } = {}) {
   if (!srcUrl) return false;
   if (!window.beeper?.images?.copy) return false;
 
@@ -421,6 +427,16 @@ export function imageMenu(anchor, srcUrl, { pointer, attachment } = {}) {
     items.splice(1, 0, {
       label: 'Save image...',
       onSelect: () => { saveAttachment(attachment); },
+    });
+  }
+
+  if (animation) {
+    // First, because it is the only item that is about this picture rather
+    // than about the file. The label says what the press will do, so a paused
+    // picture offers to play and a playing one offers to pause.
+    items.unshift({
+      label: animation.paused ? 'Play animation' : 'Pause animation',
+      onSelect: () => { animation.toggle(); },
     });
   }
 

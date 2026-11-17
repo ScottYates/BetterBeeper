@@ -14,9 +14,9 @@ so a GIF does not restart every time a message arrives (see the note above
 
 ## What is wanted
 
-1. An animated GIF gets a play/pause button over it.
-2. The button is hidden until the picture is hovered, so a still frame is not
-   permanently marked up by a control nobody is reaching for.
+1. An animated GIF can be paused and played by hand.
+2. The control is in the right-click menu on the picture, because a left click
+   on a picture opens it in the viewer.
 3. The GIF plays three times and then stops on its own.
 4. The reader can press play and pause it by hand.
 
@@ -29,6 +29,12 @@ The decisions that were not obvious, and why they went the way they did:
 - **After the automatic stop, play runs until pause.** The three loops are the
   *default* behaviour, not a rule the reader cannot escape. Once the reader
   presses play, the GIF is theirs: it runs until they press pause.
+- **The control is a menu item, not a button over the picture.** There was a
+  button over the picture to begin with, and it fought with the picture's own
+  left click: a left click opens the picture in the viewer, so a control
+  sitting on top of that is a second thing to aim at for something that is
+  not wanted most of the time. The right-click menu is already the place for
+  the things that are not one click.
 - **The full-screen viewer is untouched.** Opening a GIF in the viewer is a
   deliberate "I want to watch this", so it plays there as it always has.
 
@@ -66,13 +72,12 @@ player uses, so **no new IPC channel is needed**.
 
 ## The shape of the thing
 
-A GIF attachment is drawn as a wrapper holding three parts:
+A GIF attachment is drawn as a wrapper holding two parts:
 
 ```html
 <div class="att-gif-wrap">
   <img class="att-image">        <!-- until the player takes over -->
   <canvas class="att-gif-canvas"> <!-- the frames the player draws -->
-  <button class="att-gif-toggle"> <!-- play or pause, hidden until hover -->
 </div>
 ```
 
@@ -84,16 +89,19 @@ frame, the `<img>` is taken out of the document so the browser does not also
 play the same animation underneath, and the `<canvas>` is what the reader
 sees.
 
-The wrapper exists so the button has something to sit on. It is sized so that
-the picture inside it is drawn at exactly the size it is drawn today: the
-wrapper stretches like the bare `<img>` used to, and the picture inside it is
-`width: 100%` with the same 340 pixel cap, so a GIF in a message with long
-text is scaled the same way every other image in that message is.
+The wrapper exists so the canvas can take the place of the picture. It is
+sized so that the picture inside it is drawn at exactly the size it is drawn
+today: the wrapper stretches like the bare `<img>` used to, and the picture
+inside it is `width: 100%` with the same 340 pixel cap, so a GIF in a message
+with long text is scaled the same way every other image in that message is.
 
-The button is the same shape as the one the video attachment already has
-(`.att-download`): 28 pixels square, in the corner, transparent until the
-wrapper is hovered or the button itself is focused. `pointer-events` follows
-`opacity`, so a button nobody can see is not a button that swallows clicks.
+The control is a line at the top of the picture's right-click menu, before
+Open image, Save image, Copy image and Copy image address. The canvas carries
+the player, so the menu can ask it whether the reader has it paused and say
+what the press will do: "Play animation" for a picture that has stopped,
+"Pause animation" for one that is still going. The item is only offered for a
+GIF the app is playing itself, so a still picture never gets a control that
+does nothing.
 
 ## The rules the player follows
 
@@ -106,16 +114,16 @@ wrapper is hovered or the button itself is focused. `pointer-events` follows
 - **Pausing stops the clock.** The picture on the canvas is the frame that
   was showing, and it stays there until play is pressed.
 - **Playing after the automatic stop runs until pause.** Once the reader has
-  pressed the button, the automatic stop does not come back.
-- **A GIF that is not animated gets no button.** One frame is a picture, and
-  a play button over a picture would be a lie.
+  pressed play, the automatic stop does not come back.
+- **A GIF that is not animated gets no control.** One frame is a picture, and
+  a play item over a picture would be a lie.
 - **A GIF that cannot be decoded stays a picture.** The `<img>` is left
   alone, so a broken file is still visible and still saveable.
 
 ## What is not done
 
 - The full-screen viewer plays the GIF as it always has.
-- The button is not drawn for still images, for videos (which have their own
+- The menu item is not offered for still images, for videos (which have their own
   controls), or for files that are not pictures at all.
 
 ## How it is proved
@@ -130,25 +138,34 @@ the player's own opinion of what it did:
 - pressing pause freezes the picture, and the frozen frame is the frame that
   was showing;
 - pressing play starts it again;
-- the button is invisible until the picture is hovered;
-- a one frame GIF gets no button, and a file that is not a GIF gets no
+- the player says whether the reader has it paused, which is what the menu
+  label is built from;
+- a one frame GIF gets no player, and a file that is not a GIF gets no
   player.
 
 The player on its own is half the feature, so the second phase drives the
 **real `thread.js`** with a stubbed bridge against the real `index.html`
 markup, and looks at what the thread drew: that it drew a wrapper with a
-canvas and a button, that it handed the picture to the player, that the
-`<img>` was taken out of the document once the player took over, that the
+canvas and no button over it, that it handed the picture to the player, that
+the `<img>` was taken out of the document once the player took over, that the
 picture the thread drew really moves and really stops by itself, and that
-right-clicking the canvas offers the same picture menu as any other image.
+right-clicking the canvas offers the same picture menu as any other image
+plus an item that pauses it.
+
+The menu is proved by pressing it, not by reading the label: the picture is
+watched across the press, and it has to stop changing and stay stopped. The
+state is set rather than waited for, so a picture that had not yet finished
+its three loops cannot change what the menu says.
 
 `node tools/gif-player-redproof.js` breaks the player on purpose in a copy of
-the tree and insists the check notices each break. Eight mutations, eight
+the tree and insists the check notices each break. Ten mutations, ten
 caught, with an asserted baseline that the untouched tree passes first: a loop
 limit that is one too small, a pause that does not pause, a play that does not
-play, a one frame file treated as an animation, a button that is always
-visible, frames that are decoded and thrown away instead of drawn, a thread
-that never hands the picture over, and a thread that leaves the button out.
+play, a one frame file treated as an animation, frames that are decoded and
+thrown away instead of drawn, a thread that never hands the picture over, a
+thread that never offers the menu item, a menu item that always says the same
+thing, a menu item that does nothing, and a cached canvas that keeps the
+attachment it was first drawn with.
 
 ### One thing the check had to get right about itself
 

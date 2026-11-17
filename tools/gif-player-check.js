@@ -1,6 +1,6 @@
 /**
  * check:gifplayer - an animated GIF plays three times, then stops, and the
- * button over it does what it says.
+ * menu over it does what it says.
  *
  * What this is for
  * ----------------
@@ -13,6 +13,12 @@
  * what was on screen: that the picture moved, that it moved three times and
  * then stopped, that pausing froze it on the frame that was showing rather
  * than on the first one, and that pressing play started it again.
+ *
+ * The control is in the right-click menu, because a left click on a picture
+ * opens it in the viewer and a button sitting on top of that would be a
+ * second thing to aim at. So the menu has to offer the item, the item has to
+ * say what the press will do, and the press has to actually stop or start the
+ * frames.
  *
  * The counters the player keeps are checked too, but only next to the
  * pixels: they say how many frames went past, and the pixels say the picture
@@ -207,10 +213,11 @@ function threadScript(threadURL, playerURL, gifURL) {
       const wrap = document.querySelector('.att-gif-wrap');
       out.hasWrap = Boolean(wrap);
       const canvas = wrap ? wrap.querySelector('canvas.att-gif-canvas') : null;
-      const button = wrap ? wrap.querySelector('.att-gif-toggle') : null;
       const img = wrap ? wrap.querySelector('img') : null;
       out.hasCanvas = Boolean(canvas);
-      out.hasButton = Boolean(button);
+      // There is no button over the picture any more: a left click opens the
+      // picture in the viewer, and the control lives in the right-click menu.
+      out.hasButton = Boolean(wrap && wrap.querySelector('.att-gif-toggle'));
       // The browser must not still be playing the file underneath the canvas.
       out.hasImage = Boolean(img);
       out.wrapperMarked = Boolean(wrap && wrap.classList.contains('is-playing'));
@@ -220,24 +227,83 @@ function threadScript(threadURL, playerURL, gifURL) {
       out.canvasSize = canvas ? [canvas.width, canvas.height] : null;
       out.pageVisibility = document.visibilityState;
 
-      if (button) {
-        const style = getComputedStyle(button);
-        out.buttonOpacity = style.opacity;
-        out.buttonPointerEvents = style.pointerEvents;
-        out.buttonLabel = button.getAttribute('aria-label');
-      }
-
       // Right-clicking the picture has to offer the same menu as right
-      // clicking any other picture: it is a canvas now, not an <img>.
-      if (canvas) {
-        canvas.dispatchEvent(new MouseEvent('contextmenu', {
+      // clicking any other picture: it is a canvas now, not an <img>. And the
+      // menu has to offer to pause it, because that is the only way to stop
+      // it now.
+      const menuLabels = () => Array.from(document.querySelectorAll('.msg-menu button'))
+        .map((b) => b.textContent);
+      const openMenu = async (target) => {
+        document.querySelectorAll('.msg-menu').forEach((n) => n.remove());
+        target.dispatchEvent(new MouseEvent('contextmenu', {
           bubbles: true,
           cancelable: true,
           clientX: 40,
           clientY: 40,
         }));
-        await sleep(300);
+        await sleep(250);
+        return menuLabels();
+      };
+
+      if (canvas) {
+        out.menuLabels = await openMenu(canvas);
         out.menuShown = Boolean(document.querySelector('.msg-menu'));
+      }
+
+      // ---- and pressing it really stops the picture ----
+      //
+      // The item is only worth having if it does something, so the picture is
+      // watched across the press: it has to stop changing, and it has to stay
+      // stopped.
+      if (canvas) {
+        const pixelOf = () => {
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          const data = ctx.getImageData(
+            Math.floor(canvas.width / 2),
+            Math.floor(canvas.height / 2),
+            1,
+            1
+          ).data;
+          return [data[0], data[1], data[2]].join(',');
+        };
+        const countChanges = async (ms) => {
+          const seen = [];
+          const started = performance.now();
+          while (performance.now() - started < ms) {
+            seen.push(pixelOf());
+            await sleep(${SAMPLE_MS});
+          }
+          let changes = 0;
+          for (let i = 1; i < seen.length; i++) if (seen[i] !== seen[i - 1]) changes += 1;
+          return changes;
+        };
+        const findItem = (label) => Array.from(document.querySelectorAll('.msg-menu button'))
+          .find((b) => b.textContent === label);
+
+        // The state is set rather than waited for. The picture may or may not
+        // have finished its three loops by now, and a menu that says the
+        // wrong thing because of the timing would be a different bug from
+        // the one this is looking for.
+        out.hasPlayer = Boolean(canvas.__player);
+        if (canvas.__player) canvas.__player.pause();
+        await sleep(100);
+
+        // Paused, so the menu has to offer to play it.
+        out.pausedMenuLabels = await openMenu(canvas);
+        const playItem = findItem('Play animation');
+        out.playItemFound = Boolean(playItem);
+        if (playItem) playItem.click();
+        await sleep(150);
+        out.changesAfterPlay = await countChanges(700);
+
+        // Playing now, so the menu has to offer to pause it, and pressing that
+        // has to stop the frames.
+        out.playingMenuLabels = await openMenu(canvas);
+        const pauseItem = findItem('Pause animation');
+        out.pauseItemFound = Boolean(pauseItem);
+        if (pauseItem) pauseItem.click();
+        await sleep(150);
+        out.changesWhilePaused = await countChanges(700);
       }
 
       // ---- and the picture survives a rebuild with a new attachment ----
@@ -266,10 +332,9 @@ function threadScript(threadURL, playerURL, gifURL) {
 /**
  * The page script.
  *
- * It builds the same three elements the thread builds - a wrapper, a canvas
- * and a button - and then drives the real player module over them. The
- * samples are taken from the canvas, so what is compared is what a reader
- * would have seen.
+ * It builds the same element the thread builds - a wrapper with a canvas in
+ * it - and then drives the real player module over it. The samples are taken
+ * from the canvas, so what is compared is what a reader would have seen.
  */
 function pageScript(playerURL, gifURL, stillURL, notAGifURL) {
   // Named and closed like the other check harnesses on purpose: check:syntax
@@ -287,13 +352,9 @@ function pageScript(playerURL, gifURL, stillURL, notAGifURL) {
         wrap.className = 'att-gif-wrap is-playing';
         const canvas = document.createElement('canvas');
         canvas.className = 'att-gif-canvas';
-        const button = document.createElement('button');
-        button.className = 'att-gif-toggle';
-        button.type = 'button';
-        button.innerHTML = '<span></span>';
-        wrap.append(canvas, button);
+        wrap.append(canvas);
         document.body.append(wrap);
-        return { wrap, canvas, button };
+        return { wrap, canvas };
       };
 
       // The colour at the middle of the canvas: which frame is on screen.
@@ -333,20 +394,13 @@ function pageScript(playerURL, gifURL, stillURL, notAGifURL) {
       const out = {};
 
       // ---- the animation itself ----
-      const { wrap, canvas, button } = build();
-      const player = new GifPlayer({ canvas, button, url: ${JSON.stringify(gifURL)} });
+      const { wrap, canvas } = build();
+      const player = new GifPlayer({ canvas, url: ${JSON.stringify(gifURL)} });
       out.animated = await player.load();
       out.frameCount = player.frameCount;
 
-      const buttonState = () => ({
-        title: button.title,
-        label: button.getAttribute('aria-label'),
-        glyph: button.firstElementChild ? button.firstElementChild.textContent : '',
-        opacity: getComputedStyle(button).opacity,
-        pointerEvents: getComputedStyle(button).pointerEvents,
-      });
-
-      out.buttonAtStart = buttonState();
+      // The state the menu reads: whether the reader has it paused.
+      out.pausedAtStart = player.paused;
 
       player.start();
       player.play();
@@ -360,7 +414,8 @@ function pageScript(playerURL, gifURL, stillURL, notAGifURL) {
       out.framesDrawn = player.framesDrawn;
       out.loops = player.loops;
       out.playing = player.playing;
-      out.buttonAfterRun = buttonState();
+      // The picture stopped by itself, so the menu has to offer to play it.
+      out.pausedAfterRun = player.paused;
 
       // ---- pausing freezes the frame that was showing ----
       // Play again, wait for the second frame to be on screen, and stop it
@@ -378,19 +433,24 @@ function pageScript(playerURL, gifURL, stillURL, notAGifURL) {
       out.beforePause = beforePause;
       out.frozen = frozen;
       out.afterWait = pixel(canvas);
-      out.buttonPaused = buttonState();
+      out.pausedWhilePaused = player.paused;
 
       // ---- and play starts it again ----
-      player.play();
+      // Forever, because that is what the reader's own press does: the three
+      // loops are the automatic playthrough, and once the reader has asked
+      // for it, the picture runs until they stop it. Without that, the
+      // automatic stop would fire again at the end of the next loop, because
+      // the loop counter is the player's own and it has already reached three.
+      player.play({ forever: true });
       const resumed = await watch(canvas, 700);
       out.resumedChanges = changesOf(resumed).changes;
+      out.pausedWhilePlaying = player.paused;
       player.pause();
 
       // ---- the controls: a file with one frame is not an animation ----
       const still = build();
       const stillPlayer = new GifPlayer({
         canvas: still.canvas,
-        button: still.button,
         url: ${JSON.stringify(stillURL)},
       });
       out.stillAnimated = await stillPlayer.load();
@@ -399,7 +459,6 @@ function pageScript(playerURL, gifURL, stillURL, notAGifURL) {
       const notAGif = build();
       const notAGifPlayer = new GifPlayer({
         canvas: notAGif.canvas,
-        button: notAGif.button,
         url: ${JSON.stringify(notAGifURL)},
       });
       try {
@@ -408,12 +467,16 @@ function pageScript(playerURL, gifURL, stillURL, notAGifURL) {
         out.notAGifAnimated = 'threw: ' + String(err && err.message);
       }
 
-      // ---- the button is only there on hover ----
-      // The element the mouse has to be over, and where it has to land.
-      const rect = wrap.getBoundingClientRect();
-      out.hoverTarget = { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
-      out.opacityBeforeHover = getComputedStyle(button).opacity;
-      out.pointerEventsBeforeHover = getComputedStyle(button).pointerEvents;
+      // ---- the toggle does the other thing ----
+      // The menu says what the press will do, so the toggle has to agree with
+      // it: a paused picture toggles to playing, and a playing one to paused.
+      player.pause();
+      const beforeToggle = player.paused;
+      player.toggle();
+      const afterToggle = player.paused;
+      out.toggleFlipped = beforeToggle !== afterToggle;
+      out.pausedAfterToggle = afterToggle;
+      player.pause();
 
       return JSON.stringify(out);
     })()
@@ -563,9 +626,10 @@ async function main() {
       || ('loops=' + out.loops + ' frames=' + out.framesDrawn);
   });
 
-  add('the button offers to play it again once it has stopped', () => {
-    return (out.buttonAfterRun.title === 'Play animation' && out.buttonAfterRun.glyph !== out.buttonAtStart.glyph)
-      || ('the button says ' + JSON.stringify(out.buttonAfterRun));
+  add('the picture is paused by the time it has stopped on its own', () => {
+    // The menu says what the next press will do, so it has to know whether
+    // the reader has it paused. After the automatic stop it has.
+    return out.pausedAfterRun === true || ('the player says paused=' + out.pausedAfterRun);
   });
 
   add('pausing freezes the frame that was showing, not the first one', () => {
@@ -585,13 +649,20 @@ async function main() {
       || ('it moved from ' + out.frozen + ' to ' + out.afterWait);
   });
 
-  add('the button says it will play it again while it is paused', () => {
-    return out.buttonPaused.title === 'Play animation'
-      || ('the button says ' + JSON.stringify(out.buttonPaused));
+  add('a paused picture says so, so the menu can offer to play it', () => {
+    return out.pausedWhilePaused === true || ('the player says paused=' + out.pausedWhilePaused);
   });
 
   add('pressing play starts it again', () => {
     return out.resumedChanges > 0 || ('the picture never changed again');
+  });
+
+  add('a picture that is playing says so, so the menu can offer to pause it', () => {
+    return out.pausedWhilePlaying === false || ('the player says paused=' + out.pausedWhilePlaying);
+  });
+
+  add('the toggle does the other thing', () => {
+    return out.toggleFlipped === true || 'the toggle did not change the state';
   });
 
   add('a file with one frame is not an animation', () => {
@@ -602,42 +673,6 @@ async function main() {
     return out.notAGifAnimated === false || typeof out.notAGifAnimated === 'string'
       || ('the player said ' + out.notAGifAnimated);
   });
-
-  add('the button is invisible until the picture is hovered', () => {
-    return (Number(out.opacityBeforeHover) === 0 && out.pointerEventsBeforeHover === 'none')
-      || ('opacity=' + out.opacityBeforeHover + ' pointer-events=' + out.pointerEventsBeforeHover);
-  });
-
-  // The real hover, over CDP, so the rule is proved rather than read.
-  try {
-    win.webContents.debugger.attach('1.3');
-    await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: out.hoverTarget.x,
-      y: out.hoverTarget.y,
-    });
-    await sleep(300);
-    const hovered = JSON.parse(await win.webContents.executeJavaScript(
-      `(() => {
-        const button = document.querySelector('.att-gif-toggle');
-        const style = getComputedStyle(button);
-        return JSON.stringify({ opacity: style.opacity, pointerEvents: style.pointerEvents });
-      })()`,
-      true
-    ));
-    add('hovering the picture brings the button out', () => {
-      return (Number(hovered.opacity) > 0.9 && hovered.pointerEvents !== 'none')
-        || ('opacity=' + hovered.opacity + ' pointer-events=' + hovered.pointerEvents);
-    });
-    // Detached before the window goes. A window that is destroyed with the
-    // debugger still attached takes the whole process down with it, and then
-    // the results of the run are lost.
-    win.webContents.debugger.detach();
-  } catch (err) {
-    add('hovering the picture brings the button out', () => {
-      return 'the mouse could not be moved: ' + err.message;
-    });
-  }
 
   // ---- the thread draws it ----
   //
@@ -689,8 +724,11 @@ async function main() {
       || ('wrapper=' + threadOut.hasWrap + ' canvas=' + threadOut.hasCanvas);
   });
 
-  add('the thread puts a button over it', () => {
-    return threadOut.hasButton === true || 'there is no button';
+  add('the thread puts no button over it', () => {
+    // A left click on a picture opens it in the viewer, so there is no
+    // control sitting on top of the picture any more. The play/pause is in
+    // the right-click menu.
+    return threadOut.hasButton === false || 'there is a button over the picture';
   });
 
   add('the thread hands the picture to the player', () => {
@@ -726,13 +764,33 @@ async function main() {
     return (size[0] === 8 && size[1] === 8) || ('it is ' + size.join('x'));
   });
 
-  add('the button over a GIF is hidden until the picture is hovered', () => {
-    return (Number(threadOut.buttonOpacity) === 0 && threadOut.buttonPointerEvents === 'none')
-      || ('opacity=' + threadOut.buttonOpacity + ' pointer-events=' + threadOut.buttonPointerEvents);
-  });
-
   add('right-clicking a GIF offers the picture menu', () => {
     return threadOut.menuShown === true || 'no menu appeared';
+  });
+
+  add('the menu offers to play a paused animation', () => {
+    // The picture is paused, so the item has to say Play. An item that says
+    // the wrong thing is worse than no item: the reader presses Play and the
+    // picture carries on.
+    return threadOut.playItemFound === true
+      || ('the menu said ' + JSON.stringify(threadOut.pausedMenuLabels));
+  });
+
+  add('pressing it starts the picture again', () => {
+    return threadOut.changesAfterPlay > 0
+      || ('the picture never changed again: ' + threadOut.changesAfterPlay);
+  });
+
+  add('the menu offers to pause a playing animation', () => {
+    return threadOut.pauseItemFound === true
+      || ('the menu said ' + JSON.stringify(threadOut.playingMenuLabels));
+  });
+
+  add('pressing it stops the picture', () => {
+    // Not a count of frames: the picture has to stop changing and stay
+    // stopped. A pause that did nothing would still show frames.
+    return threadOut.changesWhilePaused === 0
+      || ('the picture changed ' + threadOut.changesWhilePaused + ' times while it was paused');
   });
 
   add('the canvas carries the attachment that is on screen now', () => {

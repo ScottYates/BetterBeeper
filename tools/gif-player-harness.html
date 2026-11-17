@@ -5,10 +5,10 @@
     <title>gif-player harness</title>
     <!--
       The real renderer stylesheet, on purpose. The question is whether the
-      play button over an animated GIF behaves like the app's own hover
-      buttons, so the elements the page script creates have to be styled by
-      the same rules the thread uses. If someone later changes what
-      .att-gif-toggle looks like, this page sees it and the check notices.
+      canvas an animated GIF is drawn on behaves like the app's own pictures,
+      so the elements the page script creates have to be styled by the same
+      rules the thread uses. If someone later changes what .att-gif-canvas
+      looks like, this page sees it and the check notices.
 
       The fixture elements are created by the page script that
       tools/gif-player-check.js injects, not here, so they can be built from
@@ -19,9 +19,9 @@
   <body>
     <!--
       Blank page loaded by tools/gif-player-check.js. It carries no markup of
-      its own: the check has to build the wrapper, the canvas and the button
-      itself, the same way src/renderer/js/thread.js does, and then sample the
-      pixels that come out.
+      its own: the check has to build the wrapper and the canvas itself, the
+      same way src/renderer/js/thread.js does, and then sample the pixels that
+      come out.
     -->
   </body>
 </html>

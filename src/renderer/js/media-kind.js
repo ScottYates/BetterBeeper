@@ -89,7 +89,7 @@ export function isPlayable(attachment) {
  *
  * This is asked separately from mediaKind because a GIF is the one picture the
  * app plays itself, and the answer decides whether the reader gets a play
- * button over it.
+ * and pause item in the menu over it.
  */
 export function isGifAttachment(attachment) {
   if (!attachment || typeof attachment !== 'object') return false;
