@@ -2253,9 +2253,177 @@ it at run time is the thing the rule exists to prevent. So: the check
 establishes the containment first, and the proof breaks it in the source
 only.
 
+## Work done 2026-11-17
+
+### An animated GIF plays three times, then stops, and the button over it works
+
+The ask: an animated GIF in a thread gets a play/pause button that only shows
+on mouse over, and the GIF plays three times and then pauses by default.
+
+Two things about that were decided before anything was written:
+
+- **Pause freezes on the frame that is showing**, not on the first frame. A
+  reader who pauses a GIF halfway through expects the picture to stay where it
+  was, not to jump back to the beginning.
+- **Three loops is the automatic playthrough, not a limit.** After the GIF has
+  stopped by itself, pressing play runs it until pause is pressed. A reader who
+  asks to watch a GIF wants to watch it.
+
+The full-screen image viewer was left alone. Opening a GIF there is an
+explicit "I want to watch this", so it plays for as long as the window is open.
+
+**The app has to draw the frames itself.** This is the whole reason the
+feature is more than a button. There is no way to pause a native animated GIF:
+re-setting `src` restarts it, and `drawImage` of a live animated `<img>`
+always yields frame 0, so the current frame cannot even be snapshotted. The
+renderer therefore decodes the file with the WebCodecs `ImageDecoder` and draws
+the frames onto a canvas, and the pause button freezes that canvas.
+
+What was measured before it was built, in a scratch probe against the real
+Electron 38 build:
+
+- `ImageDecoder` accepts `image/gif`, reports `frameCount` and `animated`, and
+  hands back fully composited, logical-screen-sized frames with exact per-frame
+  `timestamp` and `duration`. It does not loop, so a new decoder is needed for
+  each pass.
+- The decoded frames keep their transparency. An earlier reading that
+  transparency was lost came from a frame that had been composited over an
+  opaque frame beneath it, not from the decoder.
+- The renderer can `fetch()` the attachment bytes over `beeper-file://`, so
+  **no new IPC channel was needed**. The native `<img>` stays as the lazy-load
+  trigger and as the fallback, and is removed from the document once the
+  player takes over, so the browser is not animating the same file underneath
+  the canvas.
+
+The player is `src/renderer/js/gif-player.js`. It keeps three pieces of state
+apart on purpose: what the reader has asked for (`wanted`), what is actually
+running (`playing`), and whether the picture is on screen (`onScreen`, an
+`IntersectionObserver`). The frame schedule is absolute, built from each
+frame's own `timestamp` and `duration`, so a slow frame does not drift the
+whole animation. The decoder survives a pause, so a resume continues
+mid-loop rather than starting over.
+
+The thread draws a wrapper holding the canvas and the button. The wrapper is
+marked `is-playing` once the player takes over, which is what makes the
+canvas visible and the `<img>` go away. The button is hidden until the
+picture is hovered, exactly like the download button that is already on every
+image.
+
+### The check samples the canvas, because the counters are not the claim
+
+`check:gifplayer` is 27 assertions in two phases. The first drives the player
+module directly over a fixture built at run time: four frames of one colour
+each, 200ms a frame, so a sample says which frame is on screen. The second
+drives the **real `thread.js`** with a stubbed `window.beeper` against the real
+`index.html` markup, and looks at what the thread drew.
+
+Every claim about the picture is made from the pixels that came out of the
+canvas. The player keeps counters (`framesDrawn`, `loops`) and they are
+checked too, but only next to the pixels: a player that decoded every frame
+and threw the pictures away would pass every counter, and there is a red proof
+mutation for exactly that.
+
+Two controls are in the same run, because they are the cases that would let
+the rest of the check pass for the wrong reason: a file with one frame is not
+an animation, and a file that is not a GIF at all cannot be played.
+
+`tools/gif-player-redproof.js` breaks the player on purpose, one thing at a
+time, in a copy of the tree, and insists the check notices each one: eight
+mutations, eight caught, with an asserted baseline that the untouched tree
+passes first.
+
+### The history progress check needed a slow machine to pass
+
+`check:history` was already red on `main` before this work, and it had
+nothing to do with the GIFs. The failing case was "a long walk announces far
+less often than it pages": 200 pages, and it wanted to see that the progress
+announcements were coalesced.
+
+It was measuring the wrong thing. The walk is coalesced into one
+announcement every 250ms, and the job announces that it *started* before the
+walk begins, so the walk's first announcement is measured against that one.
+On a machine that gets through 200 pages in about 220ms the whole walk falls
+inside a single interval, nothing is announced, and the case failed for
+wanting an announcement that had no time to happen. The same case passed on a
+slower machine.
+
+The fix is in the fake, not in the assertion. The fake Beeper now takes a
+few milliseconds a page, so the walk is deliberately longer than the interval
+it is coalesced into. The case then says the same thing on every machine: a
+walk that takes about a second is announced, and it is announced a handful of
+times rather than two hundred. The `onPage` hook became awaitable so it can
+be that slow.
+
+**The general lesson, because this is the second time.** The count bound in
+the same case had already been fixed for exactly this reason, with a comment
+saying so. The "at least one" half of the same assertion was left with the
+machine-speed dependency, so the case still failed on a fast machine, and it
+had been failing in the background for a while. A check that is right about
+one half of a rule and wrong about the other half is still a broken check, and
+fixing half of it does not make it pass.
+
+### Two things the download red proof was not saying
+
+Moving the attachment stamping into the two factories that draw the picture
+broke two things in `tools/download-redproof.js`, and one of them had been
+broken for a while.
+
+**The CSS mutation stopped being a mutation.** The rule it changed was
+`cursor: pointer; opacity: 0; pointer-events: none;`, which was the only pair
+like that in the stylesheet. The GIF button carries the same pair for the same
+reason, so the pattern matched twice, the mutation was skipped, and the proof
+reported a hole instead of a catch. It is scoped to the `.att-download` rule
+now.
+
+**The stamp at creation was never load-bearing.** The proof removes
+`img.__attachment = attachment;` and expected the check to notice. It did not,
+and the reason is worth knowing: a picture with an id is cached, so the next
+draw of the thread hands back the same element and stamps it again on the way
+out. Remove the stamp at creation and the reuse puts it straight back, so the
+case about the first image stayed green.
+
+The case that proves the creation stamp is a picture with **no cache key at
+all** - no id, no address and no name - because such a picture is drawn afresh
+every time and nothing else can put an attachment on it. That case is in
+`check:download` now, and the mutation points at it. Seventeen of seventeen
+caught, with the baseline asserted first.
+
+**The general lesson, because this is the third time this shape has come up
+here.** A rule can be real and still not be load-bearing, and the way to find
+out is to break it and see whether anything turns red. Two of the three holes
+found in this session were found that way, and one of them had been open on
+`main` for a while.
+
+### The check was dying on the way out, and taking its own results with it
+
+The red proof could not catch the two thread-level breaks, because the check
+died before it printed them. The cause was not the break: the check called
+`win.destroy()` on both of its windows and then ended the process, and
+destroying a window whose renderer is still busy tears the renderer down
+underneath a callback that is on its way into V8. The process died with
+`Invoke in DisallowJavascriptExecutionScope` and the exit code was the crash
+code, not 1.
+
+It was reproducible: four runs of the broken tree crashed four times, and in
+two of them the results had been printed and were then lost, so the run looked
+like it had passed everything and had failed at the same time.
+
+The fix is the pattern the other window checks in this repository already use:
+exit through Electron rather than ending the process from under a live
+renderer, and do not destroy the windows by hand. The check now calls
+`app.exit(0)` before it prints and lets the exit code carry the result.
+
+**The general lesson, because it will happen again.** A check that dies on the
+way out is not a check that failed. It reports nothing, and it takes the
+evidence with it. A red proof that cannot tell the two apart will read a crash
+as "the case did not fail", which is the opposite of what happened. The proof
+now keeps the error output as well as the results and prints both, so the
+difference between "the case failed" and "the check died" is visible in the
+output rather than guessed at.
+
 ## Verification status
-`npm run check:all` sweeps **59 suites**, and all 59 of them pass on a release
-commit. On the tree carrying the work, before the release is cut, 58 of them
+`npm run check:all` sweeps **60 suites**, and all 60 of them pass on a release
+commit. On the tree carrying the work, before the release is cut, 59 of them
 pass: the one that does not is `check:released`, which is red until the release
 is cut, because `main` is ahead of the newest tag. It was 58 suites on the
 tree carrying the 2026-11-12 work, 57 of them passing; it was 57 suites on the
@@ -2269,6 +2437,13 @@ commit, 2026-10-21; 42 suites before `check:contactrefresh` was added, 41
 before `check:participants`, 40 before `check:refreshchats`, 39 before
 `check:entity`, and 35/37 on 2026-10-14.
 
+One of those suites was red on `main` while this work was being done:
+`check:history` wanted a progress announcement out of a walk that finished
+inside the interval announcements are coalesced into, so it passed on a slow
+machine and failed on a fast one. It is fixed in the fake rather than in the
+assertion, so it says the same thing everywhere now - see "The history
+progress check needed a slow machine to pass" above.
+
 `check:released` is the one that moves with the git state. It fails whenever
 `main` is ahead of the newest tag, because a push with no release behind it is
 exactly what it exists to catch. So it is green on a release commit and red on
@@ -2277,6 +2452,8 @@ working, not a defect, and it is why a docs-only push still gets a release.
 
 | Check | Result |
 | --- | --- |
+| `check:gifplayer` | 29/29 checks passed, sampled from the canvas, with the real thread driven against the real markup (new) |
+| `tools/gif-player-redproof.js` | 9/9 mutations caught, no holes, with an asserted baseline (new) |
 | `check:update` | 63/63, after `check:update` gained a built helper to read the PE header of |
 | `check:updatefailure` | 23/23 checks passed, running the real helper against real executables, with no window (new) |
 | `check:handoff` | 29/29 checks passed, running the real helper with the real window on a desktop of its own, so nothing can be seen |
@@ -2335,6 +2512,8 @@ mutations caught, 1/1 neutral rewrite tolerated,
 `check:api` 136/136, `check:composer` 17/17, `check:actions` 21/21,
 `check:about` 6/6, `check:installer` passing, `check:syntax` OK on every JS
 file and harness, `check:ascii` OK.
+`check:history` 129/129, and `check:download` 40/40 after the GIF work moved
+the attachment stamping into the two factories that draw the picture.
 
 `check:paste` is worth a word, because it is the shape the other checks
 should take. It drives the **real** event path - a `dragover`, a `drop`, a
