@@ -2255,10 +2255,10 @@ only.
 
 ## Work done 2026-11-17
 
-### An animated GIF plays three times, then stops, and the button over it works
+### An animated GIF plays three times, then stops, and the menu over it works
 
-The ask: an animated GIF in a thread gets a play/pause button that only shows
-on mouse over, and the GIF plays three times and then pauses by default.
+The ask: an animated GIF in a thread can be paused and played by hand, and the
+GIF plays three times and then pauses by default.
 
 Two things about that were decided before anything was written:
 
@@ -2273,11 +2273,11 @@ The full-screen image viewer was left alone. Opening a GIF there is an
 explicit "I want to watch this", so it plays for as long as the window is open.
 
 **The app has to draw the frames itself.** This is the whole reason the
-feature is more than a button. There is no way to pause a native animated GIF:
+feature is more than a menu item. There is no way to pause a native animated GIF:
 re-setting `src` restarts it, and `drawImage` of a live animated `<img>`
 always yields frame 0, so the current frame cannot even be snapshotted. The
 renderer therefore decodes the file with the WebCodecs `ImageDecoder` and draws
-the frames onto a canvas, and the pause button freezes that canvas.
+the frames onto a canvas, and the pause freezes that canvas.
 
 What was measured before it was built, in a scratch probe against the real
 Electron 38 build:
@@ -2303,15 +2303,31 @@ frame's own `timestamp` and `duration`, so a slow frame does not drift the
 whole animation. The decoder survives a pause, so a resume continues
 mid-loop rather than starting over.
 
-The thread draws a wrapper holding the canvas and the button. The wrapper is
-marked `is-playing` once the player takes over, which is what makes the
-canvas visible and the `<img>` go away. The button is hidden until the
-picture is hovered, exactly like the download button that is already on every
+The thread draws a wrapper holding the canvas. The wrapper is marked
+`is-playing` once the player takes over, which is what makes the canvas
+visible and the `<img>` go away.
+
+### The control is in the menu, not over the picture
+
+It was a button over the picture to begin with, hidden until the picture was
+hovered, and it fought with the picture itself: a left click on a picture
+opens it in the viewer, so a control sitting on top of that is a second thing
+to aim at, for something that is not wanted most of the time. It is a line at
+the top of the picture's right-click menu now, before Open image and Save
 image.
+
+The item has to say what the press will do, so the label is built from the
+player's own state rather than written out twice: "Play animation" for a
+picture that has stopped, "Pause animation" for one that is still going. The
+canvas carries the player, and the thread hands it to the menu, which is the
+only place that knows whether the reader has it paused. The player exposes
+that as a `paused` getter, and it is the reader's intent rather than whether
+the picture happens to be running: a picture that has scrolled out of sight
+is paused by the observer, but the reader has not asked for it to stop.
 
 ### The check samples the canvas, because the counters are not the claim
 
-`check:gifplayer` is 27 assertions in two phases. The first drives the player
+`check:gifplayer` is 32 assertions in two phases. The first drives the player
 module directly over a fixture built at run time: four frames of one colour
 each, 200ms a frame, so a sample says which frame is on screen. The second
 drives the **real `thread.js`** with a stubbed `window.beeper` against the real
@@ -2328,9 +2344,15 @@ the rest of the check pass for the wrong reason: a file with one frame is not
 an animation, and a file that is not a GIF at all cannot be played.
 
 `tools/gif-player-redproof.js` breaks the player on purpose, one thing at a
-time, in a copy of the tree, and insists the check notices each one: eight
-mutations, eight caught, with an asserted baseline that the untouched tree
+time, in a copy of the tree, and insists the check notices each one: ten
+mutations, ten caught, with an asserted baseline that the untouched tree
 passes first.
+
+The menu is proved by pressing it rather than by reading the label. The
+picture is watched across the press, and it has to stop changing and stay
+stopped. The state is set rather than waited for, so a picture that had not
+yet finished its three loops cannot change what the menu says and make the
+case fail for the wrong reason.
 
 ### The history progress check needed a slow machine to pass
 
@@ -2370,10 +2392,11 @@ broken for a while.
 
 **The CSS mutation stopped being a mutation.** The rule it changed was
 `cursor: pointer; opacity: 0; pointer-events: none;`, which was the only pair
-like that in the stylesheet. The GIF button carries the same pair for the same
-reason, so the pattern matched twice, the mutation was skipped, and the proof
-reported a hole instead of a catch. It is scoped to the `.att-download` rule
-now.
+like that in the stylesheet at the time. The GIF button carried the same pair
+for the same reason, so the pattern matched twice, the mutation was skipped,
+and the proof reported a hole instead of a catch. It is scoped to the
+`.att-download` rule now, so it names the rule it means rather than a pair of
+declarations that any rule might carry.
 
 **The stamp at creation was never load-bearing.** The proof removes
 `img.__attachment = attachment;` and expected the check to notice. It did not,
@@ -2452,8 +2475,8 @@ working, not a defect, and it is why a docs-only push still gets a release.
 
 | Check | Result |
 | --- | --- |
-| `check:gifplayer` | 29/29 checks passed, sampled from the canvas, with the real thread driven against the real markup (new) |
-| `tools/gif-player-redproof.js` | 9/9 mutations caught, no holes, with an asserted baseline (new) |
+| `check:gifplayer` | 32/32 checks passed, sampled from the canvas, with the real thread driven against the real markup (new) |
+| `tools/gif-player-redproof.js` | 10/10 mutations caught, no holes, with an asserted baseline (new) |
 | `check:update` | 63/63, after `check:update` gained a built helper to read the PE header of |
 | `check:updatefailure` | 23/23 checks passed, running the real helper against real executables, with no window (new) |
 | `check:handoff` | 29/29 checks passed, running the real helper with the real window on a desktop of its own, so nothing can be seen |
