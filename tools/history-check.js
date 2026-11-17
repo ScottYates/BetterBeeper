@@ -770,7 +770,7 @@ function fakeBeeper(pages, { failAfter = null, onPage } = {}) {
       const index = (perChat.get(chatID) || 0) + 1;
       perChat.set(chatID, index);
       calls.push({ chatID, cursor, direction, limit });
-      if (typeof onPage === 'function') onPage(calls.length);
+      if (typeof onPage === 'function') await onPage(calls.length);
       if (failAfter !== null && calls.length > failAfter) throw new Error('bridge is down');
 
       const items = [];
@@ -1350,7 +1350,18 @@ async function refreshAndJobsCases() {
     // panel only needs a few updates a second, and every one of those events is
     // an IPC broadcast to the renderer.
     const PAGES = 200;
-    const beeper = fakeBeeper(PAGES);
+    // The walk has to be slower than the interval the announcements are
+    // coalesced into, or there is nothing to coalesce. A machine that gets
+    // through 200 pages in under a quarter of a second finishes the whole
+    // walk inside one interval and announces nothing at all, which made this
+    // case fail on a fast machine and pass on a slow one for no good reason.
+    //
+    // The delay is what makes the case mean the same thing everywhere: a walk
+    // that takes about a second has to be announced, and it must be announced
+    // a handful of times rather than two hundred.
+    const beeper = fakeBeeper(PAGES, {
+      onPage: () => new Promise((resolve) => setTimeout(resolve, 4)),
+    });
     const events = [];
     const times = [];
     const sync = createHistorySync({
