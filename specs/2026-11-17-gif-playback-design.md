@@ -70,6 +70,42 @@ the renderer returns the bytes with no CORS problem, because the page and the
 scheme are treated as the same origin for this request. That is what the
 player uses, so **no new IPC channel is needed**.
 
+### The policy that stopped it
+
+The first version of this did not work, and the reason was the page's own
+security policy rather than the scheme.
+
+The app's `index.html` carries a Content Security Policy, and its `connect-src`
+was `'self'`. `connect-src` is the directive that governs `fetch()`, so the
+player's request for the attachment bytes was refused: "Refused to connect ...
+violates Content Security Policy directive: connect-src 'self'". The player
+then fell back to an ordinary `<img>`, which is an ordinary animated GIF: it
+plays forever, it cannot be paused, and the right-click menu had no play item
+on it, because there was no player behind it.
+
+The scheme was never the problem. It was already in `img-src`, which is why
+the picture itself loaded fine, and the same bytes were readable by the
+renderer as an image. What was missing was permission to read them as
+*data*. So `connect-src` is now `'self' beeper-file:`.
+
+That is not a new door. The scheme is served by the main process, it only
+reads the two folders that hold chat media, and the renderer could already
+load those same files through `img-src`.
+
+Two things followed from this, and both are now in the code:
+
+- **A GIF that falls back to a picture still has to be a proper picture.** When
+  the player gives up, the `<img>` it was drawn as stays in the document, and
+  the right-click menu is built from the element under the pointer. So that
+  `<img>` carries the attachment, exactly as the canvas does. Without it, a
+  GIF that could not be played could not be saved either.
+- **The check has to run under the app's own policy.** A check that served the
+  fixture over `file://` would not have seen this at all, because `'self'`
+  covers `file://`. The thread phase of the check now registers the
+  `beeper-file` scheme the way `src/main/main.js` does and serves the fixture
+  over it, so the page's real policy is what decides whether the player may
+  read the file.
+
 ## The shape of the thing
 
 A GIF attachment is drawn as a wrapper holding two parts:
@@ -143,6 +179,10 @@ the player's own opinion of what it did:
 - a one frame GIF gets no player, and a file that is not a GIF gets no
   player.
 
+The second phase also asks the page directly whether it may fetch the file at
+all, because a refusal reads as "the picture did not move" and would be
+reported as a broken player rather than as a broken policy.
+
 The player on its own is half the feature, so the second phase drives the
 **real `thread.js`** with a stubbed bridge against the real `index.html`
 markup, and looks at what the thread drew: that it drew a wrapper with a
@@ -152,20 +192,34 @@ picture the thread drew really moves and really stops by itself, and that
 right-clicking the canvas offers the same picture menu as any other image
 plus an item that pauses it.
 
+It also opens the chat a third time with a GIF that has one frame in it, so
+the fallback path is walked as well: the picture stays an ordinary `<img>`,
+gets no play item, and is still saveable from its menu.
+
 The menu is proved by pressing it, not by reading the label: the picture is
 watched across the press, and it has to stop changing and stay stopped. The
 state is set rather than waited for, so a picture that had not yet finished
 its three loops cannot change what the menu says.
 
 `node tools/gif-player-redproof.js` breaks the player on purpose in a copy of
-the tree and insists the check notices each break. Ten mutations, ten
+the tree and insists the check notices each break. Twelve mutations, twelve
 caught, with an asserted baseline that the untouched tree passes first: a loop
 limit that is one too small, a pause that does not pause, a play that does not
 play, a one frame file treated as an animation, frames that are decoded and
 thrown away instead of drawn, a thread that never hands the picture over, a
 thread that never offers the menu item, a menu item that always says the same
-thing, a menu item that does nothing, and a cached canvas that keeps the
-attachment it was first drawn with.
+thing, a menu item that does nothing, a cached canvas that keeps the
+attachment it was first drawn with, a security policy that forbids the player
+reading the file, and a GIF that is not an animation losing the attachment it
+would be saved by.
+
+The last of those breaks every path that can put the attachment onto a
+picture, not just one of them. The thread draws the list more than once, so
+the second draw hands back the same element and stamps it again on the way
+out: break only the stamp at creation and the reuse puts it straight back,
+which is the shape of hole the download proof found earlier. The rule being
+proved is that the fallback picture carries its attachment, and every path
+that can carry it has to go.
 
 ### One thing the check had to get right about itself
 

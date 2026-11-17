@@ -2327,7 +2327,7 @@ is paused by the observer, but the reader has not asked for it to stop.
 
 ### The check samples the canvas, because the counters are not the claim
 
-`check:gifplayer` is 32 assertions in two phases. The first drives the player
+`check:gifplayer` is 36 assertions in two phases. The first drives the player
 module directly over a fixture built at run time: four frames of one colour
 each, 200ms a frame, so a sample says which frame is on screen. The second
 drives the **real `thread.js`** with a stubbed `window.beeper` against the real
@@ -2344,8 +2344,8 @@ the rest of the check pass for the wrong reason: a file with one frame is not
 an animation, and a file that is not a GIF at all cannot be played.
 
 `tools/gif-player-redproof.js` breaks the player on purpose, one thing at a
-time, in a copy of the tree, and insists the check notices each one: ten
-mutations, ten caught, with an asserted baseline that the untouched tree
+time, in a copy of the tree, and insists the check notices each one: twelve
+mutations, twelve caught, with an asserted baseline that the untouched tree
 passes first.
 
 The menu is proved by pressing it rather than by reading the label. The
@@ -2444,6 +2444,75 @@ now keeps the error output as well as the results and prints both, so the
 difference between "the case failed" and "the check died" is visible in the
 output rather than guessed at.
 
+### The play item was missing because the page's own policy said so
+
+v1.32.1 shipped the play and pause in the right-click menu, and the menu did
+not have it. Scott's report was a screenshot of the menu on a GIF, and the
+menu said exactly three things: "Open image", "Copy image", "Copy image
+address". No play item, and no "Save image..." either.
+
+**The screenshot was the clue.** A missing "Save image..." is not about
+playing: that item appears when the element under the pointer carries the
+attachment behind it. So the element under the pointer had no attachment, and
+the element under the pointer was the `<img>`, not the canvas. The GIF had
+never been handed to the player at all.
+
+The cause was one word in the page's security policy. The renderer has to
+`fetch()` the attachment bytes to decode them, and `connect-src` is the
+directive that governs `fetch()`. The app's policy said `connect-src 'self'`,
+so the request was refused:
+
+    Refused to connect 'beeper-file://local/C:/...'
+    violates Content Security Policy directive: "connect-src 'self'".
+
+`beeper-file:` was in `img-src`, which is why the picture itself loaded and
+looked fine, and why the file was visible at all. What was missing was
+permission to read the same file as data. The player caught the refusal, gave
+up, and left the picture as an ordinary `<img>`: an animated GIF that plays
+forever, cannot be paused, and has no player behind it, so the menu had
+nothing to offer.
+
+The fix is `connect-src 'self' beeper-file:` in `src/renderer/index.html`.
+That is not a new door: the scheme is served by the main process, it only
+reads the two folders that hold chat media, and the renderer could already
+load those same files as images through `img-src`.
+
+Two things came with it.
+
+**The picture that could not be played also could not be saved.** The screenshot
+showed that too, and it was a second cause rather than a side effect. A GIF
+that cannot be played stays as the `<img>` it was drawn as, and the
+right-click menu is built from the element under the pointer. The `<img>` that
+`gifElement` makes for a GIF carried no attachment, and the refresh on reuse
+did not put one there either, so that picture had nothing behind it to save.
+The attachment is now stamped on the `<img>` at creation and refreshed on
+reuse, the same as it always was on the canvas.
+
+**The check now serves its fixture over the app's own `beeper-file:` scheme**,
+so the thread phase runs under the app's real policy. A check that served the
+fixture over `file://` could never have seen this, because `'self'` covers
+`file://` and the policy would have passed. The check also asks the page
+directly whether it may read the file, so a refusal is reported as a refusal
+and not as a picture that did not move.
+
+**The general lesson.** A page that has a policy of its own will refuse
+things quietly, and the refusal looks exactly like a broken feature. The
+check asks the page directly whether it may read the file, and the red proof
+breaks the policy on purpose, so the next time the policy is tightened by
+accident this is caught rather than shipped.
+
+### The mutation that removed one stamp was not a mutation
+
+The red proof broke the stamp at creation and the check stayed green. The
+reason is the same one the download proof found earlier: the thread draws the
+list more than once, so the second draw hands back the same element and
+stamps it again on the way out. Remove the stamp at creation and the reuse
+puts it straight back.
+
+The mutation now breaks **every** path that can carry the attachment onto a
+picture, which is what the rule actually says: the fallback picture carries
+its attachment. One path is not the rule, it is one way of keeping it.
+
 ## Verification status
 `npm run check:all` sweeps **60 suites**, and all 60 of them pass on a release
 commit. On the tree carrying the work, before the release is cut, 59 of them
@@ -2475,8 +2544,8 @@ working, not a defect, and it is why a docs-only push still gets a release.
 
 | Check | Result |
 | --- | --- |
-| `check:gifplayer` | 32/32 checks passed, sampled from the canvas, with the real thread driven against the real markup (new) |
-| `tools/gif-player-redproof.js` | 10/10 mutations caught, no holes, with an asserted baseline (new) |
+| `check:gifplayer` | 36/36 checks passed, sampled from the canvas, with the real thread driven against the real markup and the app's own security policy (new) |
+| `tools/gif-player-redproof.js` | 12/12 mutations caught, no holes, with an asserted baseline (new) |
 | `check:update` | 63/63, after `check:update` gained a built helper to read the PE header of |
 | `check:updatefailure` | 23/23 checks passed, running the real helper against real executables, with no window (new) |
 | `check:handoff` | 29/29 checks passed, running the real helper with the real window on a desktop of its own, so nothing can be seen |

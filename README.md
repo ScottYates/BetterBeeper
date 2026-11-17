@@ -72,6 +72,9 @@ The chat UI talks to Beeper's REST API and its live WebSocket event stream. Beep
   viewer and a button sitting on top of that would be a second thing to aim at. Opening a
   GIF in the full-screen viewer is left alone: that is an explicit request to watch it,
   so it plays as long as the window is open
+- A GIF that turns out not to be an animation, or that cannot be decoded, stays an ordinary
+  picture: still visible, still saveable from the right-click menu, and with no play item
+  pretending it can be played
 - Independent vertical scrolling for the chat list and the message thread, with infinite
   scroll backwards through history
 - Search inside the conversation that is open. The magnifier in the thread header opens a search
@@ -615,6 +618,12 @@ Each of these caused a real bug here.
   picture. The menu item has to say what the press will do, and the label is built from the
   player's own state, so a picture that has stopped by itself says "Play animation" and a
   picture that is still going says "Pause animation".
+- **A scheme that is allowed to show a picture is not allowed to read it.** The player has
+  to `fetch()` the bytes to decode them, and `connect-src` is the directive that governs
+  `fetch()`. `beeper-file:` was in `img-src` but not in `connect-src`, so the request was
+  refused, the GIF fell back to an ordinary `<img>`, and the menu had no play item on it at
+  all. The symptom was "the feature does not work", and the cause was a one-word policy
+  in the page's `<meta>` tag. The red proof breaks that policy on purpose now.
 
 - **The HTML sanitizer must nest, not just filter.** The allowlist walk appended each
   cleaned element and then appended that element's children as its *siblings*, so every
