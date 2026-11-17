@@ -2,9 +2,23 @@
 <html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8" />
+    <!--
+      The security policy, in one line.
+
+      beeper-file: is the app's own scheme for chat media, and it is in
+      connect-src because the GIF player fetches the bytes to decode them: an
+      animated GIF is drawn by the app rather than by the browser, so the
+      renderer has to read the file. Without it here the fetch is refused, the
+      GIF falls back to an ordinary picture and plays forever, which is the
+      thing the player exists to stop.
+
+      That is not a new door. The scheme is served by the main process, which
+      only reads the two folders that hold chat media, and the renderer could
+      already load those same files as images through img-src.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' beeper-file: data: https:; media-src 'self' beeper-file: data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'"
+      content="default-src 'self'; img-src 'self' beeper-file: data: https:; media-src 'self' beeper-file: data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' beeper-file:"
     />
     <title>Better Beeper</title>
     <link rel="stylesheet" href="styles.css" />

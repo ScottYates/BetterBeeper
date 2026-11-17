@@ -110,7 +110,7 @@ function reporter() {
  * a GIF, so the thread has to hand it to the player and the reader has to be
  * able to reach the picture with the mouse.
  */
-function threadScript(threadURL, playerURL, gifURL) {
+function threadScript(threadURL, playerURL, gifURL, stillURL) {
   const harness = `
     (async () => {
       const T = await import(${JSON.stringify(threadURL)});
@@ -123,9 +123,27 @@ function threadScript(threadURL, playerURL, gifURL) {
       // come back out of the cache.
       let opens = 0;
 
+      // Can this page read the file at all? The player has to fetch the bytes
+      // to decode them, and the app's own security policy is what decides
+      // that. Asked here as well as in the thread, so a refusal is reported
+      // as a refusal and not as a picture that did not move.
+      const fetchResult = {};
+      try {
+        const res = await fetch(${JSON.stringify(gifURL)});
+        fetchResult.threadFetchOk = res.ok === true;
+        if (!res.ok) fetchResult.threadFetchError = 'the server answered ' + res.status;
+      } catch (err) {
+        fetchResult.threadFetchOk = false;
+        fetchResult.threadFetchError = String(err && err.message);
+      }
+
       window.beeper = {
         app: { badge: async () => envelope(true) },
-        assets: { resolve: async () => envelope({ url: ${JSON.stringify(gifURL)} }) },
+        assets: {
+          resolve: async (att) => envelope({
+            url: att && att.id === 'att-still' ? ${JSON.stringify(stillURL)} : ${JSON.stringify(gifURL)},
+          }),
+        },
         images: { copy: async () => envelope(true), openViewer: async () => envelope(true) },
         shell: { openExternal: async () => envelope(true) },
         chats: {
@@ -139,6 +157,13 @@ function threadScript(threadURL, playerURL, gifURL) {
           open: async () => {
             opens += 1;
             const again = opens > 1;
+            // The third time, the attachment is a GIF with one frame in it,
+            // which is not an animation. The thread has to keep it as an
+            // ordinary picture, and that picture has to be saveable.
+            const still = opens > 2;
+            const attachment = still
+              ? { id: 'att-still', fileName: 'still.gif', fileSize: 512, mimeType: 'image/gif' }
+              : { id: 'att-gif', fileName: 'funny.gif', fileSize: again ? 8192 : 4096, mimeType: 'image/gif' };
             return envelope({
               messages: [{
                 id: 'm-gif',
@@ -148,12 +173,7 @@ function threadScript(threadURL, playerURL, gifURL) {
                 senderID: 's',
                 senderName: 'Someone',
                 isSender: false,
-                attachments: [{
-                  id: 'att-gif',
-                  fileName: 'funny.gif',
-                  fileSize: again ? 8192 : 4096,
-                  mimeType: 'image/gif',
-                }],
+                attachments: [attachment],
               }],
               complete: true,
               hasMore: false,
@@ -193,7 +213,7 @@ function threadScript(threadURL, playerURL, gifURL) {
         await sleep(${SAMPLE_MS});
       }
 
-      const out = { samples: samples.length };
+      const out = { samples: samples.length, ...fetchResult };
       let changes = 0;
       let last = null;
       let lastAt = 0;
@@ -322,6 +342,31 @@ function threadScript(threadURL, playerURL, gifURL) {
       out.rebuiltIsPlaying = Boolean(
         rebuilt && rebuilt.closest('.att-gif-wrap')?.classList.contains('is-playing')
       );
+
+      // ---- and a GIF that is not an animation is an ordinary picture ----
+      //
+      // One frame is not an animation, so the thread keeps the picture as the
+      // <img> it was drawn as, and there is no play item over it. It still
+      // has to be an ordinary picture in every other way, and the first of
+      // those ways is that it can be saved: the right-click menu is built
+      // from the element under the pointer, and that element is this one.
+      await T.openChat('h1');
+      await sleep(400);
+      const stillImg = document.querySelector('#message-list img.att-image');
+      out.stillIsAnImage = Boolean(stillImg);
+      out.stillHasAttachment = Boolean(stillImg && stillImg.__attachment);
+      if (stillImg) {
+        document.querySelectorAll('.msg-menu').forEach((n) => n.remove());
+        stillImg.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 40,
+          clientY: 40,
+        }));
+        await sleep(250);
+        out.stillMenuLabels = Array.from(document.querySelectorAll('.msg-menu button'))
+          .map((b) => b.textContent);
+      }
 
       return JSON.stringify(out);
     })()
@@ -511,7 +556,28 @@ function buildThreadHarness(dir) {
 }
 
 async function main() {
-  const { app, BrowserWindow, session } = require('electron');
+  const { app, BrowserWindow, protocol, session } = require('electron');
+
+  // The app's own scheme for chat media, registered the way
+  // src/main/main.js registers it. The thread phase serves the fixture over
+  // it, so the page's own security policy applies to the player's fetch.
+  //
+  // That matters: the player reads the bytes to decode them, and a policy
+  // that forbids the fetch turns every animated GIF back into an ordinary
+  // picture that plays forever. A check that served the fixture over file://
+  // would not see it, because 'self' covers file:// and nothing else.
+  protocol.registerSchemesAsPrivileged([
+    {
+      scheme: 'beeper-file',
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        stream: true,
+        corsEnabled: true,
+      },
+    },
+  ]);
 
   // An isolated profile, so the test can never read a cached copy of anything.
   app.setPath('userData', path.join(os.tmpdir(), 'bb-gif-player-check-profile'));
@@ -542,6 +608,32 @@ async function main() {
   // it and a change to the stylesheet is not seen. The red proof breaks the
   // stylesheet on purpose, and it has to notice.
   await session.defaultSession.clearCache();
+
+  // The scheme the thread phase reads the fixtures over. Only those two files
+  // are served, and the path has to match exactly, so the scheme is a hole
+  // the size of the fixtures rather than a way to read the disk.
+  const served = new Set([path.resolve(gifPath), path.resolve(stillPath)]);
+  protocol.handle('beeper-file', async (request) => {
+    try {
+      const url = new URL(request.url);
+      let filePath = decodeURIComponent(url.pathname).replace(/^\/+/, '');
+      if (!filePath && url.hostname && url.hostname !== 'local') {
+        filePath = decodeURIComponent(url.hostname + url.pathname);
+      }
+      if (process.platform === 'win32') filePath = filePath.replace(/\//g, '\\');
+      if (!served.has(path.resolve(filePath))) {
+        return new Response('not that file', { status: 403 });
+      }
+      const body = fs.readFileSync(filePath);
+      return new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'image/gif' },
+      });
+    } catch {
+      return new Response('bad media path', { status: 400 });
+    }
+  });
+
   // Expire on our own rather than being killed from outside, which would pop
   // an Electron error dialog that looks like the app under test crashing.
   harnessGuard(app, { label: 'check:gifplayer' });
@@ -709,10 +801,24 @@ async function main() {
     threadScript(
       pathToFileURL(path.join(ROOT, 'src', 'renderer', 'js', 'thread.js')).href,
       pathToFileURL(path.join(ROOT, 'src', 'renderer', 'js', 'gif-player.js')).href,
-      pathToFileURL(gifPath).href
+      // Over the app's own scheme, not file://. The page is the app's own
+      // page, with the app's own security policy, and that policy is what
+      // decides whether the player may read the file at all.
+      `beeper-file://local/${gifPath.replace(/\\/g, '/').replace(/^\/+/, '')}`,
+      // The still picture is served over the same scheme, for the same
+      // reason: it has to reach the thread the same way the animation does.
+      `beeper-file://local/${stillPath.replace(/\\/g, '/').replace(/^\/+/, '')}`
     ),
     true
   ));
+
+  add('the app can read the file over its own scheme', () => {
+    // The player fetches the bytes to decode them. If the app's security
+    // policy forbids that fetch, the GIF falls back to an ordinary picture
+    // and plays forever, which is the thing the player exists to stop.
+    return threadOut.threadFetchOk === true
+      || ('the fetch was refused: ' + (threadOut.threadFetchError || 'no answer'));
+  });
 
   add('the thread resolves the attachment to a URL', () => {
     return String(threadOut.srcURL || '').endsWith('animation.gif')
@@ -768,6 +874,15 @@ async function main() {
     return threadOut.menuShown === true || 'no menu appeared';
   });
 
+  add('the picture can still be saved from the menu', () => {
+    // Every picture in a message can be saved, and the menu is built from
+    // the element under the pointer. A GIF that is being played is a canvas,
+    // and a GIF that turned out not to be an animation is the <img> it
+    // stayed as, so both have to carry the attachment behind them.
+    return (threadOut.menuLabels || []).indexOf('Save image...') !== -1
+      || ('the menu said ' + JSON.stringify(threadOut.menuLabels));
+  });
+
   add('the menu offers to play a paused animation', () => {
     // The picture is paused, so the item has to say Play. An item that says
     // the wrong thing is worse than no item: the reader presses Play and the
@@ -806,6 +921,22 @@ async function main() {
     // behind, playing forever, which is the thing this feature exists to
     // stop.
     return threadOut.rebuiltIsPlaying === true || 'the rebuilt picture is not being played';
+  });
+
+  add('a GIF that is not an animation stays an ordinary picture', () => {
+    // A GIF with one frame in it is a picture, not an animation. The thread
+    // has to leave it as the <img> it was drawn as, because a play item over
+    // a still picture would be a lie.
+    return threadOut.stillIsAnImage === true || 'the still picture is not an image';
+  });
+
+  add('a picture that is not an animation can still be saved', () => {
+    // The right-click menu is built from the element under the pointer, and
+    // that element has to know which file it is. The still picture is an
+    // <img> that the thread made for a GIF, so it has to carry the
+    // attachment even though it is not being played.
+    return (threadOut.stillMenuLabels || []).indexOf('Save image...') !== -1
+      || ('the menu said ' + JSON.stringify(threadOut.stillMenuLabels));
   });
 
   // The windows are NOT destroyed here.

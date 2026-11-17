@@ -252,6 +252,49 @@ const CASES = [
       );
     },
   },
+  {
+    // The player reads the bytes to decode them, and the app's own security
+    // policy is what says whether it may. A policy that forbids the fetch
+    // turns every animated GIF back into an ordinary picture that plays
+    // forever, which is the thing the player exists to stop.
+    name: "the app's security policy forbids the player reading the file",
+    expect: 'the app can read the file over its own scheme',
+    break: (tree) => {
+      replaceIn(
+        path.join(tree, 'src', 'renderer', 'index.html'),
+        /connect-src 'self' beeper-file:/,
+        "connect-src 'self'"
+      );
+    },
+  },
+  {
+    // A GIF that turns out not to be an animation stays as the ordinary
+    // picture it was drawn as, and the right-click menu is built from that
+    // element. Without the attachment on it, that picture cannot be saved.
+    //
+    // Both places that put the attachment on a picture are broken here, and
+    // both have to be. The thread draws the list more than once, so the
+    // second draw hands back the same element and stamps it again on the way
+    // out: break only the stamp at creation and the reuse puts it straight
+    // back, which is the shape of hole that was found in the download proof.
+    // The rule being proved is that the fallback picture carries its
+    // attachment, and every path that can carry it has to go.
+    name: 'a GIF that is not an animation cannot be saved',
+    expect: 'a picture that is not an animation can still be saved',
+    break: (tree) => {
+      const file = path.join(tree, 'src', 'renderer', 'js', 'thread.js');
+      replaceIn(
+        file,
+        /  img\.__attachment = attachment;\r?\n\r?\n  const canvas = el\('canvas', \{ class: 'att-gif-canvas' \}\);/,
+        "  const canvas = el('canvas', { class: 'att-gif-canvas' });"
+      );
+      replaceIn(
+        file,
+        /      picture\.__attachment = attachment;/,
+        '      // broken on purpose: the picture carries nothing to save'
+      );
+    },
+  },
 ];
 
 let caught = 0;

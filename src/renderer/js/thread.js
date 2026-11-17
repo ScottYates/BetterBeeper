@@ -1807,7 +1807,14 @@ function imageElement(attachment) {
     // the wrong file.
     cached.__attachment = attachment;
     const picture = cached.tagName === 'IMG' ? cached : cached.querySelector('img');
-    if (picture) picture.alt = attachment.fileName || 'image';
+    if (picture) {
+      picture.alt = attachment.fileName || 'image';
+      // The attachment goes on the picture as well as on the wrapper, for
+      // the same reason it does at creation: the right-click menu is built
+      // from the element under the pointer, and that element has to know
+      // which file it is.
+      picture.__attachment = attachment;
+    }
     // A GIF that is playing is a canvas, and the right-click menu is built
     // from the element under the pointer. The canvas carries its own copy of
     // the attachment, so it has to be refreshed too, or saving the picture
@@ -1889,6 +1896,16 @@ function gifElement(attachment) {
       openLightbox(event.currentTarget.src);
     },
   });
+  // The attachment is on the <img> as well as on the canvas, because the
+  // <img> is what a GIF that turns out not to be an animation stays as, and
+  // the right-click menu is built from the element under the pointer. Without
+  // it here, that picture could not be saved.
+  //
+  // The stamp is here as well as on the wrapper because the picture is drawn
+  // before anybody can right-click it. The refresh on reuse covers the other
+  // half: the same element outlives the draw it was made for, and the file
+  // behind it can change.
+  img.__attachment = attachment;
 
   const canvas = el('canvas', { class: 'att-gif-canvas' });
   canvas.__attachment = attachment;
