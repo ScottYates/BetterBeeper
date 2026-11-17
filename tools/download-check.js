@@ -220,6 +220,27 @@ async function main() {
           bareLabels.indexOf('Open image') !== -1 || JSON.stringify(bareLabels));
       }
 
+      // ---- a picture with no cache key -------------------------------------
+      //
+      // A picture with an id is cached, so the next draw of the thread hands
+      // back the same element and stamps it again on the way out. The stamp at
+      // creation is therefore invisible to every other case here: remove it
+      // and the reuse puts it straight back, which is why this one was written
+      // and why the mutation that removes it was a hole.
+      //
+      // A picture with no id, no address and no name has no cache key at all,
+      // so it is drawn afresh every time and the only thing that can put its
+      // attachment on it is the stamp at creation.
+      const looseAtt = { fileName: '', mimeType: 'image/png', fileSize: 16 };
+      St.state.messages.set(CHAT.id, [msg('~dl:loose', [looseAtt])]);
+      T.closeThread();
+      await T.openChat(CHAT.id);
+      await wait(200);
+      const loose = Array.from(document.querySelectorAll('#message-list img.att-image'))
+        .find((n) => n.__attachment && n.__attachment.fileSize === 16);
+      add('a picture with no cache key still carries its attachment',
+        loose ? true : 'the element had nothing to save');
+
       // ---- the video path --------------------------------------------------
 
       const vidAtt = { id: 'att-vid-1', fileName: 'clip.mp4', mimeType: 'video/mp4', fileSize: 999 };
@@ -407,9 +428,15 @@ async function main() {
     ['the video fallback replaces the wrapper, not the bare player',
       /if \(!wrap\.isConnected\) return;\s*wrap\.replaceWith\(fileNode\(attachment\)\);/.test(threadSrc)],
     ['the image menu is given the attachment to save',
-      /attachment: img\.__attachment/.test(threadSrc)],
+      // The element under the pointer is not always an <img> any more: a GIF
+      // that is playing is a canvas, and the menu is built from whichever one
+      // it is. The rule is the same either way, so the pattern is about the
+      // rule and not about the name of the variable.
+      /attachment: (?:img|picture)\.__attachment/.test(threadSrc)],
     ['the attachment is stamped on the image at creation',
       /img\.__attachment = attachment;/.test(threadSrc)],
+    ['and on the canvas of a GIF that is playing',
+      /canvas\.__attachment = attachment;/.test(threadSrc)],
     ['the cached image has it refreshed on reuse too',
       /cached\.__attachment = attachment;/.test(threadSrc)],
     ['the message menu uses the shared rule for its label',

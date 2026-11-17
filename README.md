@@ -64,6 +64,15 @@ The chat UI talks to Beeper's REST API and its live WebSocket event stream. Beep
   0. A typing indicator or a read receipt was enough to restart every GIF on
   screen, so in a busy chat they never appeared to move, while in a quiet chat
   they played fine
+- An animated GIF in a thread plays three times and then stops on its own, and
+  a play/pause button sits over it that only appears when the mouse is over the
+  picture. The app draws the frames itself, with WebCodecs, because a GIF in an
+  `<img>` cannot be paused: pausing freezes the picture on the exact frame that
+  was showing, not on the first one, and pressing play again runs it until
+  pause is pressed. The button is there for the GIF that is still going, and it
+  is hidden the rest of the time. Opening a GIF in the full-screen viewer is
+  left alone: that is an explicit request to watch it, so it plays as long as
+  the window is open
 - Independent vertical scrolling for the chat list and the message thread, with infinite
   scroll backwards through history
 - Search inside the conversation that is open. The magnifier in the thread header opens a search
@@ -283,6 +292,7 @@ npm run check:refreshchats # the chat list refresh tells the truth about what ar
 npm run check:participants # everyone in a conversation is named and ordered properly
 npm run check:visibility # hiding and locally deleting a message, and surviving a restart
 npm run check:gif       # an animated GIF really advances frames on screen
+npm run check:gifplayer # a GIF plays three times, then stops, and the button over it works
 npm run check:gifrebuild # the thread is only rebuilt when what it draws changed
 npm run check:syntax    # every JS file parses, so a broken check cannot pose as an app crash
 npm run check:bump      # the semver level chosen from a commit message is right
@@ -478,7 +488,7 @@ src/
   renderer/
     index.html       app shell
     styles.css       design tokens, dark/light themes
-    js/              main, sidebar, thread, modals, state, api, ui, util
+    js/              main, sidebar, thread, modals, state, api, ui, util, gif-player
     viewer.html      the image-viewer window's own shell
     viewer.css       viewer chrome: zoom badge, toolbar, hint
     js/viewer.js     viewer zoom / pan / close, standalone (no preload, sandboxed)
@@ -515,6 +525,10 @@ src/
     icon-render.js    the renderer that draws the artwork at every size Windows wants
     icon-format.js    the .ico container, written and read back in plain JavaScript
     app-icon-check.js check: the icon files still match the artwork, and the app uses them
+    gif-writer.js     build a GIF byte by byte, for the checks that need a known file
+    gif-player-check.js check: a GIF plays three times, then stops, and the button works
+    gif-player-harness.html  page that hosts gif-player-check.js
+    gif-player-redproof.js  prove the player check fails when the player is broken
     app-icon-redproof.js  prove the icon check fails when the files are broken on purpose
     update-failure-check.js  check: run the real handoff helper against real executables, and see what it leaves behind
     update-failure-redproof.js  prove the failure-path checks fail when the rules are broken
@@ -582,6 +596,21 @@ Each of these caused a real bug here.
 - **A rebuild that looks identical is not free.** It is easy to assume re-rendering the same
   rows is harmless. Measured on this app, ten updates that changed nothing on screen produced
   220 DOM mutations, and the same ten produce none now.
+
+- **A GIF in an `<img>` cannot be paused.** There is no way to stop a native animated GIF,
+  and drawing one onto a canvas always gives frame 0, so the current frame cannot be
+  snapshotted either. The app therefore decodes the file itself with the WebCodecs
+  `ImageDecoder` and draws the frames onto a canvas. That is the whole reason the play/pause
+  button exists: pausing freezes the picture on the exact frame that was showing, which the
+  browser would not let anyone do.
+- **A GIF that is decoded but never drawn still passes a counter.** The counters the player
+  keeps say how many frames went past, so a player that decoded every frame and threw the
+  pictures away would look correct to them. `check:gifplayer` samples the canvas itself and
+  compares the colours it finds, and the red proof breaks the drawing on purpose to prove
+  the check notices.
+- **Three loops is the automatic playthrough, not a limit.** The GIF stops by itself after
+  three loops because that is what a reader in a busy chat wants. Pressing play afterwards
+  runs it until pause is pressed, because a reader who asks to watch a GIF wants to watch it.
 
 - **The HTML sanitizer must nest, not just filter.** The allowlist walk appended each
   cleaned element and then appended that element's children as its *siblings*, so every

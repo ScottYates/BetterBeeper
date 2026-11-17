@@ -79,3 +79,28 @@ export function isPlayable(attachment) {
   const kind = mediaKind(attachment);
   return kind === 'image' || kind === 'video';
 }
+
+/**
+ * Whether an attachment is a GIF.
+ *
+ * The same rule as mediaKind: a specific mime type wins, then the extension.
+ * A GIF that arrives as application/octet-stream with a .gif name is still a
+ * GIF, and a PNG named .gif is still a PNG.
+ *
+ * This is asked separately from mediaKind because a GIF is the one picture the
+ * app plays itself, and the answer decides whether the reader gets a play
+ * button over it.
+ */
+export function isGifAttachment(attachment) {
+  if (!attachment || typeof attachment !== 'object') return false;
+
+  const mime = String(attachment.mimeType || attachment.mime || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+  if (mime === 'image/gif') return true;
+  // Any other specific type is a different format, whatever it is called.
+  if (mime.startsWith('image/') || mime.startsWith('video/')) return false;
+
+  return mediaExtension(attachment) === 'gif';
+}

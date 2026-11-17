@@ -32,7 +32,8 @@ import {
   saveEdit,
 } from './composer-edit.js';
 import { api, call, callOk, FAILED } from './api.js';
-import { mediaKind } from './media-kind.js';
+import { mediaKind, isGifAttachment } from './media-kind.js';
+import { GifPlayer } from './gif-player.js';
 import {
   state,
   bus,
@@ -293,12 +294,19 @@ export function initThread() {
   // so the attachment is always there. It is still read off the element rather
   // than assumed, so a Save item can only appear for an image that really has
   // something behind it to save.
+  //
+  // An animated GIF is not an <img> while it is playing: it is drawn on a
+  // canvas, because a GIF in an <img> cannot be stopped. So the picture under
+  // the pointer is either an <img> or that canvas, and both carry the address
+  // of the file and the attachment behind it.
   $('#message-list').addEventListener('contextmenu', (event) => {
-    const img = event.target.closest?.('img');
-    if (!img || !img.src) return;
-    if (!imageMenu(img, img.src, {
+    const picture = event.target.closest?.('img, canvas.att-gif-canvas');
+    if (!picture) return;
+    const src = picture.__srcURL || picture.src;
+    if (!src) return;
+    if (!imageMenu(picture, src, {
       pointer: { x: event.clientX, y: event.clientY },
-      attachment: img.__attachment,
+      attachment: picture.__attachment,
     })) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1741,8 +1749,8 @@ function resolveSrc(attachment) {
 // ---------------------------------------------------------------------------
 // Image elements are kept across re-renders
 //
-// An animated GIF only stays animated if the <img> element that is playing it
-// is the same element. A fresh element on the same file starts again at frame
+// An animated GIF only stays animated if the element that is playing it is
+// the same element. A fresh element on the same file starts again at frame
 // 0, and the thread is rebuilt from scratch on every incoming event - a typing
 // indicator or a read receipt is enough. In a chat with any traffic at all
 // that meant the file was restarted several times a second and the GIF never
@@ -1751,6 +1759,11 @@ function resolveSrc(attachment) {
 // Moving an element within the document does not disturb it: the decoder keeps
 // running and the phase is preserved. So the element is cached by attachment
 // and reused, which is what stops the restart.
+//
+// The cached thing is the whole picture, not just an <img>. A GIF that is
+// being played is drawn on a canvas inside a wrapper, and it is that wrapper
+// which has to survive the rebuild: throw it away and the player starts from
+// the beginning, with the button in the wrong state.
 //
 // A key may only be claimed once per pass, or an attachment that appears in
 // two messages would be yanked out of the first one to serve the second.
@@ -1764,21 +1777,65 @@ function resetImageClaims() {
   claimedImages.clear();
 }
 
+/**
+ * The picture for an attachment: an <img>, or a wrapper holding a GIF that
+ * is being played.
+ *
+ * The attachment is stashed on the element because the contextmenu handler is
+ * delegated to the message list and only has the element to work from. The src
+ * is not enough: it is a resolved beeper-file:// URL, which carries no name
+ * and nothing the save dialog can hand to the main process.
+ */
 function imageElement(attachment) {
   const key = attachment.id || attachment.srcURL || attachment.fileName || '';
   const cached = key ? imgCache.get(key) : null;
 
   if (cached && !claimedImages.has(cached)) {
     claimedImages.add(cached);
-    cached.alt = attachment.fileName || 'image';
     // Refreshed on reuse as well as on create. The element outlives any single
     // render, and an image can reappear in a later message with a different
     // attachment object behind it, so carrying the first one forward would save
     // the wrong file.
     cached.__attachment = attachment;
+    const picture = cached.tagName === 'IMG' ? cached : cached.querySelector('img');
+    if (picture) picture.alt = attachment.fileName || 'image';
+    // A GIF that is playing is a canvas, and the right-click menu is built
+    // from the element under the pointer. The canvas carries its own copy of
+    // the attachment, so it has to be refreshed too, or saving the picture
+    // would offer the file the canvas was first drawn from.
+    if (cached.tagName !== 'IMG') {
+      const canvas = cached.querySelector('canvas.att-gif-canvas');
+      if (canvas) canvas.__attachment = attachment;
+    }
     return cached;
   }
 
+  const node = isGifAttachment(attachment)
+    ? gifElement(attachment)
+    : plainImageElement(attachment);
+
+  if (key) {
+    if (imgCache.size >= IMG_CACHE_LIMIT) {
+      // Map preserves insertion order, so the first key is the oldest.
+      const oldest = imgCache.keys().next().value;
+      if (oldest !== undefined) {
+        const evicted = imgCache.get(oldest);
+        imgCache.delete(oldest);
+        // A GIF holds a canvas, and a canvas holds pixels. Letting one go
+        // without saying so would leave the memory behind for as long as the
+        // app is open.
+        if (evicted && evicted.__player) evicted.__player.dispose();
+      }
+    }
+    imgCache.set(key, node);
+    claimedImages.add(node);
+  }
+
+  return node;
+}
+
+/** An ordinary picture. */
+function plainImageElement(attachment) {
   const img = el('img', {
     class: 'att-image',
     alt: attachment.fileName || 'image',
@@ -1789,25 +1846,123 @@ function imageElement(attachment) {
     },
   });
   // The attachment is stashed on the element because the contextmenu handler is
-  // delegated to the message list and only has the <img> to work from. The src
+  // delegated to the message list and only has the element to work from. The src
   // is not enough: it is a resolved beeper-file:// URL, which carries no name
   // and nothing the save dialog can hand to the main process.
   img.__attachment = attachment;
-
-  if (key) {
-    if (imgCache.size >= IMG_CACHE_LIMIT) {
-      // Map preserves insertion order, so the first key is the oldest.
-      const oldest = imgCache.keys().next().value;
-      if (oldest !== undefined) imgCache.delete(oldest);
-    }
-    imgCache.set(key, img);
-    claimedImages.add(img);
-  }
 
   resolveSrc(attachment).then((url) => {
     if (url && img.src !== url) img.src = url;
   });
   return img;
+}
+
+/**
+ * An animated GIF: a wrapper holding the picture, the frames the player
+ * draws, and the button that stops them.
+ *
+ * The <img> is made first and it is what loads the file. It has two jobs:
+ * it is the lazy-load trigger, so a GIF that is not near the viewport is not
+ * read at all, and it is the fallback - a GIF with one frame, or one that
+ * cannot be decoded, stays an ordinary picture with no button on it.
+ *
+ * Once the player has the first frame the <img> is taken out of the
+ * document. Left in, the browser would keep playing the same animation
+ * underneath the canvas, which is the very thing this is here to stop.
+ */
+function gifElement(attachment) {
+  const img = el('img', {
+    class: 'att-image',
+    alt: attachment.fileName || 'image',
+    loading: 'lazy',
+    onClick: (event) => {
+      event.stopPropagation();
+      openLightbox(event.currentTarget.src);
+    },
+  });
+
+  const canvas = el('canvas', { class: 'att-gif-canvas' });
+  canvas.__attachment = attachment;
+  canvas.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openLightbox(canvas.__srcURL || '');
+  });
+
+  const button = el(
+    'button',
+    {
+      class: 'att-gif-toggle',
+      type: 'button',
+      title: 'Pause animation',
+      'aria-label': 'Pause animation',
+      onClick: (event) => {
+        event.stopPropagation();
+        if (wrap.__player) wrap.__player.toggle();
+      },
+    },
+    el('span', { text: '\u23F8' }),
+  );
+
+  const wrap = el('div', { class: 'att-gif-wrap' }, img, canvas, button);
+  // The wrapper carries the attachment as well, because the wrapper is the
+  // thing that is cached and reused across a rebuild.
+  wrap.__attachment = attachment;
+
+  resolveSrc(attachment).then((url) => {
+    if (!url) return;
+    img.__srcURL = url;
+    canvas.__srcURL = url;
+    if (img.src !== url) img.src = url;
+    // The player waits for the picture to load, so a GIF that is nowhere near
+    // the viewport is never fetched and never decoded.
+    img.addEventListener('load', () => { startGifPlayer(wrap, attachment, url); }, { once: true });
+  });
+
+  return wrap;
+}
+
+/**
+ * Hand a GIF over to the player.
+ *
+ * If it turns out not to be an animation, or not to be a GIF we can read,
+ * the wrapper gives up the canvas and the button and the picture is an
+ * ordinary <img> again. A play button over a still picture would be a lie,
+ * and a broken file still has to be visible and still saveable.
+ */
+async function startGifPlayer(wrap, attachment, url) {
+  const canvas = wrap.querySelector('canvas.att-gif-canvas');
+  const button = wrap.querySelector('.att-gif-toggle');
+  const img = wrap.querySelector('img');
+  if (!canvas || !button || !img) return;
+
+  const player = new GifPlayer({ canvas, button, url });
+  let animated = false;
+  try {
+    animated = await player.load();
+  } catch {
+    animated = false;
+  }
+
+  if (!animated) {
+    player.dispose();
+    canvas.remove();
+    button.remove();
+    return;
+  }
+
+  wrap.__player = player;
+  player.watchVisibility();
+  player.start();
+  // The automatic start is not the reader pressing play: the three loops are
+  // the default, and only the reader's own press lifts that.
+  player.play();
+
+  // The canvas takes the place of the picture. The wrapper is marked so the
+  // stylesheet can show the canvas and hide the image, which keeps the box
+  // the same size: both are capped at the same width and both keep the
+  // picture's proportions.
+  wrap.classList.add('is-playing');
+  img.remove();
 }
 
 /**

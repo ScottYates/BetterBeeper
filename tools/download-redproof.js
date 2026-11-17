@@ -31,7 +31,7 @@ const MUTATIONS = [
   {
     what: 'the context menu stops passing the attachment through',
     file: 'thread',
-    from: '      attachment: img.__attachment,\n',
+    from: '      attachment: picture.__attachment,\n',
     to: '',
     expect: 'right-clicking an attachment image offers to save it',
   },
@@ -47,7 +47,12 @@ const MUTATIONS = [
     file: 'thread',
     from: '  img.__attachment = attachment;\n',
     to: '',
-    expect: 'the image carries the attachment it was drawn from',
+    // The case that proves the stamp at creation is the one about a picture
+    // with no cache key. A picture with a key is stamped again by the reuse
+    // path the moment the thread is drawn a second time, so the case about
+    // the first image stayed green with the stamp removed, and the mutation
+    // was a hole for as long as it pointed at that one.
+    expect: 'a picture with no cache key still carries its attachment',
   },
   {
     what: 'a reused image element keeps the attachment it first had',
@@ -129,8 +134,24 @@ const MUTATIONS = [
   {
     what: 'the invisible save button still takes clicks',
     file: 'css',
-    from: 'cursor: pointer; opacity: 0; pointer-events: none;',
-    to: 'cursor: pointer; opacity: 0;',
+    // Scoped to the .att-download rule on purpose. The GIF button over a
+    // playing animation carries the same pair of declarations for the same
+    // reason, so a pattern that was only the pair matched both rules and the
+    // mutation stopped being a mutation at all.
+    from: '.att-download {\n  position: absolute; top: 6px; right: 6px;\n'
+      + '  width: 28px; height: 28px; padding: 0;\n'
+      + '  display: flex; align-items: center; justify-content: center;\n'
+      + '  border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.25);\n'
+      + '  background: rgba(0, 0, 0, 0.62); color: #fff;\n'
+      + '  font-family: inherit; font-size: 14px; line-height: 1;\n'
+      + '  cursor: pointer; opacity: 0; pointer-events: none;',
+    to: '.att-download {\n  position: absolute; top: 6px; right: 6px;\n'
+      + '  width: 28px; height: 28px; padding: 0;\n'
+      + '  display: flex; align-items: center; justify-content: center;\n'
+      + '  border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.25);\n'
+      + '  background: rgba(0, 0, 0, 0.62); color: #fff;\n'
+      + '  font-family: inherit; font-size: 14px; line-height: 1;\n'
+      + '  cursor: pointer; opacity: 0;',
     expect: 'the save button starts unclickable while it is invisible',
   },
   {
