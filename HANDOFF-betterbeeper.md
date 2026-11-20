@@ -2209,6 +2209,18 @@ with its real window, and reads back what it did. The result was 48 visible
 windows, every one of them the user's own, and one foreground window, the
 user's own browser. Nothing else appeared, and the focus never changed.
 
+**And it held for a tool written after the rule.** The prune tool added on
+2026-11-20 started `where.exe` and `gh` without `windowsHide: true` - the
+same mistake in the same shape, in a file that did not exist when the rule was
+written. The sweep caught it on its first run: 60 of 61 suites passed, and the
+one that did not was `check:nowindow`, naming the two spawns. Both were fixed
+and the suite is green again.
+
+A rule that only the tools that already obey it are held to is not a rule. The
+check reads the source of every tool in the repository, so a tool written after
+the rule is still held to it - which is the only reason the prune's `gh` calls
+would ever have been caught.
+
 ### The proof of the rule was the popup it was about
 
 **What was asked:** "you are popping up windows AGAIN! stop it!!!!!"
@@ -2596,6 +2608,20 @@ that folder: a tool that ignores the folder it is given will delete the wrong
 things while every other assertion passes. The same goes for a harness: a
 case that cannot fail is not a case, and the way to know is to break the thing
 on purpose and watch it go red.
+
+### Nothing on the desktop while any of it ran
+
+A watcher recorded every visible top-level window and every change of the
+foreground window for twenty-five minutes, across both releases - the build,
+the upload, the hash check, two prunes of the GitHub releases, and the whole
+check sweep. The prunes are the part that matters: they are what runs the
+GitHub CLI, and the GitHub CLI is a console program.
+
+The result was 60 visible windows and 15 foreground windows, and every one of
+them was the user's own - his installed app, his browser, Rainmeter, Steam,
+the Parsec client, Total Commander, the screen and remote tools. There is no
+`cmd`, no console, no `gh` and no build tool anywhere in the list, and nothing
+from the tooling ever took the focus.
 
 ## Verification status
 `npm run check:all` sweeps **61 suites**, and all 61 of them pass on a release
