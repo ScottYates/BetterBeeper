@@ -163,7 +163,7 @@ function pruneLocal(keep, dryRun, root) {
 function pruneReleases(keep, dryRun) {
   let gh;
   try {
-    gh = execFileSync('where.exe', ['gh'], { encoding: 'utf8' }).split(/\r?\n/)[0].trim();
+    gh = execFileSync('where.exe', ['gh'], { encoding: 'utf8', windowsHide: true }).split(/\r?\n/)[0].trim();
   } catch {
     console.log('\nGitHub releases: the GitHub CLI is not installed, so they were left alone.');
     return 0;
@@ -173,7 +173,7 @@ function pruneReleases(keep, dryRun) {
   try {
     list = JSON.parse(execFileSync(gh, [
       'release', 'list', '--repo', REPO, '--limit', '200', '--json', 'tagName,publishedAt',
-    ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }));
+    ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, windowsHide: true }));
   } catch (err) {
     console.log(`\nGitHub releases: could not list them (${err.message}), so they were left alone.`);
     return 0;
