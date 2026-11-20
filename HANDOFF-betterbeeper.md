@@ -2513,13 +2513,99 @@ The mutation now breaks **every** path that can carry the attachment onto a
 picture, which is what the rule actually says: the fallback picture carries
 its attachment. One path is not the rule, it is one way of keeping it.
 
+## Work done 2026-11-20
+
+### The old builds and the old releases are removed from now on
+
+Scott asked for two things: keep only the three most recent releases, and keep
+things clean as you go from then on. The first was done by hand - 98 releases
+deleted, 9.03 GB down to 0.27 GB, every git tag kept. The second cannot be
+done by hand, because a release leaves a 91 MB installer on GitHub and a
+427 MB build directory on the disk, and nobody remembers to sweep either one.
+
+`tools/prune.js` is the sweep. It keeps the three newest local build
+directories (`release-v*`) and, with `--releases`, the three newest GitHub
+releases.
+
+- `npm run prune` prunes both
+- `npm run prune:dry` says what it would do and stops
+- `npm run prune -- --keep=5` keeps five instead of three
+
+It never touches a git tag. `gh release delete` without `--cleanup-tag` leaves
+them, which is what keeps `git describe` and the release script's next-version
+calculation working - the version history is a few bytes a tag, and it is the
+one thing in there worth keeping.
+
+The release script calls it after the publish and the hash check, inside a
+try/catch that cannot fail the release. The release is already public by that
+point, and a file somebody has open is a reason to report it and try again
+next time, not a reason to fail a release that is already out.
+
+A directory is emptied before it is removed, so that one locked file does not
+keep 427 MB alive. A directory that cannot be emptied is reported honestly and
+left; the next run tries again.
+
+### The check that says the cleanup is actually happening
+
+`check:released` now enforces the rule as well: at most three releases
+published, and at most 100 MB of old build output on the disk.
+
+The limit is in bytes and not in directories, on purpose. A directory that
+could not be removed because one file in it is open - the app running out of
+the build folder, or a file indexer, or the desktop app holding the
+`app.asar` - is not a build sitting on the disk. Counting directories would
+report a problem that is not one, and a check that cries wolf is a check that
+gets ignored.
+
+### The proof, and the three bugs it found in the proof
+
+`tools/prune-redproof.js` (`npm run check:prune`, 7/7) proves the rule is
+load-bearing. It asserts a green baseline, makes a 120 MB old build appear on
+the disk and shows that the check goes red for the right reason, removes it
+again and shows that the check is green. The tool half runs on a temporary
+folder of made-up build directories, so proving the tool works cannot cost
+anything that matters.
+
+Five mutations were reintroduced one at a time and every one of them was
+caught: sorting the versions as text, a prune that removes nothing, a dry run
+that really deletes, a check that stops counting the old builds, and a prune
+that ignores the folder it was given.
+
+Three things the proof caught in itself, which is the point of writing it:
+
+- Three of the cases passed a function to the harness, and a function is
+  truthy, so those three could never have failed whatever the code did. The
+  harness now calls the function and treats a returned reason string as a
+  failure.
+- The dry-run case tested the result object instead of the output inside it,
+  so a regex looking for "would remove" was in fact looking at
+  "[object Object]".
+- `--root` was parsed by the prune and then never passed on, so the first run
+  of the proof pruned the **real** workspace instead of the temporary folder.
+  That emptied `release-v1.31.0` and `release-v1.31.1` - about 854 MB of build
+  output. Nothing published was lost: their installers had already been
+  removed from GitHub by the earlier sweep, and the build output can be
+  rebuilt from the tags, which all survive. The tool now names the folder it
+  is working in when it is not the usual one, the proof asserts that the
+  folder it was given is the folder that was named, and the proof asserts
+  that the real build directories are exactly as it found them.
+
+**The general lesson.** A proof that touches the real thing proves the rule
+by paying for it. Give the tool a folder to work in, and check that it used
+that folder: a tool that ignores the folder it is given will delete the wrong
+things while every other assertion passes. The same goes for a harness: a
+case that cannot fail is not a case, and the way to know is to break the thing
+on purpose and watch it go red.
+
 ## Verification status
-`npm run check:all` sweeps **60 suites**, and all 60 of them pass on a release
+`npm run check:all` sweeps **61 suites**, and all 61 of them pass on a release
 commit. On the tree carrying the work, before the release is cut, 59 of them
-pass: the one that does not is `check:released`, which is red until the release
-is cut, because `main` is ahead of the newest tag. It was 58 suites on the
-tree carrying the 2026-11-12 work, 57 of them passing; it was 57 suites on the
-tree carrying the 2026-11-11 work, 54 of them passing; it was 54 suites on the
+pass: the two that do not are `check:released`, which is red until the release
+is cut because `main` is ahead of the newest tag, and `check:prune`, whose
+baseline is `check:released` - a proof that needs the tree to be in the state
+it is proving. It was 60 suites on the
+tree carrying the 2026-11-12 work, 59 of them passing; it was 58 suites on the
+tree carrying the 2026-11-11 work, 57 of them passing; it was 54 suites on the
 tree carrying the 2026-11-09 work, 53 of them passing; 53 suites on the tree
 carrying the 2026-11-08 work, 52 of them passing; 47/47 on the tree
 carrying the 2026-11-02 work, 2026-11-02. It was
@@ -2559,7 +2645,9 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:bridgeplaceholder` | 12/12 checks passed, with no Electron and no window (new) |
 | `check:threadopen` | 29/29 checks passed |
 | `check:readreceipts` | 14/14 checks passed, with no Electron and no window (new) |
-| `check:released` | green on a release commit, red while `main` is ahead of the last tag |
+| `check:released` | green on a release commit, red while `main` is ahead of the last tag; it also counts the published releases and the old build output on the disk (new) |
+| `check:prune` | 7/7 checks passed, proving the cleanup check goes red when the old builds come back, that the prune removes them, and that the real builds are left alone (new) |
+| `tools/prune-redproof.js` | 5/5 mutations caught, no holes, with an asserted baseline (new) |
 | `tools/update-redproof.js` | 25/25 mutations caught, no holes |
 | `tools/update-failure-redproof.js` | 15/15 mutations caught, no holes, with an asserted baseline (new) |
 | `tools/update-handoff-redproof.js` | 15/15 mutations caught, no holes, with an asserted baseline (new) |

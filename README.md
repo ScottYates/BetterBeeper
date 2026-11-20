@@ -298,7 +298,8 @@ npm run check:gifplayer # a GIF plays three times, then stops, and the menu over
 npm run check:gifrebuild # the thread is only rebuilt when what it draws changed
 npm run check:syntax    # every JS file parses, so a broken check cannot pose as an app crash
 npm run check:bump      # the semver level chosen from a commit message is right
-npm run check:released  # every push to main has a release
+npm run check:released  # every push to main has a release, and the old ones are gone
+npm run check:prune    # the cleanup check goes red when the old builds come back (new)
 npm run check:icons     # network glyphs, including the self-coloured Google Voice mark
 npm run check:appicon  # the icon files still match the artwork, and the app uses them
 npm run check:ascii     # documentation and code comments stay ASCII
@@ -376,6 +377,28 @@ success until somebody tries to install it.
 `check:released` is the enforcement. It fails when `main` is ahead of the newest tag, and when
 `package.json` and that tag disagree, which is the usual way a version bump gets lost between
 the commit and the upload. It is read-only, so it is safe to run at any time.
+
+### Keeping the disk clean
+
+A release leaves two large things behind: a 91 MB installer on GitHub and a 427 MB build
+directory in the workspace. Nothing used to remove either, and 101 releases had turned into
+9 GB of assets before this was swept.
+
+- `npm run prune` keeps the three most recent releases and the three most recent build
+  directories, and removes the rest.
+- `npm run prune:dry` says what it would remove and stops.
+- The release script runs the prune itself, after the published asset has been hashed and
+  verified, so the cleanup happens as the work goes rather than in a sweep somebody has to
+  remember.
+
+The git tags are never touched: `gh release delete` without `--cleanup-tag` leaves them, so
+the version history, `git describe` and the release script's next version all keep working.
+A file that something else has open is reported and left for the next run rather than
+failing a release that is already published.
+
+`check:prune` is the proof that the rule is load-bearing: it makes an old build appear on
+the disk, shows `check:released` going red for it, removes it again, and shows the check
+green. The tool half runs on a temporary folder, so the proof never costs anything real.
 
 Two details worth knowing if you run this by hand:
 

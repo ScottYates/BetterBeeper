@@ -377,6 +377,30 @@ async function main() {
 
   console.log(`\ndone. ${releaseTag} is live: https://github.com/${REPO}/releases/tag/${releaseTag}`);
   console.log(`main is now ${git(['rev-parse', '--short', 'HEAD'])}, clean: ${git(['status', '--porcelain']) === ''}`);
+
+  // 6. Clean up after ourselves.
+  //
+  // Every release leaves a 427 MB build directory behind and a 91 MB asset
+  // on GitHub, so without this the workspace fills up and the repository's
+  // release storage grows with every version - 101 releases and 9 GB of
+  // assets is what that looks like.
+  //
+  // The three most recent are kept, which is the number Scott asked for, and
+  // the git tags are left alone: a tag is the version history, and the
+  // release script reads the newest one to decide the next version.
+  //
+  // This is last, and it cannot fail the release. The release is already
+  // published and verified by this point; a prune that could not delete
+  // something - a file somebody has open - is reported and left for next
+  // time.
+  console.log('\ncleaning up the older builds and releases...');
+  try {
+    const { pruneLocal, pruneReleases } = require(path.join(__dirname, 'prune.js'));
+    pruneLocal(3, false);
+    pruneReleases(3, false);
+  } catch (err) {
+    console.log(`the cleanup did not finish (${err.message}); the release itself is fine.`);
+  }
 }
 
 if (require.main === module) {
