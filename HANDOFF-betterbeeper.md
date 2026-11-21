@@ -2623,6 +2623,23 @@ the Parsec client, Total Commander, the screen and remote tools. There is no
 `cmd`, no console, no `gh` and no build tool anywhere in the list, and nothing
 from the tooling ever took the focus.
 
+### Checking an install without trusting the installer
+
+The 1.32.5 install was checked from the outside, on the machine:
+
+- the per-user uninstall registry entry says 1.32.5
+- `resources/app.asar` was opened and its `package.json` read: the version
+  inside the archive is 1.32.5
+- the installed `resources/update-helper` and `app-update.yml` are the ones
+  the installer wrote that evening
+- the app is running from `%LOCALAPPDATA%\Programs\Better Beeper`
+- the Start Menu holds exactly one `Better Beeper.lnk`, pointing at the
+  installed exe, with no "(2)" left over
+
+Reading the version out of the asar is the part worth keeping: the registry
+and the folder name both come from the installer, and the asar is what the
+app actually runs.
+
 ## Verification status
 `npm run check:all` sweeps **61 suites**, and all 61 of them pass on a release
 commit. On the tree carrying the work, before the release is cut, 59 of them
@@ -2822,15 +2839,28 @@ keeping:
    closed was also being thrown away, by a debounce that nothing ever
    flushed; the window now saves its bounds when it closes.
 9. **The live taskbar on this machine is out of sync with Explorer's own
-   record of the pin.** The persisted `Favorites` blob has
+   record of the pin.** Closed on 2026-11-20. The persisted `Favorites` blob had
    `Better Beeper (2).lnk` at position 3, between Google Voice and deck.blue,
-   but the running shell has the item at the end of the list and no longer
+   while the running shell had the item at the end of the list and no longer
    pinned. The pin comes back where it was when Explorer re-reads the blob:
    restart Explorer - which closes the Explorer windows and restarts the
-   taskbar - or sign out and back in. **This has not been done.** It is the
-   user's desktop and the windows he has open are his; and it is a one-time
-   repair for the damage the 1.30.4 "put the pin back" code did, which is
-   gone now that the update installs over the top.
+   taskbar - or sign out and back in. The user did that, and the button came
+   back at position 9, next to Beeper, with the right app id
+   (`com.yates.better-beeper`) and the right target: the installed exe. The
+   pin works.
+
+   What it still said was "Better Beeper (2)", because the shell was holding
+   the name of the duplicate shortcut that the 1.30.4 "put the pin back" code
+   had created. The user re-pinned it by hand on 2026-11-20: the duplicate is
+   gone from the pinned folder, the saved list says `Better Beeper.lnk`, and
+   the pinned folder holds a fresh copy of the clean shortcut. The running
+   taskbar kept the old label until the shell re-reads its own list; that is
+   cosmetic, and the saved state is already right.
+
+   The damage is not going to happen again: the update installs over the top,
+   the helper only inspects the pin and never writes to the pinned folder, and
+   the 1.32.5 install left exactly one Start Menu shortcut behind - no
+   "(2)" this time.
 
 Not outstanding any more, but still true and easy to trip over: the updater
 asks GitHub for a **Release**, not for a commit. It calls `releases/latest` and
