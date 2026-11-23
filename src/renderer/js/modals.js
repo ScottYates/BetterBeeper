@@ -17,7 +17,7 @@ import {
 } from './share.js';
 import { setJobStats } from './jobs.js';
 import { checkNow } from './updates.js';
-import { participantList } from './participants.js';
+import { participantList, participantPhone, participantDetail } from './participants.js';
 
 /**
  * Text-size presets, as [zoom factor, label]. 1 is the size the UI was designed
@@ -109,12 +109,26 @@ function historyStatRow() {
  *
  * The order and the naming live in participants.js so they can be checked
  * rather than read.
+ *
+ * The phone number is not in the chat record - Beeper's bridge does not send
+ * one - so it is read separately, from Beeper Desktop's own store, keyed by
+ * the same id the bridge hands out. The list opens straight away with the
+ * names, and the numbers arrive a moment later. Waiting for them would mean
+ * a blank list for as long as the read takes, and there is nothing in the
+ * names that the numbers change.
  */
 export function openParticipants(chat) {
   const { people, hidden } = participantList(chat);
 
   const list = el('div', { class: 'result-list' });
+  // The rows that are waiting for a number, and the line under them, which
+  // changes when the number arrives: a number shown beside the name is not
+  // repeated underneath it.
+  const waiting = new Map();
+
   for (const person of people) {
+    const phone = el('span', { class: 'result-item-phone' });
+    const sub = el('div', { class: 'result-item-sub' });
     list.append(
       el(
         'div',
@@ -125,16 +139,18 @@ export function openParticipants(chat) {
           { class: 'result-item-body' },
           el(
             'div',
-            { class: 'result-item-title' },
-            person.name,
+            { class: 'result-item-line' },
+            el('span', { class: 'result-item-name', text: person.name }),
+            phone,
             person.tags.length
               ? el('span', { class: 'result-item-tag', text: person.tags.join(' · ') })
               : null,
           ),
-          person.detail ? el('div', { class: 'result-item-sub', text: person.detail }) : null,
+          sub,
         ),
       ),
     );
+    waiting.set(person.id, { phone, sub });
   }
 
   const body = el(
@@ -156,6 +172,21 @@ export function openParticipants(chat) {
     title: `${chatTitle(chat) || 'Conversation'} - ${who}`,
     body,
     footer: [el('button', { class: 'btn', text: 'Close', onClick: closeModal })],
+  });
+
+  // The numbers, once they are read.
+  if (!people.length) return;
+  const ids = people.map((person) => person.id);
+  call(() => api.participants.numbers(ids), { context: 'phone numbers', fallback: {} }).then((numbers) => {
+    for (const person of people) {
+      const slots = waiting.get(person.id);
+      if (!slots) continue;
+      const number = participantPhone(person.participant, numbers);
+      if (number) slots.phone.textContent = number;
+      const detail = participantDetail(person.participant, number);
+      slots.sub.textContent = detail;
+      if (!detail) slots.sub.remove();
+    }
   });
 }
 

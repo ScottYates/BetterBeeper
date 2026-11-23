@@ -16,6 +16,7 @@ const mediaPath = require('./media-path');
 const assetSource = require('./asset-source');
 const { openMessageStore, OPEN_PAGE } = require('./message-store');
 const { openMediaStore } = require('./media-store');
+const participantNumbers = require('./participant-numbers');
 const { createHistorySync } = require('./history-sync');
 const { makeTitleRecorder } = require('./chat-titles');
 const updater = require('./updater');
@@ -285,6 +286,16 @@ function register({ getWindow, openImageViewer, applyTextScale }) {
 
   ipcMain.handle('accounts:list', handle(() => client.listAccounts()));
   ipcMain.handle('contacts:list', handle((accountID, params) => client.listContacts(accountID, params || {})));
+
+  // The phone numbers of the people in a chat.
+  //
+  // The bridge does not send them, so they are read out of Beeper Desktop's
+  // own store, where they live keyed by the same id the bridge hands out. The
+  // read is read-only and quiet: if the store cannot be read, the answer is
+  // an empty list and the people list is still a people list.
+  ipcMain.handle('participants:numbers', handle((ids) =>
+    participantNumbers.numbersFor(ids, { appData: app.getPath('appData') })
+  ));
   ipcMain.handle('chats:list', handle(async (params) => {
     const page = await client.listChats(params || {});
     rememberChatTitles(page);

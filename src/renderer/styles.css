@@ -1166,11 +1166,23 @@ mark.ts-hit.is-current {
 .result-item-sub { font-size: 12px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .result-check { color: var(--accent); font-weight: 700; flex: none; }
 
+/* A person, with their number beside their name.
+   The name is the part that gives way when the row is too narrow: the number
+   and the tags are the parts that must never be cut off. */
+.result-item-line { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.result-item-name {
+  font-weight: 600; font-size: 13.5px; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.result-item-phone { font-size: 12px; color: var(--text-dim); flex: none; }
+
 /* A list of people, not a list of things to pick. Nothing here is clickable,
    so it must not look as though it is. */
 .result-item.is-static { cursor: default; }
 .result-item.is-static:hover { background: none; }
 .result-item-tag { margin-left: 7px; font-size: 11px; font-weight: 500; color: var(--text-faint); }
+/* On a line that already has a gap, the tag does not need a margin of its own. */
+.result-item-line .result-item-tag { margin-left: 0; }
 
 .search-summary { padding: 9px 3px; font-size: 12.5px; color: var(--text-dim); }
 /* Share picker. The source line is context for the sender, not part of the

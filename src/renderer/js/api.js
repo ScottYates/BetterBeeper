@@ -72,6 +72,12 @@ export const api = {
   accounts: () => window.beeper.accounts.list(),
   contacts: (accountID, params) => window.beeper.contacts.list(accountID, params),
 
+  participants: {
+    // The phone numbers of the people in a chat, keyed by participant id.
+    // They are not in the chat record: Beeper's bridge does not send them.
+    numbers: (ids) => window.beeper.participants.numbers(ids),
+  },
+
   chats: {
     list: (params) => window.beeper.chats.list(params),
     search: (params) => window.beeper.chats.search(params),

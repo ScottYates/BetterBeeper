@@ -9,6 +9,10 @@
  * chat's participants carry the full list - and shows none of them. This is
  * the part that decides what each of them is called and in what order they
  * are listed.
+ *
+ * The phone number is not one of the things the chat record carries, so it
+ * arrives from somewhere else: `participantPhone` is given a map of id to
+ * number and is told which of them to show beside the name.
  */
 
 /**
@@ -38,17 +42,51 @@ export function participantName(participant) {
  * for the name, never a second line under it - a Signal id is a hundred
  * characters of noise, and a contact whose name is its own number has
  * nothing left to add.
+ *
+ * `shown` is the number already beside the name, if there is one. It is left
+ * out of this line for the same reason the name is: printing the number
+ * twice is noise.
  */
-export function participantDetail(participant) {
+export function participantDetail(participant, shown = '') {
   const p = participant || {};
   const name = participantName(p);
   for (const candidate of [p.phoneNumber, p.username]) {
     const value = text(candidate);
     if (!value) continue;
     if (sameThing(value, name)) continue;
+    if (shown && sameThing(value, shown)) continue;
     return value;
   }
   return '';
+}
+
+/**
+ * The phone number to show beside a person's name.
+ *
+ * The number is not in the chat record. Beeper's bridge sends a participant
+ * as an id, a name and a few flags, and its schema says the phone number is
+ * omitted when it is unknown - which for most of a phone network's contacts
+ * it is. Measured on the live account: not one of the 492 participants across
+ * 200 chats carried a number.
+ *
+ * So the number is read separately, from Beeper Desktop's own store, keyed
+ * by the very id the bridge hands out, and arrives here as a map of id to
+ * number. A record that carries its own number still counts: the schema has
+ * one, and a bridge that knows it should not be second-guessed.
+ *
+ * A person whose name is their own number is left alone. Printing the number
+ * beside the number is noise, and it is the normal case for a phone network:
+ * of the 123 Google Voice contacts Beeper Desktop keeps, 68 have a number as
+ * their name.
+ */
+export function participantPhone(participant, numbers) {
+  const p = participant || {};
+  const id = text(p.id);
+  const map = numbers && typeof numbers === 'object' ? numbers : {};
+  const number = (id ? text(map[id]) : '') || text(p.phoneNumber);
+  if (!number) return '';
+  if (sameThing(number, participantName(p))) return '';
+  return number;
 }
 
 /**
@@ -80,10 +118,14 @@ export function participantTags(participant) {
  * conversation that has been merged, and a person who is in the room once
  * should be listed once.
  *
+ * `numbers` is the map of participant id to phone number, when it has been
+ * read. It is optional because the numbers are not in the chat record: they
+ * are read separately, and the list is worth showing before they arrive.
+ *
  * Returns { people, hidden } - hidden is how many the server says are in the
  * conversation but did not send, which is not zero for a large group.
  */
-export function participantList(chat) {
+export function participantList(chat, { numbers } = {}) {
   const participants = chat?.participants || {};
   const items = Array.isArray(participants.items) ? participants.items : [];
 
@@ -93,11 +135,13 @@ export function participantList(chat) {
     const id = text(participant?.id);
     if (!id || seen.has(id)) continue;
     seen.add(id);
+    const phone = participantPhone(participant, numbers);
     people.push({
       participant,
       id,
       name: participantName(participant),
-      detail: participantDetail(participant),
+      phone,
+      detail: participantDetail(participant, phone),
       tags: participantTags(participant),
     });
   }

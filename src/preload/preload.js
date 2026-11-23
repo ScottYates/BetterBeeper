@@ -47,6 +47,12 @@ contextBridge.exposeInMainWorld('beeper', {
   contacts: {
     list: (accountID, params) => invoke('contacts:list', accountID, params),
   },
+  participants: {
+    // The phone numbers of the people in a chat. The bridge does not send
+    // them, so the main process reads them out of Beeper Desktop's own
+    // store, keyed by the same id the bridge hands out.
+    numbers: (ids) => invoke('participants:numbers', ids),
+  },
   chats: {
     list: (params) => invoke('chats:list', params),
     search: (params) => invoke('chats:search', params),
