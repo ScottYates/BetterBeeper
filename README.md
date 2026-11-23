@@ -91,6 +91,10 @@ The chat UI talks to Beeper's REST API and its live WebSocket event stream. Beep
   against Beeper rather than assumed, and the one chat Beeper refuses to archive stays archived
   here anyway (see "Beeper accepts isPinned and then ignores it" below)
 - Mute, pin, archive and mark-unread from the thread header
+- Everyone in a conversation is one click away, listed by name with their phone number beside
+  it. Beeper does not send that number with the people in a chat, so it is read out of Beeper
+  Desktop's own store, where it lives keyed by the very id Beeper hands out. A person whose name
+  is their own number is not given it twice, and a person who has no number is not given one
 - Pinning is kept in this app rather than at Beeper. Beeper's Desktop API accepts
   `isPinned` on `PATCH /v1/chats/{id}` and then drops it, so the pin set lives in
   `settings.json` and the list is ordered by it
@@ -292,6 +296,8 @@ npm run check:settings  # a save keeps unknown settings and drops the retired on
 npm run check:sidebar   # rows are reused rather than repainted, and jobs are visible
 npm run check:refreshchats # the chat list refresh tells the truth about what arrived
 npm run check:participants # everyone in a conversation is named and ordered properly
+npm run check:participantnumbers # the phone numbers are read out of Beeper's own store
+npm run check:people # the people list shows the number beside the name
 npm run check:visibility # hiding and locally deleting a message, and surviving a restart
 npm run check:gif       # an animated GIF really advances frames on screen
 npm run check:gifplayer # a GIF plays three times, then stops, and the menu over it works
@@ -508,6 +514,7 @@ src/
     beeper-ws.js     WebSocket event stream with backoff reconnection
     mcp-client.js    MCP client for Beeper's built-in server
     ipc.js           the whole renderer-facing IPC surface
+    participant-numbers.js  read the phone numbers out of Beeper Desktop's own store
   preload/
     preload.js       contextBridge: the only surface the renderer can reach
   renderer/
@@ -554,6 +561,10 @@ src/
     gif-player-check.js check: a GIF plays three times, then stops, and the button works
     gif-player-harness.html  page that hosts gif-player-check.js
     gif-player-redproof.js  prove the player check fails when the player is broken
+    people-check.js    check: the people list shows the number beside the name
+    people-harness.html  page that hosts people-check.js
+    people-redproof.js  prove the people checks fail when the feature is broken
+    participant-numbers-check.js  check: the phone numbers are read out of Beeper's store
     app-icon-redproof.js  prove the icon check fails when the files are broken on purpose
     update-failure-check.js  check: run the real handoff helper against real executables, and see what it leaves behind
     update-failure-redproof.js  prove the failure-path checks fail when the rules are broken
@@ -647,6 +658,14 @@ Each of these caused a real bug here.
   refused, the GIF fell back to an ordinary `<img>`, and the menu had no play item on it at
   all. The symptom was "the feature does not work", and the cause was a one-word policy
   in the page's `<meta>` tag. The red proof breaks that policy on purpose now.
+- **The bridge does not send the phone number of the people in a chat.** A chat's
+  participants arrive as an id, a name, a picture and a few flags, and the bridge's schema
+  says the number is "omit if unknown" - which for most of a phone network's contacts it is.
+  Measured on the live account: not one of the 492 participants across 200 chats carried
+  one, and the bridge's own contact list is empty for the Google Voice account, where most of
+  those chats live. The number is read out of Beeper Desktop's own store instead, where it is
+  keyed by the very id the bridge hands out. The check that proves it uses the shape the
+  bridge really sends, so a fixture that claims a number arrives would pass forever.
 
 - **The HTML sanitizer must nest, not just filter.** The allowlist walk appended each
   cleaned element and then appended that element's children as its *siblings*, so every

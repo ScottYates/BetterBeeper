@@ -2640,13 +2640,111 @@ Reading the version out of the asar is the part worth keeping: the registry
 and the folder name both come from the installer, and the asar is what the
 app actually runs.
 
+## Work done 2026-11-23
+
+### The people in a chat show their phone number
+
+The ask: show the phone number next to each person's info in the "People in
+this chat" view.
+
+**The list already had a line for it, and the line was always empty.** The
+row is built from the chat's participants, and the naming rules in
+`participants.js` look for a `phoneNumber` or a `username` on the participant
+record to put under the name. There is no such field.
+
+Beeper's bridge sends a chat's participants as `{ id, fullName, imgURL,
+cannotMessage, isSelf, isAdmin, isPending, isNetworkBot }` and nothing else.
+Measured on the live account on 2026-11-23, over 200 chats and 492
+participants, not one of them carried a `phoneNumber` or a `username`. The
+bridge's own schema has both on a `User`, but it documents the phone number
+as "omit if unknown", and for the people who matter it is unknown.
+
+Every other route was checked and does not work either:
+
+| route | result |
+|---|---|
+| `GET /v1/chats/{id}` participants | no number, ever |
+| `GET /v1/accounts/{id}/contacts/list` | 44 for the Signal account, keyed by `pni_`; **empty** for the Google Voice account |
+| `GET /v1/accounts/{id}/contacts?query=` | empty for Google Voice, with or without a query |
+| `GET /v1/search` | chats, group matches, messages; no participant records |
+
+**The number is in Beeper Desktop's own store.** `participant_identifiers`
+holds it, keyed by the very id the bridge hands out, so the join is exact
+rather than a guess by name:
+
+    participant_id                                  identifier_type  identifier
+    @YynP0amA7e30Yc3cN7-...:local-signal.localhost  phone            +15154916586
+
+This is the same table Beeper Desktop itself reads the number from, and the
+app already treats `%APPDATA%\BeeperTexts` as a folder it may read. Coverage
+of the join, measured over the same 200 live chats: **478 of 492
+participants, 97%**. Google Voice 462 of 462, Signal 8 of 8, Facebook 6 of
+12. The ones without a number are the people who do not have one: Beeper
+accounts such as `@eric:beeper.com`, and Facebook contacts whose number was
+never given to us.
+
+The main process reads it (`src/main/participant-numbers.js`), read-only and
+quietly: the store belongs to another program, so a missing file, a locked
+file or a changed schema is "no numbers" rather than an error. The read is
+cached for a minute, because the people list is opened often. The renderer
+asks for the numbers by id over one new channel, `participants:numbers`, and
+the list opens straight away and fills them in afterwards - waiting for the
+read would mean a blank list for as long as it takes, and there is nothing in
+the names that the numbers change.
+
+The number goes beside the name, on the same line. A person whose name is
+their own number is left alone: printing the number beside the number says
+nothing, and it is the normal case for a phone network - of the 123 Google
+Voice contacts Beeper Desktop keeps, 68 have a number as their name.
+
+### The check that claimed a shape Beeper does not send
+
+`check:participants` had a fixture for a Signal contact with a
+`phoneNumber` and a `username` on it, and the comment said the fixtures were
+"the real shapes, measured against the live account". They were not. The
+shape was guessed, and the check passed against a record Beeper never sends.
+
+That is why the feature looked broken for so long: the code was right about
+a shape that does not exist, and the check agreed with it. The fixtures are
+the real shape now, and the numbers arrive as a map of id to number, which
+is what the check is about.
+
+**The general lesson.** A fixture that is not the shape the world sends is a
+lie that the check cannot catch, because the check and the fixture are the
+same claim. Measure the shape, and when the answer is "this field is never
+sent", the feature has to go and find the data somewhere else.
+
+### Two holes the red proof found, both of them mine
+
+The first run of the proof caught seven of nine mutations and reported two
+holes.
+
+**A case that could not fail.** "The number is not repeated under the name"
+passed with the rule removed, because the fixture it used was a participant
+with no number on it, so there was nothing to repeat. The rule only matters
+for a record that carries its own number - a bridge that knows it - so the
+case now uses one.
+
+**A mutation that broke nothing.** The mutation turned the people row from a
+flex line into a block and expected the number to end up on a line of its
+own. It did not: two inline spans in a block still share a line. It takes
+two edits to put the number on its own line - the line has to stop being a
+row and the number has to stop being inline - and a block child of a flex
+row is still a row member, so the number alone is not enough either.
+
+**The general lesson, and it is the third time this shape has come up here.**
+A check that has never been seen to fail is a check that might not be able
+to. The proof is the only thing that says otherwise, and a mutation that
+does not actually break the thing is a mutation that proves nothing. Nine
+mutations, nine caught, with the tree asserted back where it started.
+
 ## Verification status
-`npm run check:all` sweeps **61 suites**, and all 61 of them pass on a release
-commit. On the tree carrying the work, before the release is cut, 59 of them
+`npm run check:all` sweeps **63 suites**, and all 63 of them pass on a release
+commit. On the tree carrying the work, before the release is cut, 61 of them
 pass: the two that do not are `check:released`, which is red until the release
 is cut because `main` is ahead of the newest tag, and `check:prune`, whose
 baseline is `check:released` - a proof that needs the tree to be in the state
-it is proving. It was 60 suites on the
+it is proving. It was 61 suites on the
 tree carrying the 2026-11-12 work, 59 of them passing; it was 58 suites on the
 tree carrying the 2026-11-11 work, 57 of them passing; it was 54 suites on the
 tree carrying the 2026-11-09 work, 53 of them passing; 53 suites on the tree
@@ -2713,7 +2811,11 @@ Individually measured: `check:entity` 0 failing across 31 cases,
 `check:markallread` 0 failing across 18 cases,
 `check:refreshchats` 0 failing across 24 cases,
 `check:focusread` 27/27,
-`check:participants` 0 failing across 36 cases (new),
+`check:participants` 0 failing across 49 cases (the fixtures are the shape
+Beeper really sends now),
+`check:participantnumbers` 0 failing across 19 cases and `check:people` 11/11
+with the real list opened by the real code, and `tools/people-redproof.js`
+9/9 mutations caught, no holes, with an asserted baseline (new),
 `check:contactrefresh` 71/71 and `tools/contact-refresh-redproof.js` 19/19
 mutations caught, 2/2 neutral rewrites tolerated (new),
 `check:paste` 52/52 (rewritten, new),
