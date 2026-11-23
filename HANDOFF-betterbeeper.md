@@ -2745,13 +2745,15 @@ release that is wrong. The tag is cut, the push is done and the version in
 `package.json` matches: the clause that fails is the disk one.
 
 The workspace had 15 old build directories, 6.4 GB of them. The release runs
-the prune on the way out, which emptied 13 of them and freed 5.4 GB, but 155
-MB is left in one file in each: `win-unpacked/resources/app.asar`. Those
-files are held open by the agent runtime that is running the session - the
-Restart Manager says so by name, and an exclusive open on each one fails.
+the prune on the way out, which emptied 13 of them and freed 5.4 GB, but
+about 12 MB is left in one file in each: `win-unpacked/resources/app.asar`.
+Those files are held open by the agent runtime that is running the session -
+the Restart Manager says so by name, and an exclusive open on each one fails.
+Every release adds one more folder to that list, so the number of them goes
+up rather than down until the holder lets go.
 
-The check allows 100 MB of leftovers on the disk, so 155 MB of locked files
-is over the line. Nothing in the repository can fix that while the holder is
+The check allows 100 MB of leftovers on the disk, and the leftovers are over
+that line. Nothing in the repository can fix that while the holder is
 running: the prune reports the locked file and leaves it, which is exactly
 what it is supposed to do, and the next run tries again. Restarting the agent
 app, or running `npm run prune` from a session that does not hold the files,
