@@ -2738,13 +2738,43 @@ to. The proof is the only thing that says otherwise, and a mutation that
 does not actually break the thing is a mutation that proves nothing. Nine
 mutations, nine caught, with the tree asserted back where it started.
 
+### The release gate is red for a reason that is not the code
+
+`check:released` is red on the v1.33.0 release commit, and it is not the
+release that is wrong. The tag is cut, the push is done and the version in
+`package.json` matches: the clause that fails is the disk one.
+
+The workspace had 15 old build directories, 6.4 GB of them. The release runs
+the prune on the way out, which emptied 13 of them and freed 5.4 GB, but 155
+MB is left in one file in each: `win-unpacked/resources/app.asar`. Those
+files are held open by the agent runtime that is running the session - the
+Restart Manager says so by name, and an exclusive open on each one fails.
+
+The check allows 100 MB of leftovers on the disk, so 155 MB of locked files
+is over the line. Nothing in the repository can fix that while the holder is
+running: the prune reports the locked file and leaves it, which is exactly
+what it is supposed to do, and the next run tries again. Restarting the agent
+app, or running `npm run prune` from a session that does not hold the files,
+clears it.
+
+**The general lesson.** A gate that is red is worth reading before it is
+worked around. This one was red before the work started, at 5125 MB, and
+the release took it to 155 MB - the part that is left is held by the tool
+asking the question.
+
 ## Verification status
-`npm run check:all` sweeps **63 suites**, and all 63 of them pass on a release
-commit. On the tree carrying the work, before the release is cut, 61 of them
-pass: the two that do not are `check:released`, which is red until the release
-is cut because `main` is ahead of the newest tag, and `check:prune`, whose
-baseline is `check:released` - a proof that needs the tree to be in the state
-it is proving. It was 61 suites on the
+`npm run check:all` sweeps **63 suites**. On the v1.33.0 release commit, 61 of
+them pass. The two that do not are `check:released` and `check:prune`, and
+both are the same disk clause rather than the release: 155 MB of old build
+output is still on the disk in 13 files that the agent runtime holding this
+session has open, and the check allows 100 MB. It was red before this work
+started too, at 5125 MB. See "The release gate is red for a reason that is
+not the code" above. On the tree
+carrying the work, before the release is cut, 61 of them pass: the two that
+do not are `check:released`, which is red until the release is cut because
+`main` is ahead of the newest tag, and `check:prune`, whose baseline is
+`check:released` - a proof that needs the tree to be in the state it is
+proving. It was 61 suites on the
 tree carrying the 2026-11-12 work, 59 of them passing; it was 58 suites on the
 tree carrying the 2026-11-11 work, 57 of them passing; it was 54 suites on the
 tree carrying the 2026-11-09 work, 53 of them passing; 53 suites on the tree
