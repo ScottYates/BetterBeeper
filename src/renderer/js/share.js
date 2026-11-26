@@ -90,8 +90,8 @@ export function shareSendCount(message, text) {
  */
 export function shareNotice(message, text) {
   const sends = shareQueue(message, text).length;
-  if (sends <= 1) return 'Pick a chat or a contact to send this to.';
-  return `Sending this sends ${sends} messages, one per file - Beeper takes a single file at a time.`;
+  if (sends <= 1) return 'Pick one or more people to send this to.';
+  return `Each person gets ${sends} messages, one per file - Beeper takes a single file at a time.`;
 }
 
 function matches(haystack, needle) {
@@ -190,13 +190,55 @@ export function chatDisplayName(chat) {
 }
 
 /**
- * Send the queue into one chat.
+ * Send the payloads of one queue, and say which of them went.
  *
  * The network is passed in rather than imported, so the part that decides what
  * goes out and in what order can be run against a recording instead of a real
  * account. Beeper takes one attachment per message, so this is a loop and not a
  * single call, and it stops at the first failure: pressing on after a rejected
  * send puts half of somebody else's conversation in front of them.
+ *
+ * It reports WHICH payloads went, not just how many, because a share to
+ * several people has to be able to send the leftovers again later. A queue
+ * that failed on its third of three files has two files in somebody else's
+ * chat already, and a retry that sent all three would put the first two there
+ * a second time.
+ *
+ * Never throws. The failed payload and every one after it come back as
+ * `pending`, so a caller can pick the run up from where it stopped.
+ *
+ * @param io  { reupload(attachment), send({text, attachment}) }
+ * @returns  { ok, sent: [payload], pending: [payload], error }
+ */
+export async function deliverPayloads(payloads, io) {
+  const list = Array.isArray(payloads) ? payloads : [];
+  const sent = [];
+  for (let index = 0; index < list.length; index += 1) {
+    const payload = list[index];
+    try {
+      // A file cannot cross chats by pointing at where it was: the other chat
+      // has no access to this one's assets, so it is copied across first.
+      const attachment = payload.attachment ? await io.reupload(payload.attachment) : undefined;
+      await io.send({ text: payload.text, attachment });
+      sent.push(payload);
+    } catch (err) {
+      return {
+        ok: false,
+        sent,
+        pending: list.slice(index),
+        error: err?.message || 'Could not share this.',
+      };
+    }
+  }
+  return { ok: true, sent, pending: [] };
+}
+
+/**
+ * Send the queue into one chat.
+ *
+ * A thin answer on top of deliverPayloads: how many went, and what went
+ * wrong. The rule about stopping at the first failure lives in
+ * deliverPayloads, so there is one place that decides it.
  *
  * Never throws. Returns what happened, including how far it got, because "it
  * did not send" and "the first three went and the fourth did not" are different
@@ -205,17 +247,7 @@ export function chatDisplayName(chat) {
  * @param io  { reupload(attachment), send({text, attachment}) }
  */
 export async function deliverQueue(queue, io) {
-  let count = 0;
-  for (const payload of queue || []) {
-    try {
-      // A file cannot cross chats by pointing at where it was: the other chat
-      // has no access to this one's assets, so it is copied across first.
-      const attachment = payload.attachment ? await io.reupload(payload.attachment) : undefined;
-      await io.send({ text: payload.text, attachment });
-      count += 1;
-    } catch (err) {
-      return { ok: false, count, error: err?.message || 'Could not share this.' };
-    }
-  }
-  return { ok: true, count };
+  const res = await deliverPayloads(queue, io);
+  if (res.ok) return { ok: true, count: res.sent.length };
+  return { ok: false, count: res.sent.length, error: res.error };
 }

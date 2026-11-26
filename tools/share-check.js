@@ -186,14 +186,14 @@ async function main() {
 
       check('a one-send share is not announced as several', () => {
         const got = S.shareNotice(msg());
-        return got === 'Pick a chat or a contact to send this to.' || got;
+        return got === 'Pick one or more people to send this to.' || got;
       });
 
       check('the notice counts sends, not files plus one for the text', () => {
         // The text rides along with the first file, so three files is three
         // messages, not four.
         const got = S.shareNotice(msg({ attachments: [att(1), att(2), att(3)] }));
-        return /sends 3 messages/.test(got) || got;
+        return /gets 3 messages/.test(got) || got;
       });
 
       check('the notice does not say the first message carries no file', () => {
@@ -449,6 +449,12 @@ async function main() {
       const calls = { send: [], uploads: [], create: [], contacts: [] };
       let reuploadReturnsNothing = false;
       let failSendAt = 0;
+      // The chats whose sends are refused, whatever is being sent into them.
+      const failChats = new Set();
+      // How many sends were attempted, including the ones that were refused.
+      let sendCalls = 0;
+      // A gate the send waits on, so a run can be caught in flight.
+      let sendGate = null;
 
       window.beeper = {
         accounts: { list: async () => ({ ok: true, data: [] }) },
@@ -469,8 +475,13 @@ async function main() {
         },
         messages: {
           send: async (chatID, payload) => {
+            if (sendGate) await sendGate;
+            // A refused send is not counted as sent: the retry is about what
+            // did not go, so the recording has to keep the two apart.
+            sendCalls += 1;
+            if (failChats.has(chatID)) return { ok: false, error: { message: 'send refused' } };
+            if (failSendAt && sendCalls === failSendAt) return { ok: false, error: { message: 'send refused' } };
             calls.send.push({ chatID: chatID, payload: payload });
-            if (failSendAt && calls.send.length === failSendAt) return { ok: false, error: { message: 'send refused' } };
             return { ok: true, data: { id: 'm' + calls.send.length } };
           },
         },
@@ -501,16 +512,54 @@ async function main() {
       };
       const toastText = () => [...document.querySelectorAll('#toast-root .toast')].map((n) => n.textContent).join(' | ');
 
+      /** Tick a row: a click picks it, and sends nothing. */
+      const pick = async (list, index) => {
+        const rows = [...list.querySelectorAll('.result-item')];
+        const row = rows[index || 0];
+        if (!row) throw new Error('no row at ' + (index || 0));
+        row.click();
+        await tick(30);
+        return row;
+      };
+
+      /** Press Send. It is the primary button, and the only one. */
+      const pressSend = async () => {
+        const button = document.querySelector('#modal-root .modal-footer .btn-primary');
+        if (!button) throw new Error('no Send button');
+        button.click();
+        await tick(120);
+        return button;
+      };
+
+      /** Press Retry, if it is there. */
+      const pressRetry = async () => {
+        const button = [...document.querySelectorAll('#modal-root .modal-footer .btn')]
+          .find((b) => /Retry/.test(b.textContent));
+        if (!button) throw new Error('no Retry button');
+        button.click();
+        await tick(120);
+        return button;
+      };
+
+      /** The run list: who is on it, and what it says about them. */
+      const runStates = () => [...document.querySelectorAll('#modal-root .share-run-row')]
+        .map((n) => ((n.querySelector('.share-run-name') || {}).textContent || '')
+          + ': ' + ((n.querySelector('.share-run-state') || {}).textContent || ''));
+
       const SOURCE = { id: '!src', title: 'Source chat', accountID: '!acct', lastActivity: '2026-03-05T00:00:00Z' };
 
-      function seed(over) {
+      function seed(over, extra) {
         St.state.chats.clear();
-        for (const c of [SOURCE, chat('!other', 'Other chat', '2026-03-04T00:00:00Z', over)])
-          St.state.chats.set(c.id, c);
+        const chats = [SOURCE, chat('!other', 'Other chat', '2026-03-04T00:00:00Z', over)];
+        for (const c of extra || []) chats.push(c);
+        for (const c of chats) St.state.chats.set(c.id, c);
         St.state.accounts = [{ accountID: '!acct', status: 'connected' }];
         calls.send.length = 0; calls.uploads.length = 0; calls.create.length = 0; calls.contacts.length = 0;
         reuploadReturnsNothing = false;
         failSendAt = 0;
+        failChats.clear();
+        sendCalls = 0;
+        sendGate = null;
         document.querySelector('#toast-root').innerHTML = '';
       }
 
@@ -534,13 +583,13 @@ async function main() {
         return (got.length === 0 && /1 read-only chat/.test(said)) || ('rows: ' + got.join(',') + ' / summary: ' + said);
       });
 
-      await checkAsync('the picker says how many messages a share will send', async () => {
+      await checkAsync('the picker says how many messages each person gets', async () => {
         seed();
         await open(msg({ attachments: [att(1), att(2), att(3)] }));
         const header = notice();
         // A literal, not shareNotice()'s own output: comparing the picker to the
         // function it calls would agree with any number the function produces.
-        return header === 'Sending this sends 3 messages, one per file - Beeper takes a single file at a time.'
+        return header === 'Each person gets 3 messages, one per file - Beeper takes a single file at a time.'
           || header;
       });
 
@@ -548,7 +597,7 @@ async function main() {
         seed();
         await open();
         const header = notice();
-        return /Pick a chat or a contact/.test(header) || header;
+        return /Pick one or more people/.test(header) || header;
       });
 
       await checkAsync('the box opens holding the message, unchanged', async () => {
@@ -569,8 +618,8 @@ async function main() {
         seed();
         await open();
         await setDraft('see you at 7 instead');
-        (lists()[0].querySelector('.result-item')).click();
-        await tick(60);
+        await pick(lists()[0]);
+        await pressSend();
         return (calls.send.length === 1
           && calls.send[0].chatID === '!other'
           && calls.send[0].payload.text === 'see you at 7 instead')
@@ -581,8 +630,8 @@ async function main() {
         seed();
         await open();
         await setDraft('take a look at this');
-        (lists()[0].querySelector('.result-item')).click();
-        await tick(60);
+        await pick(lists()[0]);
+        await pressSend();
         return !/forwarded from/i.test(calls.send[0].payload.text) || calls.send[0].payload.text;
       });
 
@@ -590,8 +639,8 @@ async function main() {
         seed();
         await open(msg({ attachments: [att(1), att(2)] }));
         await setDraft('shorter than the original');
-        (lists()[0].querySelector('.result-item')).click();
-        await tick(60);
+        await pick(lists()[0]);
+        await pressSend();
         return (calls.send.length === 2 && calls.uploads.join(',') === 'att1,att2')
           || JSON.stringify({ sent: calls.send.length, uploads: calls.uploads });
       });
@@ -600,8 +649,8 @@ async function main() {
         seed();
         await open(msg({ attachments: [att(1)] }));
         await setDraft('');
-        (lists()[0].querySelector('.result-item')).click();
-        await tick(60);
+        await pick(lists()[0]);
+        await pressSend();
         // !! again: the chain ends in the attachment, an object, and a truthy
         // object is not the boolean the runner compares against.
         return !!(calls.send.length === 1 && !calls.send[0].payload.text && calls.send[0].payload.attachment)
@@ -614,8 +663,8 @@ async function main() {
         seed();
         await open();
         await setDraft('   ');
-        (lists()[0].querySelector('.result-item')).click();
-        await tick(60);
+        await pick(lists()[0]);
+        await pressSend();
         return calls.send.length === 0 || calls.send.length + ' blank messages went out';
       });
 
@@ -623,8 +672,8 @@ async function main() {
         seed();
         await open();
         await setDraft('');
-        (lists()[0].querySelector('.result-item')).click();
-        await tick(60);
+        await pick(lists()[0]);
+        await pressSend();
         const stillOpen = !document.querySelector('#modal-root').hidden;
         return stillOpen || 'the picker closed on an empty share';
       });
@@ -654,8 +703,8 @@ async function main() {
       await checkAsync('picking a chat sends the message and nothing else', async () => {
         seed();
         await open();
-        (lists()[0].querySelector('.result-item')).click();
-        await tick(60);
+        await pick(lists()[0]);
+        await pressSend();
         return (calls.send.length === 1
           && calls.send[0].chatID === '!other'
           && calls.send[0].payload.text === 'hello')
@@ -665,8 +714,8 @@ async function main() {
       await checkAsync('picking a chat with files sends every file, copied across', async () => {
         seed();
         await open(msg({ attachments: [att(1), att(2)] }));
-        (lists()[0].querySelector('.result-item')).click();
-        await tick(60);
+        await pick(lists()[0]);
+        await pressSend();
         return (calls.send.length === 2 && calls.uploads.join(',') === 'att1,att2')
           || JSON.stringify({ sent: calls.send.length, uploads: calls.uploads });
       });
@@ -674,29 +723,34 @@ async function main() {
       await checkAsync('the success message says where it went', async () => {
         seed();
         await open();
-        (lists()[0].querySelector('.result-item')).click();
-        await tick(60);
+        await pick(lists()[0]);
+        await pressSend();
         return /Shared to Other chat/.test(toastText()) || toastText();
       });
 
-      await checkAsync('a send that fails part way says how far it got', async () => {
+      await checkAsync('a send that fails part way says what failed', async () => {
         seed();
         failSendAt = 2;
         await open(msg({ attachments: [att(1), att(2)] }));
-        (lists()[0].querySelector('.result-item')).click();
-        await tick(60);
-        const said = toastText();
-        return (/1 of the messages went/.test(said) && /send refused/.test(said)) || said;
+        await pick(lists()[0]);
+        await pressSend();
+        // One file went and the second did not. The row says so, and the
+        // picker stays open, because there is something left to send.
+        const rows = runStates();
+        const stillOpen = !document.querySelector('#modal-root').hidden;
+        return (rows.length === 1 && /Failed/.test(rows[0]) && /send refused/.test(rows[0]) && stillOpen)
+          || JSON.stringify({ rows, toast: toastText() });
       });
 
       await checkAsync('a copy that produced nothing stops the share rather than sending the text alone', async () => {
         seed();
         reuploadReturnsNothing = true;
         await open(msg({ attachments: [att(1)] }));
-        (lists()[0].querySelector('.result-item')).click();
-        await tick(60);
-        return (calls.send.length === 0 && /could not be copied/i.test(toastText()))
-          || JSON.stringify({ sent: calls.send.length, toast: toastText() });
+        await pick(lists()[0]);
+        await pressSend();
+        const rows = runStates();
+        return (calls.send.length === 0 && /could not be copied/i.test(rows.join(' ')))
+          || JSON.stringify({ sent: calls.send.length, rows, toast: toastText() });
       });
 
       await checkAsync('searching finds a contact who has no chat yet', async () => {
@@ -717,8 +771,8 @@ async function main() {
         search.value = 'bea';
         search.dispatchEvent(new Event('input', { bubbles: true }));
         await tick(400);
-        (lists()[1].querySelector('.result-item')).click();
-        await tick(60);
+        await pick(lists()[1]);
+        await pressSend();
         return (calls.create.length === 1 && calls.send.length === 1 && calls.send[0].chatID === '!newchat')
           || JSON.stringify({ create: calls.create.length, send: calls.send.length });
       });
@@ -732,8 +786,8 @@ async function main() {
         search.value = 'bea';
         search.dispatchEvent(new Event('input', { bubbles: true }));
         await tick(400);
-        (lists()[1].querySelector('.result-item')).click();
-        await tick(60);
+        await pick(lists()[1]);
+        await pressSend();
         const payload = calls.create[0] || {};
         const clean = !('messageText' in payload);
         const twice = calls.send.filter((s) => s.payload.text).length === 1;
@@ -745,8 +799,139 @@ async function main() {
         await open();
         const row = lists()[0].querySelector('.result-item');
         row.click(); row.click(); row.click();
-        await tick(60);
+        await tick(30);
+        // Three clicks on one row leave it picked once, not three times, and
+        // one press of Send sends one message.
+        await pressSend();
         return calls.send.length === 1 || calls.send.length + ' sends went out';
+      });
+
+      // ---------------------------------------------------------------------
+      // Several people at once
+      // ---------------------------------------------------------------------
+
+      await checkAsync('ticking a row sends nothing', async () => {
+        seed();
+        await open();
+        await pick(lists()[0]);
+        await tick(60);
+        return calls.send.length === 0 || calls.send.length + ' sends went out';
+      });
+
+      await checkAsync('the send button says who it will send to', async () => {
+        seed();
+        await open();
+        const button = document.querySelector('#modal-root .modal-footer .btn-primary');
+        const before = button.textContent;
+        await pick(lists()[0]);
+        return (before === 'Send' && button.textContent === 'Send to Other chat')
+          || before + ' -> ' + button.textContent;
+      });
+
+      await checkAsync('the send button is disabled until something is picked', async () => {
+        seed();
+        await open();
+        const button = document.querySelector('#modal-root .modal-footer .btn-primary');
+        const before = button.disabled;
+        await pick(lists()[0]);
+        return (before === true && button.disabled === false)
+          || JSON.stringify({ before: before, after: button.disabled });
+      });
+
+      await checkAsync('the picker says how many messages are about to go out', async () => {
+        seed();
+        await open(msg({ attachments: [att(1), att(2)] }));
+        await pick(lists()[0]);
+        const said = summaries().join(' ');
+        return /1 selected - 2 messages will be sent/.test(said) || said;
+      });
+
+      await checkAsync('two people are sent to, in the order they were picked', async () => {
+        seed({}, [chat('!third', 'Third chat', '2026-03-03T00:00:00Z')]);
+        await open();
+        const list = lists()[0];
+        await pick(list, 0);
+        await pick(list, 1);
+        await pressSend();
+        const where = calls.send.map((s) => s.chatID).join(',');
+        return (where === '!other,!third') || where;
+      });
+
+      await checkAsync('a refusal for one person does not stop the next', async () => {
+        seed({}, [chat('!third', 'Third chat', '2026-03-03T00:00:00Z')]);
+        failChats.add('!other');
+        await open();
+        const list = lists()[0];
+        await pick(list, 0);
+        await pick(list, 1);
+        await pressSend();
+        const rows = runStates();
+        const where = calls.send.map((s) => s.chatID).join(',');
+        return (where === '!third' && rows.length === 2 && /Failed/.test(rows[0]) && /Sent/.test(rows[1]))
+          || JSON.stringify({ where: where, rows: rows });
+      });
+
+      await checkAsync('the retry sends only what failed', async () => {
+        seed({}, [chat('!third', 'Third chat', '2026-03-03T00:00:00Z')]);
+        failChats.add('!other');
+        await open(msg({ attachments: [att(1), att(2)] }));
+        const list = lists()[0];
+        await pick(list, 0);
+        await pick(list, 1);
+        await pressSend();
+        // The other chat took both of its files; this one sent nothing.
+        const before = calls.send.length;
+        failChats.delete('!other');
+        await pressRetry();
+        const last = calls.send.slice(before)
+          .map((s) => s.chatID + ':' + ((s.payload.attachment && s.payload.attachment.id) || 'text'))
+          .join(',');
+        return (before === 2 && last === '!other:copy-att1,!other:copy-att2')
+          || JSON.stringify({ before: before, last: last });
+      });
+
+      await checkAsync('a retry does not start a second chat for a contact', async () => {
+        seed();
+        await open();
+        const search = root().querySelector('input[type=search]');
+        search.value = 'bea';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+        await tick(400);
+        await pick(lists()[1]);
+        failChats.add('!newchat');
+        await pressSend();
+        const created = calls.create.length;
+        failChats.delete('!newchat');
+        await pressRetry();
+        return (created === 1 && calls.create.length === 1
+          && calls.send.length === 1 && calls.send[0].chatID === '!newchat')
+          || JSON.stringify({ created: created, creates: calls.create.length, sent: calls.send.length });
+      });
+
+      await checkAsync('closing the picker stops the queue', async () => {
+        seed({}, [chat('!third', 'Third chat', '2026-03-03T00:00:00Z')]);
+        let release = null;
+        sendGate = new Promise((r) => { release = r; });
+        try {
+          await open();
+          const list = lists()[0];
+          await pick(list, 0);
+          await pick(list, 1);
+          document.querySelector('#modal-root .modal-footer .btn-primary').click();
+          await tick(60);
+          // Close the picker while the queue is still sending.
+          document.querySelector('#modal-root .modal-header .icon-btn').click();
+          await tick(30);
+          release();
+          await tick(150);
+        } finally {
+          sendGate = null;
+        }
+        // The first destination went; the second was not sent, because the
+        // picker was closed.
+        const where = calls.send.map((s) => s.chatID).join(',');
+        return (where === '!other' && /not sent/.test(toastText()))
+          || JSON.stringify({ where: where, toast: toastText() });
       });
 
       // Report from the page, decide the exit code in Node: the renderer has

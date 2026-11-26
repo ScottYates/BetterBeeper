@@ -2860,11 +2860,96 @@ shapes it can have are worth measuring rather than assuming: the rule was
 written on 2026-11-08 against a bridge that sent nothing, and the change
 arrived sixteen days later with no announcement.
 
+## Work done 2026-11-26
+
+### The Share picker sends to several people now
+
+**What it does.** The "Share with..." picker used to send to exactly one
+place: a click on a row sent the message and closed the modal. Sharing the
+same message to five people meant opening the picker five times. If the third
+one failed, the first two were already sent and the failed one was gone - the
+picker had closed and the error was a toast that was over by the time it was
+read.
+
+Now a click **ticks** a row and sends nothing, and the **Send** button sends to
+everyone ticked, one after another. The picker then becomes the list of what
+happened: one row per person, with *Sent* or *Failed - the reason*. If
+something failed the picker stays open, because a retry needs somewhere to
+live, and the footer offers **Retry N failed**. If everything went, the picker
+closes and the toast says how many people and how many messages.
+
+Three decisions came from Scott, and they are the ones the code follows:
+
+1. A click always toggles a tick. There is no click-to-send shortcut and no
+   separate multi-select mode. Sending to one person is now a tick and a
+   button.
+2. A person who took 2 of 3 files before one failed is sent **only the file
+   that failed** the second time. The two that arrived are not sent again.
+3. Closing the picker while the queue is sending **stops the rest**. What
+   already went stays sent, and the toast says how far it got.
+
+**The rules are in a module of their own.**
+`src/renderer/js/share-queue.js` holds the decisions about several
+destinations, with no DOM and no account, so they can be checked the way
+`share.js` already is: `targetKey` (one key per place, so a contact who also
+has a chat is one person), `toggleSelection`, `orderedTargets`, `buildPlan`,
+`deliverPlan`, `retryableTargets`, `unsentTargets`, `planSendCount` and the
+wording. `share.js` grew `deliverPayloads`, which reports **which** payloads
+went rather than how many, and `deliverQueue` is now a thin answer on top of
+it - so the rule about stopping at the first failure has one implementation
+and not two.
+
+**What makes it hard, and would be easy to get wrong.**
+
+- **Beeper takes one attachment per send.** A message with three files is three
+  messages, and every one of them needs its own copy of every file in every
+  destination, because a file cannot cross chats by pointing at where it was.
+  Five people and two files is ten messages, so the count is said *before*
+  anything is sent.
+- **A refusal in one destination says nothing about the next.** The next
+  destination is a different chat with a different person, and stopping would
+  leave them with nothing because somebody else's send failed. The run carries
+  on and records what failed. Within one destination the payloads still stop at
+  the first failure, because half a conversation reads differently from all of
+  it.
+- **A partial send must not be repeated.** The payload list is what says which
+  messages went, which is why the retry is built from the outcome rather than
+  from the original message.
+
+**What proves it.**
+
+- `npm run check:sharequeue` (38/38) reads the rules with no Electron and no
+  window: the plan keeps the order the people were ticked in, a failure in one
+  does not stop the next, a destination stops at its own first failure, the
+  retry picks only what failed and sends only the payloads that did not go, a
+  contact's chat is started once and reused by the retry, and the count is
+  people times files.
+- `npm run check:sharequeueredproof` (10/10) reintroduces seven breaks in the
+  source - the queue stopping at the first refusal, the retry sending what had
+  already gone, the count counting destinations instead of messages, a
+  destination's own payloads ignored, the run not stopping when it is told to,
+  a second tick replacing the first, and the picker closing even when something
+  failed - and requires the right suite to go red each time.
+- `npm run check:share` (85/85) drives the real picker in Electron with only
+  `window.beeper` replaced: ticking sends nothing, the Send button says who it
+  will send to and how many messages that is, two people are sent to in the
+  order they were ticked, a refusal for one does not stop the next, the retry
+  sends only what failed, a contact's chat is not started a second time, and
+  closing the picker mid-run stops the queue.
+
+**The general lesson.** A single-destination feature has no queue in it, and
+the moment the destination count grows, three separate questions appear that
+did not exist before: what happens to the others when one fails, what is the
+truthful count of messages about to be sent, and what does "send again" mean
+when half of it arrived. All three are answered in one module, away from the
+DOM, because they are rules and not drawing.
+
 ## Verification status
-`npm run check:all` sweeps **64 suites**. On the v1.33.2 release commit, 63 of
+`npm run check:all` sweeps **66 suites**. On the v1.34.0 release commit, 65 of
 them pass, and the one that does not is `check:released`, which is red until
 the release carrying this work is cut, because `main` is ahead of the newest
-tag. The suite count was 63 before `check:sendstatus` was added. It was 61 suites on the
+tag. The suite count was 64 before `check:sharequeue` and
+`check:sharequeueredproof` were added. It was 63 before `check:sendstatus` was added. It was 61 suites on the
 tree carrying the 2026-11-12 work, 59 of them passing; it was 58 suites on the
 tree carrying the 2026-11-11 work, 57 of them passing; it was 54 suites on the
 tree carrying the 2026-11-09 work, 53 of them passing; 53 suites on the tree
@@ -2904,6 +2989,8 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:composeredit` | 58/58 checks passed |
 | `check:composereditrules` | 49/49 checks passed, with no Electron and no window, and the cases the bridge's delivery receipt needs |
 | `check:sendstatus` | 13/13 checks passed, reading both shapes of the delivery status, with no Electron and no window (new) |
+| `check:sharequeue` | 38/38 checks passed, the rules for several destinations, with no Electron and no window (new) |
+| `check:sharequeueredproof` | 10/10 checks passed, proving seven breaks in the source turn the right suite red, with the files restored byte for byte (new) |
 | `tools/send-status-redproof.js` | 5/5 mutations caught, no holes, with an asserted baseline (new) |
 | `check:bridgeplaceholder` | 12/12 checks passed, with no Electron and no window (new) |
 | `check:threadopen` | 29/29 checks passed |

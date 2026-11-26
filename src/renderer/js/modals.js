@@ -13,8 +13,25 @@ import {
   chatDisplayName,
   canShare,
   shareNotice,
-  deliverQueue,
 } from './share.js';
+import {
+  targetKey,
+  chatTarget,
+  contactTarget,
+  toggleSelection,
+  orderedTargets,
+  buildPlan,
+  deliverPlan,
+  retryableTargets,
+  unsentTargets,
+  planSendCount,
+  selectionSummary,
+  sentSummary,
+  runSummary,
+  SENT,
+  FAILED,
+  STOPPED,
+} from './share-queue.js';
 import { setJobStats } from './jobs.js';
 import { checkNow } from './updates.js';
 import { participantList, participantPhone, participantDetail } from './participants.js';
@@ -351,6 +368,9 @@ export function openNewChat() {
 // Share a message with someone else
 // ---------------------------------------------------------------------------
 
+/** Said when the box has nothing left in it to send. */
+const NOTHING_TO_SEND = 'There is nothing to send - add some text, or keep a file.';
+
 /**
  * Who a message can be shared with.
  *
@@ -376,6 +396,17 @@ export function openSharePicker(message, sourceChat) {
   const results = el('div', { class: 'result-list' });
   const contactResults = el('div', { class: 'result-list' });
   const summary = el('div', { class: 'search-summary' });
+  const selectedLine = el('div', { class: 'search-summary' });
+  const runList = el('div', { class: 'share-run' });
+  const runSummaryLine = el('div', { class: 'search-summary' });
+
+  // The two halves of the picker. The picking half is hidden when the run
+  // starts, and the run half is hidden until then, so there is one thing on
+  // screen at a time rather than a form that has become meaningless.
+  const pickBox = el('div', { class: 'share-pick' });
+  const runBox = el('div', { class: 'share-run-wrap' });
+  runBox.style.display = 'none';
+
   const search = el('input', {
     type: 'search',
     placeholder: 'Search chats and contacts...',
@@ -383,7 +414,34 @@ export function openSharePicker(message, sourceChat) {
     spellcheck: 'false',
   });
 
+  // The destinations picked, in the order they were picked, because that is
+  // the order they are sent in.
+  let selected = [];
+  // Every destination on offer, by key, so a pick survives a redraw.
+  const targets = new Map();
+  // key -> the row on screen: a pick is a class change, not a rebuild.
+  const rowNodes = new Map();
+  // key -> the row in the run list.
+  const runRows = new Map();
+  // What the last run did, one entry per destination.
+  let outcomes = [];
+  // A run is in flight.
   let busy = false;
+  // The run was told to stop, and ends after the destination it is on.
+  let stopping = false;
+  // The picker was closed, so nothing may be drawn after this.
+  let closed = false;
+
+  const sendButton = el('button', { class: 'btn btn-primary', text: 'Send', onClick: () => startRun() });
+  const retryButton = el('button', { class: 'btn', text: 'Retry', onClick: () => startRetry() });
+  const againButton = el('button', { class: 'btn', text: 'Send the rest', onClick: () => sendStopped() });
+  const cancelButton = el('button', {
+    class: 'btn',
+    text: 'Cancel',
+    onClick: () => { if (busy) stop(); else closeModal(); },
+  });
+  retryButton.hidden = true;
+  againButton.hidden = true;
 
   /**
    * What would be sent if a target were picked right now.
@@ -397,20 +455,72 @@ export function openSharePicker(message, sourceChat) {
     summary.textContent = text;
   }
 
-  function row({ title, sub, avatar, onPick, list = results }) {
-    list.append(
+  /**
+   * One row on offer.
+   *
+   * A click ticks the row and sends nothing. The send is the button's job,
+   * because the button is also where the count of what is about to happen is
+   * said, and a click cannot say that.
+   */
+  function row({ title, sub, avatar, target, list = results }) {
+    const key = targetKey(target);
+    const node = el(
+      'div',
+      { class: 'result-item', onClick: () => toggle(target) },
+      avatar,
       el(
         'div',
-        { class: 'result-item', onClick: () => onPick() },
-        avatar,
-        el(
-          'div',
-          { class: 'result-item-body' },
-          el('div', { class: 'result-item-title', text: title }),
-          sub ? el('div', { class: 'result-item-sub', text: sub }) : null,
-        ),
+        { class: 'result-item-body' },
+        el('div', { class: 'result-item-title', text: title }),
+        sub ? el('div', { class: 'result-item-sub', text: sub }) : null,
       ),
     );
+    list.append(node);
+    rowNodes.set(key, node);
+    return node;
+  }
+
+  /** Tick a destination, or untick it. */
+  function toggle(target) {
+    if (busy) return;
+    const key = targetKey(target);
+    if (!key) return;
+    selected = toggleSelection(selected, key);
+    paintSelection();
+  }
+
+  /**
+   * What is picked, and what picking it will do.
+   *
+   * The count of messages is said here rather than after the fact, because
+   * four messages turning up in somebody else's chat is not something to
+   * discover afterwards.
+   */
+  function paintSelection() {
+    const chosen = chosenTargets();
+    for (const [key, node] of rowNodes) {
+      const on = selected.includes(key);
+      node.classList.toggle('is-selected', on);
+      // The tick is the same one the New chat picker uses, so the two
+      // multi-selects in the app look like each other.
+      const ticked = node.querySelector('.result-check');
+      if (on && !ticked) node.append(el('span', { class: 'result-check', text: '✓' }));
+      if (!on && ticked) ticked.remove();
+    }
+    const queue = currentQueue();
+    if (!queue) {
+      selectedLine.textContent = NOTHING_TO_SEND;
+      sendButton.disabled = true;
+      return;
+    }
+    const plan = buildPlan(chosen, queue);
+    selectedLine.textContent = selectionSummary(chosen.length, planSendCount(plan));
+    sendButton.textContent = chosen.length === 0
+      ? 'Send'
+      : chosen.length === 1
+        ? `Send to ${chosen[0].label}`
+        : `Send to ${chosen.length} people`;
+    sendButton.disabled = busy || chosen.length === 0;
   }
 
   // A share can be several messages, so say so before it happens rather than
@@ -425,27 +535,35 @@ export function openSharePicker(message, sourceChat) {
     source ? source : '',
   ].filter(Boolean).join(' in ');
 
+  pickBox.append(
+    from ? el('div', { class: 'share-source', text: from }) : null,
+    draft,
+    attachments.length
+      ? el('div', {
+          class: 'share-files',
+          text: `${attachments.length} file${attachments.length === 1 ? '' : 's'} going along: `
+            + attachments.map((a) => a.fileName || 'attachment').join(', '),
+        })
+      : null,
+    el('div', { class: 'form-row' }, search),
+    el('div', { class: 'share-notice', text: header }),
+    selectedLine,
+    results,
+    contactResults,
+    summary,
+  );
+  runBox.append(runList, runSummaryLine);
+
   openModal({
     title: 'Share with...',
-    body: el(
-      'div',
-      {},
-      from ? el('div', { class: 'share-source', text: from }) : null,
-      draft,
-      attachments.length
-        ? el('div', {
-            class: 'share-files',
-            text: `${attachments.length} file${attachments.length === 1 ? '' : 's'} going along: `
-              + attachments.map((a) => a.fileName || 'attachment').join(', '),
-          })
-        : null,
-      el('div', { class: 'form-row' }, search),
-      el('div', { class: 'share-notice', text: header }),
-      results,
-      contactResults,
-      summary,
-    ),
-    footer: [el('button', { class: 'btn', text: 'Cancel', onClick: closeModal })],
+    body: el('div', {}, pickBox, runBox),
+    footer: [cancelButton, againButton, retryButton, sendButton],
+    // Closing mid-run stops the queue. The destinations that were not reached
+    // are not sent, and the toast says how far it got before it stopped.
+    onClose: () => {
+      closed = true;
+      if (busy) stopping = true;
+    },
   });
 
   search.focus();
@@ -462,72 +580,221 @@ export function openSharePicker(message, sourceChat) {
     return shareQueue(payload, payload.text);
   }
 
-  /** Everything is frozen once a send starts, so it cannot be done twice. */
-  function lock(message_) {
+  /** The destinations that are ticked, in the order they were ticked. */
+  function chosenTargets() {
+    return orderedTargets([...targets.values()], selected);
+  }
+
+  /** Send to everything that is ticked. */
+  async function startRun() {
+    if (busy) return;
+    const queue = currentQueue();
+    if (!queue) return complain();
+    const chosen = chosenTargets();
+    if (!chosen.length) return;
+    await run(chosen, queue, true);
+  }
+
+  /** Send again the parts of a failed destination that did not go. */
+  async function startRetry() {
+    if (busy) return;
+    const left = retryableTargets(outcomes);
+    if (!left.length) return;
+    await run(left, null, false);
+  }
+
+  /** Send the destinations the run never reached. */
+  async function sendStopped() {
+    if (busy) return;
+    const stopped = outcomes.filter((o) => o.state === STOPPED);
+    const left = unsentTargets(outcomes).filter((t) => stopped.some((o) => o.key === t.key));
+    if (!left.length) return;
+    await run(left, null, false);
+  }
+
+  /**
+   * The run itself.
+   *
+   * Everything is frozen once it starts, so it cannot be done twice, and the
+   * picker turns into the list of what happened - one row per destination,
+   * because a share to six people that quietly failed for one of them is not
+   * something to find out from a toast.
+   */
+  async function run(targetsToSend, payloads, reset) {
+    const plan = buildPlan(targetsToSend, payloads);
     busy = true;
+    stopping = false;
+    renderRun(plan, reset);
+    pickBox.style.display = 'none';
+    runBox.style.display = 'block';
+    lock();
+
+    const res = await deliverPlan(plan, shareIO());
+    outcomes = mergeOutcomes(outcomes, res.outcomes);
+    busy = false;
+
+    paintOutcomes();
+    finish();
+  }
+
+  /** Everything is frozen once a send starts, so it cannot be done twice. */
+  function lock() {
     search.disabled = true;
     draft.disabled = true;
-    setSummary(message_);
+    sendButton.disabled = true;
+    cancelButton.textContent = 'Stop';
   }
 
-  async function sendToChat(chat) {
-    if (busy) return;
-    const queue = currentQueue();
-    if (!queue) return complain();
-    lock(`Sending to ${chatDisplayName(chat)}...`);
-    const sent = await deliver(queue, chat.id);
-    closeModal();
-    report(sent, chatDisplayName(chat));
+  /** Stop the run after the destination it is on. */
+  function stop() {
+    if (!busy) return;
+    stopping = true;
+    if (!closed) runSummaryLine.textContent = 'Stopping after this one...';
   }
 
-  async function sendToContact(contact) {
-    if (busy) return;
-    const contactID = contact.id || contact.userID;
-    const who = contact.fullName || contact.username || 'this contact';
-    if (!contactID) return;
+  /** One row per destination in the run list. */
+  function renderRun(plan, reset) {
+    if (reset) {
+      clear(runList);
+      runRows.clear();
+    }
+    for (const target of plan) {
+      if (runRows.has(target.key)) continue;
+      const node = el(
+        'div',
+        { class: 'share-run-row', dataset: { key: target.key, state: 'waiting' } },
+        el('span', { class: 'share-run-name', text: target.label }),
+        el('span', { class: 'share-run-state', text: 'Waiting' }),
+      );
+      runList.append(node);
+      runRows.set(target.key, node);
+    }
+  }
 
-    const queue = currentQueue();
-    if (!queue) return complain();
+  /** Say what happened to each destination. */
+  function paintOutcomes() {
+    for (const outcome of outcomes) {
+      const node = runRows.get(outcome.key);
+      if (!node) continue;
+      node.dataset.state = outcome.state;
+      const state = node.querySelector('.share-run-state');
+      if (state) state.textContent = stateText(outcome);
+    }
+  }
 
-    lock(`Starting a chat with ${who}...`);
+  function stateText(outcome) {
+    if (outcome.state === SENT) {
+      return outcome.sent > 1 ? `Sent (${outcome.sent} messages)` : 'Sent';
+    }
+    if (outcome.state === FAILED) return `Failed - ${outcome.error || 'could not be sent'}`;
+    if (outcome.state === STOPPED) return 'Not sent';
+    return 'Waiting';
+  }
 
-    // The chat is created empty and the queue is sent into it afterwards, the
-    // same way it is sent into a chat that already existed. Beeper does take an
-    // opening message with a new chat, and using it here would mean the text
-    // went out twice over the moment the first message had an attachment.
-    const created = await call(
-      () =>
-        api.chats.create({
-          accountID: sourceChat?.accountID || connectedAccountID(),
-          type: 'single',
-          participantIDs: [contactID],
-        }),
-      { context: 'start a chat to share into', throwOnError: true },
-    ).catch((err) => ({ __error: err }));
+  /**
+   * Fold a second run into what the first one did.
+   *
+   * The counts add up, so a destination that took two files and then one more
+   * on a retry says three, not one.
+   */
+  function mergeOutcomes(prev, next) {
+    const byKey = new Map((prev || []).map((o) => [o.key, o]));
+    for (const outcome of next || []) {
+      const before = byKey.get(outcome.key);
+      byKey.set(
+        outcome.key,
+        before ? { ...outcome, sent: (before.sent || 0) + (outcome.sent || 0) } : outcome,
+      );
+    }
+    return [...byKey.values()];
+  }
 
-    if (created?.__error) {
+  /**
+   * The end of a run.
+   *
+   * Everything that went closes the picker. Anything that did not keeps it
+   * open, because a retry needs somewhere to live, and a picker that has
+   * closed cannot be retried from.
+   */
+  function finish() {
+    const failed = outcomes.filter((o) => o.state === FAILED);
+    const stopped = outcomes.filter((o) => o.state === STOPPED);
+    const line = runSummary(outcomes);
+
+    if (!closed) {
+      runSummaryLine.textContent = line;
+      retryButton.textContent = failed.length ? `Retry ${failed.length} failed` : 'Retry';
+      retryButton.hidden = !failed.length;
+      againButton.textContent = stopped.length ? `Send ${stopped.length} more` : 'Send the rest';
+      againButton.hidden = !stopped.length;
+      sendButton.hidden = true;
+      cancelButton.textContent = 'Close';
+    }
+
+    if (!failed.length && !stopped.length) {
       closeModal();
-      toast(created.__error.message, 'error', 5000);
+      toast(sentSummary(outcomes), 'success', 2400);
       return;
     }
+    toast(line || 'Some of it did not go.', 'error', 6000);
+  }
 
-    const chatID = created?.id || created?.chatID;
-    if (chatID) {
-      upsertChat(created);
-      bus.emit('chats:changed');
-    }
-
-    const sent = chatID
-      ? await deliver(queue, chatID)
-      : { ok: false, count: 0, error: 'Beeper did not return a chat to send into.' };
-
-    closeModal();
-    report(sent, who);
+  /**
+   * The network, for one run.
+   *
+   * A contact's chat is started when the run reaches it, and the id is kept,
+   * so a retry sends into the same chat instead of starting a second one.
+   */
+  function shareIO() {
+    return {
+      resolveChat: async (target) => {
+        if (target.chatID) return target.chatID;
+        if (target.kind !== 'contact') return '';
+        // The chat is created empty and the queue is sent into it afterwards,
+        // the same way it is sent into a chat that already existed. Beeper does
+        // take an opening message with a new chat, and using it here would mean
+        // the text went out twice over the moment the first message had an
+        // attachment.
+        const created = await call(
+          () =>
+            api.chats.create({
+              accountID: sourceChat?.accountID || connectedAccountID(),
+              type: 'single',
+              participantIDs: [target.id],
+            }),
+          { context: 'start a chat to share into', throwOnError: true },
+        );
+        const chatID = created?.id || created?.chatID;
+        if (chatID) {
+          upsertChat(created);
+          bus.emit('chats:changed');
+        }
+        return chatID || '';
+      },
+      // A reupload that resolves to nothing is a failure, not an empty result:
+      // `call` returns its fallback for a falsy value, and passing that
+      // straight on would send the message with the file quietly dropped.
+      reupload: async (attachment) => {
+        const uploaded = await call(() => api.assets.reupload(attachment), {
+          context: 'copy the file for the other chat',
+          throwOnError: true,
+        });
+        if (!uploaded) throw new Error('The file could not be copied to the other chat.');
+        return uploaded;
+      },
+      send: (chatID, payload) =>
+        call(() => api.messages.send(chatID, payload), {
+          context: 'send the shared message',
+          throwOnError: true,
+        }),
+      shouldStop: () => stopping,
+    };
   }
 
   /** The box was emptied of everything there was to send. The picker stays open. */
   function complain() {
-    setSummary('There is nothing to send - add some text, or keep a file.');
+    setSummary(NOTHING_TO_SEND);
+    paintSelection();
   }
 
   /**
@@ -544,13 +811,19 @@ export function openSharePicker(message, sourceChat) {
 
     clear(results);
     clear(contactResults);
+    // The rows are rebuilt, so the row map is rebuilt with them. The picks
+    // themselves live in `selected` and do not care: a destination that is
+    // still ticked stays ticked, even while it is off the screen.
+    rowNodes.clear();
 
     for (const chat of writable) {
+      const target = chatTarget(chat, chatDisplayName(chat));
+      targets.set(targetKey(target), target);
       row({
-        title: chatDisplayName(chat),
+        title: target.label,
         sub: chat.network ? `Chat on ${chat.network}` : 'Chat',
-        avatar: avatarNode(chat, initials(chatDisplayName(chat)) || '?', 'sm'),
-        onPick: () => sendToChat(chat),
+        avatar: avatarNode(chat, initials(target.label) || '?', 'sm'),
+        target,
       });
     }
 
@@ -567,12 +840,17 @@ export function openSharePicker(message, sourceChat) {
         clear(contactResults);
         for (const contact of res?.items || []) {
           if (!contact.id && !contact.userID) continue;
+          const target = contactTarget(
+            contact,
+            contact.fullName || contact.username || contact.phoneNumber || 'Contact',
+          );
+          targets.set(targetKey(target), target);
           row({
             list: contactResults,
-            title: contact.fullName || contact.username || contact.phoneNumber || 'Contact',
+            title: target.label,
             sub: `Start a new chat - ${contact.username || contact.phoneNumber || contact.email || 'contact'}`,
             avatar: avatarNode(contact, contact.fullName || contact.username || '?', 'sm'),
-            onPick: () => sendToContact(contact),
+            target,
           });
         }
       }
@@ -587,52 +865,22 @@ export function openSharePicker(message, sourceChat) {
     } else {
       setSummary(`${offered} option${offered === 1 ? '' : 's'}.${hidden}`);
     }
+
+    // The ticks are drawn again after every redraw: a search rebuilds the
+    // rows, and a pick that was on screen has to still be on screen.
+    paintSelection();
   }
 
   search.addEventListener('input', debounce(refresh, 200));
+  // The count of what is about to be sent depends on what is in the box, so
+  // editing the box moves it.
+  draft.addEventListener('input', () => paintSelection());
   refresh();
 }
 
 function connectedAccountID() {
   const connected = state.accounts.filter((a) => a.status === 'connected');
   return connected[0]?.accountID || state.accounts[0]?.accountID || '';
-}
-
-/**
- * Send the queue into one chat.
- *
- * All this does is supply the network. The order, the stop-on-first-failure and
- * the count of what got through are decided in share.js, which is where they can
- * be checked without an account.
- */
-function deliver(queue, chatID) {
-  return deliverQueue(queue, {
-    // A reupload that resolves to nothing is a failure, not an empty result:
-    // `call` returns its fallback for a falsy value, and passing that straight
-    // on would send the message with the file quietly dropped.
-    reupload: async (attachment) => {
-      const uploaded = await call(() => api.assets.reupload(attachment), {
-        context: 'copy the file for the other chat',
-        throwOnError: true,
-      });
-      if (!uploaded) throw new Error('The file could not be copied to the other chat.');
-      return uploaded;
-    },
-    send: (payload) =>
-      call(() => api.messages.send(chatID, payload), {
-        context: 'send the shared message',
-        throwOnError: true,
-      }),
-  });
-}
-
-function report(sent, where) {
-  if (!sent?.ok) {
-    const partial = sent?.count ? `${sent.count} of the messages went, then it failed. ` : '';
-    toast(`${partial}${sent?.error || 'Could not share this.'}`, 'error', 6000);
-    return;
-  }
-  toast(sent.count > 1 ? `Shared to ${where} as ${sent.count} messages` : `Shared to ${where}`, 'success', 2400);
 }
 
 // ---------------------------------------------------------------------------

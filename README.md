@@ -46,6 +46,13 @@ The chat UI talks to Beeper's REST API and its live WebSocket event stream. Beep
 - Beeper-style bubbles: the timestamp sits inside the bubble at its trailing edge, and sender
   names are hidden in one-to-one chats because the header already says who you are talking to
 - Send, edit, delete, and emoji-react to messages
+- Share a message with several people at once. Ticking a row picks a person and
+  sends nothing; the Send button sends to everyone ticked, one after another,
+  and says how many messages that will be - Beeper takes one file per message,
+  and every destination needs its own copies of every file. A refusal for one
+  person does not stop the others, the picker says what happened to each of
+  them, and a failure can be sent again without sending the messages that
+  already arrived a second time
 - Attach files, which are uploaded to Beeper and then referenced by the message
 - Paste an image straight into the composer with Ctrl+V. A pasted screenshot is a clipboard
   file with no text beside it, so there is nothing for the textarea to insert; it is uploaded

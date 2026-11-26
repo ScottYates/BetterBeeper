@@ -1166,6 +1166,23 @@ mark.ts-hit.is-current {
 .result-item-sub { font-size: 12px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .result-check { color: var(--accent); font-weight: 700; flex: none; }
 
+/* The share picker once the run has started: one row per destination, and
+   what happened to it. The picking half is hidden then, so there is one thing
+   on screen at a time and the run cannot be mistaken for a form. */
+.share-run { display: flex; flex-direction: column; gap: 4px; }
+.share-run-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 9px 11px; border-radius: var(--radius);
+  border: 1px solid transparent;
+}
+.share-run-name {
+  flex: 1; min-width: 0; font-weight: 600; font-size: 13.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.share-run-state { flex: none; font-size: 12px; color: var(--text-dim); }
+.share-run-row[data-state="sent"] .share-run-state { color: var(--success); }
+.share-run-row[data-state="failed"] .share-run-state { color: var(--danger); }
+
 /* A person, with their number beside their name.
    The name is the part that gives way when the row is too narrow: the number
    and the tags are the parts that must never be cut off. */
