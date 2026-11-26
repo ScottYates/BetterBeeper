@@ -376,6 +376,63 @@ export function upsertChat(chat) {
 }
 
 // ---------------------------------------------------------------------------
+// Chat list paging
+//
+// The chat list is read a page at a time, and the cursor for the next older
+// page is the only way to ask for the chats that come after the ones already
+// loaded. The sidebar does not need it - it shows what it has - but the share
+// picker does: it asks for the next page when the user scrolls past the last
+// row, so a chat the app has not loaded yet can still be picked.
+//
+// The cursor is recorded here because the two places that read the list are
+// different files, and a cursor kept in one of them is a cursor the other
+// cannot use.
+// ---------------------------------------------------------------------------
+
+/**
+ * How many chats one page of the list holds.
+ *
+ * A hundred is a page Beeper answers quickly, and it is what the app loads
+ * when it starts.
+ */
+export const CHAT_PAGE = 100;
+
+/** The cursor for the next older page, and whether there is one. */
+let pageCursor = '';
+let pageHasMore = false;
+
+/**
+ * The cursors already paged through.
+ *
+ * Every refresh re-reads the first page, and the cursor that page carries
+ * points at the page that was already loaded. Following it again would fetch
+ * the same chats a second time, so a cursor that has been used is remembered
+ * and ignored when it turns up again.
+ */
+const usedCursors = new Set();
+
+/**
+ * Record where the list paging got to.
+ *
+ * The cursor belongs to the page that was just read, and the one that follows
+ * it is the cursor for the page after that. A page with nothing behind it
+ * leaves no cursor, so the picker knows there is nothing more to ask for.
+ */
+export function noteChatPage(cursor, hasMore) {
+  const id = String(cursor || '');
+  if (id && usedCursors.has(id)) return { cursor: pageCursor, hasMore: pageHasMore };
+  if (id) usedCursors.add(id);
+  pageHasMore = Boolean(hasMore) && Boolean(id);
+  pageCursor = pageHasMore ? id : '';
+  return { cursor: pageCursor, hasMore: pageHasMore };
+}
+
+/** Where the next older page starts, if there is one. */
+export function chatPageState() {
+  return { cursor: pageCursor, hasMore: pageHasMore };
+}
+
+// ---------------------------------------------------------------------------
 // Pins
 //
 // Beeper's Desktop API advertises `isPinned` on PATCH /v1/chats/{id} and then

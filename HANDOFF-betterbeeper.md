@@ -2944,11 +2944,98 @@ truthful count of messages about to be sent, and what does "send again" mean
 when half of it arrived. All three are answered in one module, away from the
 DOM, because they are rules and not drawing.
 
+### The Share list is the Inbox now
+
+**What it does.** The "Share with..." picker offered the first twenty chats
+and stopped. The list it offered was also its own: not archived, not merged,
+not the Inbox's order, and not even the same chats the sidebar was showing.
+Two answers to "which conversations are there", and the picker's was the one
+that was wrong.
+
+Now the picker's list **is** the Inbox's list: the chats that are not
+archived, not merged into another one, and not the chat the message came
+from, in Beeper's order - pinned first, then most recent activity. The
+same-named collapse stays, because Beeper's Google Voice bridge hands out a
+second chat id for the same person minutes apart, and two rows called "Benji"
+are one destination.
+
+There is no cap any more. The list is drawn fifty rows at a time and fills in
+as the user scrolls, and when it runs out it asks Beeper for the next page:
+`api.chats.list({ limit, cursor, direction: 'before' })`. The count under the
+list says how many chats there are **in all**, not how many rows happen to be
+on screen - a count of fifty when there are a hundred and twenty is a count
+nobody can decide anything with.
+
+**Scott's two calls**, and the code follows them:
+
+1. Keep collapsing the same-named chats on the same network, so the older
+   *Benji* conversation stays hidden.
+2. Ask Beeper for the next page when the user scrolls past the last row, so
+   the picker can offer chats the Inbox has not loaded yet.
+
+**Why the rule is in a module of its own.** `src/renderer/js/inbox-chats.js`
+holds the set and the order, and `sidebar.js` and `share.js` both use it. The
+same rule written twice is two rules, and they drift apart quietly: the
+picker's list had already drifted from the sidebar's before anybody noticed.
+
+**Where the paging cursor lives.** `state.js` keeps it (`noteChatPage` and
+`chatPageState`) and `main.js` records it when it reads a page. It is
+remembered **per cursor**, not per page, because every refresh re-reads the
+first page and that page's cursor points at the page already loaded - following
+it again would fetch the same chats a second time.
+
+**What proves it.**
+
+- `npm run check:share` (98/98) drives the real picker in Electron with only
+  `window.beeper` replaced. The new cases: a long account is not cut off at
+  twenty, the list fills in as the user scrolls, the count says how many
+  chats there are rather than how many are drawn, an archived chat is not
+  offered, a pinned chat is offered first, scrolling past the end asks
+  Beeper for the next page with the right cursor and direction, and a chat
+  that arrived on that page can be picked and sent to.
+- `npm run check:sharelistredproof` (15/15) reintroduces twelve breaks in the
+  source - the list stopping at twenty again, the picker keeping a list of
+  its own, the same person offered twice, an archived chat offered again, a
+  merged chat offered again, the chat a message came from offered back to
+  itself, the pinned chats no longer coming first, the list not filling in on
+  scroll, the next page never being asked for, the count saying how many
+  rows are drawn, the list not being capped, and the picker saying "null" -
+  and requires the suite to go red each time. The files are put back byte
+  for byte and the suite is green again afterwards.
+
+**Two bugs the work turned up, both fixed here.**
+
+- **The picker said "null" in the middle of itself.** The native `append`
+  takes a null as the *text* "null", so appending the missing file line as a
+  null put the word on screen on every share of a message with no files -
+  which is the ordinary case. The children are filtered before they are
+  appended now. `el()` has always filtered them; this one call was not going
+  through it.
+- **The list could not scroll.** The list was given its own scrolling area
+  with `flex: 0 1 auto`, and a flex item that is allowed to shrink takes the
+  whole of the negative space: with three thousand pixels of list and three
+  hundred pixels of box, the item ended up with **no height at all**, and the
+  list was clipped flat rather than scrolled. The list is now **capped**
+  (`max-height: 42vh`) and not shrunk, and the harness wears the real
+  stylesheet so that a list which cannot scroll is a failing check rather
+  than a passing one.
+
+  The second one is worth remembering: the harness page used to carry no
+  stylesheet, so every height was the content height and a list that could
+  not scroll was indistinguishable from one that could. Loading
+  `styles.css` into the harness is what turned "the list fills in as you
+  scroll" into a test of scrolling.
+
+**The general lesson.** "The same list" in two places is not the same list.
+The picker had its own view of which conversations existed, and the only
+reason it was noticed is that somebody asked for a chat that was plainly
+there and it was not offered. The fix was not to make the picker's list
+longer; it was to give both places one rule and one place to keep it.
+
 ## Verification status
-`npm run check:all` sweeps **66 suites**. On the v1.34.0 release commit, 65 of
-them pass, and the one that does not is `check:released`, which is red until
-the release carrying this work is cut, because `main` is ahead of the newest
-tag. The suite count was 64 before `check:sharequeue` and
+`npm run check:all` sweeps **67 suites**, and all 67 pass on the tree
+carrying this work. The suite count was 66 before `check:sharelistredproof`
+was added. It was 64 before `check:sharequeue` and
 `check:sharequeueredproof` were added. It was 63 before `check:sendstatus` was added. It was 61 suites on the
 tree carrying the 2026-11-12 work, 59 of them passing; it was 58 suites on the
 tree carrying the 2026-11-11 work, 57 of them passing; it was 54 suites on the
@@ -2960,6 +3047,13 @@ on the v1.24.0 release commit, 2026-10-27; 43/43 on the v1.23.0 release
 commit, 2026-10-21; 42 suites before `check:contactrefresh` was added, 41
 before `check:participants`, 40 before `check:refreshchats`, 39 before
 `check:entity`, and 35/37 on 2026-10-14.
+
+`check:released` is the one that moves with the git state, and it is why the
+sweep above is 67/67 rather than 66/67: it was run while the tree was still
+standing on the v1.34.0 tag. It fails whenever `main` is ahead of the newest
+tag, because a push with no release behind it is exactly what it exists to
+catch. So it goes red on the commit that carries this work, and green again
+on the release commit behind it. That is the rule working, not a defect.
 
 One of those suites was red on `main` while this work was being done:
 `check:history` wanted a progress announcement out of a walk that finished

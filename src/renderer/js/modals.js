@@ -2,7 +2,7 @@
 
 import { $, el, clear, debounce, escapeHtml, initials, hueFor, fullTime, renderRichText } from './util.js';
 import { api, call } from './api.js';
-import { state, bus, chatList, chatTitle, upsertChat, deletedList, clearDeletedMessages } from './state.js';
+import { state, bus, chatList, chatTitle, upsertChat, deletedList, clearDeletedMessages, CHAT_PAGE, noteChatPage, chatPageState } from './state.js';
 import { openModal, closeModal, toast } from './ui.js';
 import { avatarNode } from './sidebar.js';
 import {
@@ -13,6 +13,7 @@ import {
   chatDisplayName,
   canShare,
   shareNotice,
+  CHAT_CHUNK,
 } from './share.js';
 import {
   targetKey,
@@ -395,6 +396,10 @@ export function openSharePicker(message, sourceChat) {
 
   const results = el('div', { class: 'result-list' });
   const contactResults = el('div', { class: 'result-list' });
+  // The list scrolls on its own. The box and the search above it stay where
+  // they are, and the rows move underneath them, so the list can be three
+  // hundred chats long without pushing the search off the top of the modal.
+  const scroll = el('div', { class: 'share-scroll' }, results, contactResults);
   const summary = el('div', { class: 'search-summary' });
   const selectedLine = el('div', { class: 'search-summary' });
   const runList = el('div', { class: 'share-run' });
@@ -417,6 +422,32 @@ export function openSharePicker(message, sourceChat) {
   // The destinations picked, in the order they were picked, because that is
   // the order they are sent in.
   let selected = [];
+
+  // Every chat on offer, in the Inbox's order.
+  //
+  // The rows on screen are a window over this list: they are drawn a chunk
+  // at a time, and the count underneath says how many there are in all
+  // rather than how many happen to be on screen.
+  let matches = [];
+  // The chats whose rows are already drawn, so a row is never drawn twice
+  // and a page of new chats can be added to the end of the list.
+  const drawnIds = new Set();
+  // How many read-only chats were left out, and how many contacts are on
+  // offer.
+  let readOnlyCount = 0;
+  let contactCount = 0;
+  // A page of chats is on its way from Beeper.
+  let paging = false;
+  // The list is being filled in.
+  let filling = false;
+
+  /**
+   * How far before the end of the list the fill happens.
+   *
+   * A little before the end rather than at it, so the next rows are there
+   * before the user reaches for them.
+   */
+  const FILL_AHEAD = 160;
   // Every destination on offer, by key, so a pick survives a redraw.
   const targets = new Map();
   // key -> the row on screen: a pick is a class change, not a rebuild.
@@ -535,7 +566,13 @@ export function openSharePicker(message, sourceChat) {
     source ? source : '',
   ].filter(Boolean).join(' in ');
 
-  pickBox.append(
+  // The children are filtered before they are appended.
+  //
+  // The native append takes a null as the text "null", so a picker that
+  // appends a missing file line as a null says "null" in the middle of
+  // itself - on every share of a message that has no files, which is the
+  // ordinary case.
+  pickBox.append(...[
     from ? el('div', { class: 'share-source', text: from }) : null,
     draft,
     attachments.length
@@ -548,15 +585,19 @@ export function openSharePicker(message, sourceChat) {
     el('div', { class: 'form-row' }, search),
     el('div', { class: 'share-notice', text: header }),
     selectedLine,
-    results,
-    contactResults,
+    scroll,
     summary,
-  );
+  ].filter(Boolean));
   runBox.append(runList, runSummaryLine);
 
   openModal({
     title: 'Share with...',
-    body: el('div', {}, pickBox, runBox),
+    // The wrapper holds the two halves of the picker, the picking half and
+    // the run half, and only one of them is ever on screen.
+    body: el('div', { class: 'share-body' }, pickBox, runBox),
+    // The body does not scroll: the list inside it does, and two scrollers
+    // over one list is a list nobody can scroll.
+    bodyClass: 'share-modal',
     footer: [cancelButton, againButton, retryButton, sendButton],
     // Closing mid-run stops the queue. The destinations that were not reached
     // are not sent, and the toast says how far it got before it stopped.
@@ -803,29 +844,23 @@ export function openSharePicker(message, sourceChat) {
    * Two lists rather than one: the contacts search takes a round trip, and
    * appending into a single list after that await meant either losing the chats
    * or redrawing them while the user was already clicking on them.
+   *
+   * The chats are worked out in full and then drawn a chunk at a time. The
+   * count underneath is of everything that matched, not of the rows that
+   * happen to be on screen: a list that says "50 chats" when there are two
+   * hundred is a count that cannot be trusted.
    */
   async function refresh() {
-    const query = search.value.trim();
-    const found = shareableChats(chatList(), { sourceChatID: sourceChat?.id || '', query });
-    const { writable, readOnly } = partitionShareable(found);
-
+    const query = recompute();
     clear(results);
     clear(contactResults);
     // The rows are rebuilt, so the row map is rebuilt with them. The picks
     // themselves live in `selected` and do not care: a destination that is
     // still ticked stays ticked, even while it is off the screen.
     rowNodes.clear();
-
-    for (const chat of writable) {
-      const target = chatTarget(chat, chatDisplayName(chat));
-      targets.set(targetKey(target), target);
-      row({
-        title: target.label,
-        sub: chat.network ? `Chat on ${chat.network}` : 'Chat',
-        avatar: avatarNode(chat, initials(target.label) || '?', 'sm'),
-        target,
-      });
-    }
+    drawnIds.clear();
+    contactCount = 0;
+    drawChunk();
 
     // Contacts only once there is something to search for: everyone Beeper has
     // synced is a long list nobody asked to scroll.
@@ -837,6 +872,7 @@ export function openSharePicker(message, sourceChat) {
           () => api.contacts(accountID, { query, limit: 20 }),
           { context: 'contacts to share with', fallback: null },
         );
+        if (closed) return;
         clear(contactResults);
         for (const contact of res?.items || []) {
           if (!contact.id && !contact.userID) continue;
@@ -845,6 +881,7 @@ export function openSharePicker(message, sourceChat) {
             contact.fullName || contact.username || contact.phoneNumber || 'Contact',
           );
           targets.set(targetKey(target), target);
+          contactCount += 1;
           row({
             list: contactResults,
             title: target.label,
@@ -856,18 +893,132 @@ export function openSharePicker(message, sourceChat) {
       }
     }
 
-    const hidden = readOnly.length
-      ? ` ${readOnly.length} read-only chat${readOnly.length === 1 ? '' : 's'} left out - they cannot receive messages.`
-      : '';
-    const offered = results.childElementCount + contactResults.childElementCount;
-    if (!offered) {
-      setSummary(query ? `Nothing matched "${query}".${hidden}` : `No chats to share into yet.${hidden}`);
-    } else {
-      setSummary(`${offered} option${offered === 1 ? '' : 's'}.${hidden}`);
-    }
+    paintSummary(query);
 
     // The ticks are drawn again after every redraw: a search rebuilds the
     // rows, and a pick that was on screen has to still be on screen.
+    paintSelection();
+  }
+
+  /**
+   * Work out what is on offer.
+   *
+   * The whole list, not a screenful of it: the Inbox's chats that are not the
+   * chat the message came from, the ones matching what has been typed, and
+   * the read-only ones counted but not offered.
+   */
+  function recompute() {
+    const query = search.value.trim();
+    const found = shareableChats(chatList(), { sourceChatID: sourceChat?.id || '', query });
+    const parts = partitionShareable(found);
+    matches = parts.writable;
+    readOnlyCount = parts.readOnly.length;
+    return query;
+  }
+
+  /**
+   * Draw the next chunk of rows.
+   *
+   * A chunk at a time, because a list of three hundred rows is a list nobody
+   * can read, and one row at a time is a list that takes a minute to appear.
+   * The rows already on screen are not drawn again.
+   */
+  function drawChunk() {
+    const pending = matches.filter((chat) => !drawnIds.has(chat.id));
+    const end = Math.min(CHAT_CHUNK, pending.length);
+    for (let i = 0; i < end; i += 1) {
+      const chat = pending[i];
+      drawnIds.add(chat.id);
+      const target = chatTarget(chat, chatDisplayName(chat));
+      targets.set(targetKey(target), target);
+      row({
+        title: target.label,
+        sub: chat.network ? `Chat on ${chat.network}` : 'Chat',
+        avatar: avatarNode(chat, initials(target.label) || '?', 'sm'),
+        target,
+      });
+    }
+    return end;
+  }
+
+  /**
+   * Say what is on offer.
+   *
+   * The count is of everything that matched, not of the rows on screen.
+   */
+  function paintSummary(query) {
+    const hidden = readOnlyCount
+      ? ` ${readOnlyCount} read-only chat${readOnlyCount === 1 ? '' : 's'} left out - they cannot receive messages.`
+      : '';
+    const parts = [];
+    if (matches.length) parts.push(`${matches.length} chat${matches.length === 1 ? '' : 's'}`);
+    if (contactCount) parts.push(`${contactCount} contact${contactCount === 1 ? '' : 's'}`);
+    if (!parts.length) {
+      setSummary(query ? `Nothing matched "${query}".${hidden}` : `No chats to share into yet.${hidden}`);
+      return;
+    }
+    setSummary(parts.join(', ') + '.' + hidden);
+  }
+
+  /**
+   * Is the user at the end of the list?
+   */
+  function atEnd() {
+    return scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - FILL_AHEAD;
+  }
+
+  /**
+   * Fill the list in as the user reaches the end of it.
+   *
+   * Two steps, in this order: draw what is already loaded, and only then ask
+   * Beeper for the next page. Asking first would fetch chats the picker
+   * already has.
+   */
+  async function fillMore() {
+    if (busy || closed || filling) return;
+    filling = true;
+    try {
+      if (drawChunk()) {
+        paintSelection();
+        return;
+      }
+      await loadNextPage();
+    } finally {
+      filling = false;
+    }
+  }
+
+  /**
+   * Ask Beeper for the chats after the ones already loaded.
+   *
+   * The app loads two pages of chats when it starts and the account has more
+   * than that, so the list the picker can offer is longer than the list it
+   * was handed. The cursor for the next page was recorded when the page
+   * before it was read.
+   */
+  async function loadNextPage() {
+    if (paging) return;
+    const { cursor, hasMore } = chatPageState();
+    if (!hasMore || !cursor) return;
+    paging = true;
+    try {
+      const res = await call(
+        () => api.chats.list({ limit: CHAT_PAGE, cursor, direction: 'before' }),
+        { context: 'more chats to share with', fallback: null },
+      );
+      if (res) {
+        for (const chat of res.items || []) upsertChat(chat);
+        noteChatPage(res.oldestCursor, res.hasMore);
+      }
+    } finally {
+      paging = false;
+    }
+    if (closed) return;
+    // The new chats may match what was typed, so the list is worked out again.
+    // The rows already on screen stay where they are.
+    recompute();
+    drawChunk();
+    paintSummary(search.value.trim());
     paintSelection();
   }
 
@@ -875,6 +1026,13 @@ export function openSharePicker(message, sourceChat) {
   // The count of what is about to be sent depends on what is in the box, so
   // editing the box moves it.
   draft.addEventListener('input', () => paintSelection());
+  // The list fills in as the user reaches the end of it.
+  scroll.addEventListener('scroll', () => { if (atEnd()) fillMore(); });
+  // A list too short to scroll has no scroll event of its own, and the wheel
+  // is then the only sign that the user has reached the end of it.
+  scroll.addEventListener('wheel', () => {
+    if (scroll.scrollHeight <= scroll.clientHeight && atEnd()) fillMore();
+  }, { passive: true });
   refresh();
 }
 

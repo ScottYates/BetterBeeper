@@ -16,9 +16,17 @@
  */
 
 import { decodeEntities } from './entities.js';
+import { inboxChats, inboxOrder, lastActivityOf } from './inbox-chats.js';
 
-/** How many chats to offer before the user has typed anything. */
-export const CHAT_LIMIT = 20;
+/**
+ * How many rows are drawn at a time.
+ *
+ * A rendering detail, not a limit. The list keeps filling as the user
+ * scrolls, it asks Beeper for the next page when it runs out, and the count
+ * underneath says how many there are in all - so a list of three hundred
+ * chats is a list you can scroll through, not a list that stops at twenty.
+ */
+export const CHAT_CHUNK = 50;
 
 /**
  * Is there anything here worth sending?
@@ -98,11 +106,6 @@ function matches(haystack, needle) {
   return String(haystack || '').toLowerCase().includes(needle);
 }
 
-function lastActivityOf(chat) {
-  const t = Date.parse(chat?.lastActivity || '');
-  return Number.isFinite(t) ? t : 0;
-}
-
 /**
  * What makes two chats look like the same destination, or '' if unknowable.
  *
@@ -124,11 +127,12 @@ export function shareIdentity(chat) {
 }
 
 /**
- * The chats worth offering, newest first.
+ * The chats worth offering: the Inbox's chats, in the Inbox's order.
  *
- * The chat the message came from is left out: forwarding it back where it
- * already is is a no-op that still posts a message. Merged rows go too, since
- * the conversation they belong to is in the list under its own name.
+ * This is the Inbox's own list - the chats that are not archived, not merged
+ * into another one, and not the chat the message came from. The sidebar and
+ * the picker therefore agree, which is the point: a picker offering a chat
+ * the sidebar hides would be a third answer to one question.
  *
  * Then same-named chats on the same network are collapsed to the most recent
  * one, which is the conversation actually in use. Only the picker does this:
@@ -137,34 +141,47 @@ export function shareIdentity(chat) {
  *
  * Beeper did not return mergedIntoChatID on any of the 50 chats measured on
  * this account, so that half currently never fires. It stays because the
- * sidebar (sidebar.js) and the unread count (unread.js) apply the same rule,
- * and a picker offering a chat the sidebar hides would be a third answer to
- * one question.
+ * sidebar (sidebar.js) and the unread count (unread.js) apply the same rule.
+ *
+ * There is no cap. The list is drawn a chunk at a time and filled in as the
+ * user scrolls, and it asks Beeper for the next page when it runs out, so the
+ * answer to "who can I send this to" is the whole Inbox rather than the
+ * twenty chats that happened to be at the top of it.
  */
-export function shareableChats(chats, { sourceChatID = '', query = '', limit = CHAT_LIMIT } = {}) {
+export function shareableChats(chats, { sourceChatID = '', query = '' } = {}) {
   const needle = String(query || '').trim().toLowerCase();
 
-  const sorted = [...(chats || [])]
-    .filter((chat) => {
-      if (!chat || chat.id === sourceChatID) return false;
-      if (chat.mergedIntoChatID) return false;
-      if (!needle) return true;
-      return matches(decodeEntities(chat.title), needle);
-    })
-    .sort((a, b) => lastActivityOf(b) - lastActivityOf(a));
+  const set = inboxChats(chats, { excludeChatID: sourceChatID });
+  const filtered = needle
+    ? set.filter((chat) => matches(decodeEntities(chat.title), needle))
+    : set;
 
-  const seen = new Set();
-  const unique = [];
-  for (const chat of sorted) {
+  // Collapse to the most recent chat of each name-and-network pair.
+  //
+  // The most recent is chosen by activity rather than by position in the
+  // list, because the list above is in the Inbox's order and a pinned chat
+  // would otherwise beat a newer one to it.
+  const newest = new Map();
+  const untitled = [];
+  for (const chat of filtered) {
     const key = shareIdentity(chat);
-    if (key) {
-      if (seen.has(key)) continue;
-      seen.add(key);
+    if (!key) {
+      // No name means no key, so it is never collapsed: two untitled chats
+      // may well be two different groups.
+      untitled.push(chat);
+      continue;
     }
-    unique.push(chat);
-    if (unique.length >= limit) break;
+    const before = newest.get(key);
+    if (!before) {
+      newest.set(key, chat);
+      continue;
+    }
+    if (lastActivityOf(chat) > lastActivityOf(before)) newest.set(key, chat);
   }
-  return unique;
+
+  const out = [...newest.values(), ...untitled];
+  out.sort(inboxOrder);
+  return out;
 }
 
 /**

@@ -1207,6 +1207,25 @@ mark.ts-hit.is-current {
 .share-source { font-size: 12.5px; color: var(--text-faint); padding: 0 3px 7px; }
 .share-files { font-size: 12.5px; color: var(--text-dim); padding: 6px 3px 0; }
 .share-edit { min-height: 76px; line-height: 1.45; margin-bottom: 4px; }
+
+/* The share picker has a list of its own, and it scrolls on its own: the
+   message box and the search above it stay where they are while the rows
+   move underneath them. Two scrollers over one list is a list nobody can
+   scroll, so the modal body gives up its own scrolling for this one.
+
+   The list is capped rather than stretched. A list of two chats should not
+   leave a hole in the middle of the modal, and a list of three hundred
+   should not make the modal taller than the window.
+
+   The cap is on the list rather than on the box around it, because a box
+   that is allowed to shrink takes the whole of the negative space and ends
+   up with no height at all - which is a list that cannot scroll, clipped
+   flat. The box keeps its own height and the list is capped inside it. */
+.modal-body.share-modal { overflow-y: auto; }
+.share-body { display: flex; flex-direction: column; }
+.share-pick { display: flex; flex-direction: column; }
+.share-pick > * { flex: none; }
+.share-pick > .share-scroll { max-height: 42vh; min-height: 0; overflow-y: auto; }
 .message-hit { display: flex; flex-direction: column; gap: 2px; }
 .message-hit .hit-meta { font-size: 11.5px; color: var(--text-faint); }
 .message-hit mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px; padding: 0 2px; }

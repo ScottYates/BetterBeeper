@@ -2,7 +2,7 @@
 
 import { $, el } from './util.js';
 import { api, call, callOk, FAILED, onApiError } from './api.js';
-import { state, bus, upsertChat, chatList, loadPins, loadArchived, loadHiddenMessages, loadDeletedMessages } from './state.js';
+import { state, bus, upsertChat, chatList, loadPins, loadArchived, loadHiddenMessages, loadDeletedMessages, CHAT_PAGE, noteChatPage } from './state.js';
 import { toast, closePopover, initTooltips, openPopover } from './ui.js';
 import {
   initSidebar, renderChats, renderAccountBadges, setLiveStatus, focusSearch, avatarNode,
@@ -146,8 +146,6 @@ async function enterApp() {
  * The list is read a page at a time, and the sidebar shows everything the
  * app has. A hundred is a page Beeper answers quickly.
  */
-const CHAT_PAGE = 100;
-
 async function loadChats() {
   const res = await call(() => api.chats.list({ limit: CHAT_PAGE }), { context: 'chats', fallback: null });
   if (!res) {
@@ -155,6 +153,9 @@ async function loadChats() {
     return;
   }
   for (const chat of res.items || []) upsertChat(chat);
+  // Where the list paging got to, so the share picker can ask for the chats
+  // after this one when the user scrolls to the end of its list.
+  noteChatPage(res.oldestCursor, res.hasMore);
 
   // Pull a second page so the sidebar has real history depth.
   if (res.hasMore && res.oldestCursor) {
@@ -163,6 +164,7 @@ async function loadChats() {
     }).then((page2) => {
       if (!page2) return;
       for (const chat of page2.items || []) upsertChat(chat);
+      noteChatPage(page2.oldestCursor, page2.hasMore);
       renderChats();
       subscribeVisibleChats();
     });

@@ -30,6 +30,7 @@ const { pathToFileURL } = require('url');
 const ROOT = path.join(__dirname, '..');
 const shareURL = pathToFileURL(path.join(ROOT, 'src', 'renderer', 'js', 'share.js')).href;
 const modalsURL = pathToFileURL(path.join(ROOT, 'src', 'renderer', 'js', 'modals.js')).href;
+const inboxURL = pathToFileURL(path.join(ROOT, 'src', 'renderer', 'js', 'inbox-chats.js')).href;
 const threadPath = path.join(ROOT, 'src', 'renderer', 'js', 'thread.js');
 const preloadPath = path.join(ROOT, 'src', 'preload', 'preload.js');
 
@@ -47,6 +48,7 @@ async function main() {
     (async () => {
       const S = await import(${JSON.stringify(shareURL)});
       const M = await import(${JSON.stringify(modalsURL)});
+      const Inbox = await import(${JSON.stringify(inboxURL)});
       const St = await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'src', 'renderer', 'js', 'state.js')).href)});
 
       const cases = [];
@@ -244,10 +246,13 @@ async function main() {
         return ids.length === 4 || ids.join(',');
       });
 
-      check('a long account does not dump every chat into the picker', () => {
+      check('a long account does not stop the list at twenty', () => {
+        // The list used to be capped at twenty chats, so anybody with more
+        // conversations than that could not be shared into at all unless they
+        // happened to be near the top of the list.
         const many = Array.from({ length: 60 }, (_, i) => chat('!c' + i, 'Chat ' + i, '2026-03-01T00:00:0' + (i % 10) + 'Z'));
         const got = S.shareableChats(many, {});
-        return got.length === S.CHAT_LIMIT || 'offered ' + got.length;
+        return got.length === 60 || 'offered ' + got.length;
       });
 
       check('read-only chats are separated out rather than dropped', () => {
@@ -259,6 +264,83 @@ async function main() {
       check('an untitled chat is still nameable', () => {
         const got = S.chatDisplayName(chat('!x', '   ', '2026-03-01T00:00:00Z'));
         return got === 'Untitled chat' || got;
+      });
+
+      // ---------------------------------------------------------------------
+      // The Inbox's list, and only the Inbox's list
+      //
+      // The picker used to offer whatever it had loaded, in its own order,
+      // and the sidebar offered the Inbox. "The same list" was two lists that
+      // happened to look alike, so a chat could be in one of them and not the
+      // other. The rule now lives in one place, and these cases hold it
+      // there.
+      // ---------------------------------------------------------------------
+
+      check('a pinned chat is offered before an unpinned one', () => {
+        // Even though the pinned chat is the older of the two: Beeper's
+        // order is pinned first, then most recent activity.
+        const chats = [
+          chat('!plain', 'Plain', '2026-03-05T00:00:00Z'),
+          chat('!pinned', 'Pinned', '2026-03-01T00:00:00Z'),
+        ];
+        St.setPinned('!pinned', true);
+        try {
+          const got = S.shareableChats(chats, {}).map((c) => c.id);
+          return got.join(',') === '!pinned,!plain' || got.join(',');
+        } finally {
+          St.setPinned('!pinned', false);
+        }
+      });
+
+      check('an archived chat is not offered', () => {
+        const chats = [
+          chat('!here', 'Here', '2026-03-05T00:00:00Z'),
+          chat('!gone', 'Archived', '2026-03-04T00:00:00Z'),
+        ];
+        St.setArchivedOverride('!gone', true);
+        try {
+          const got = S.shareableChats(chats, {}).map((c) => c.id);
+          return got.join(',') === '!here' || got.join(',');
+        } finally {
+          St.setArchivedOverride('!gone', false);
+        }
+      });
+
+      check('the picker offers exactly the chats the Inbox holds', () => {
+        // The same rule in two files is two rules. The Inbox leaves out the
+        // merged and the archived chats, and so must the picker.
+        const chats = [
+          chat('!a', 'A', '2026-03-05T00:00:00Z'),
+          chat('!b', 'B', '2026-03-04T00:00:00Z', { mergedIntoChatID: '!a' }),
+          chat('!c', 'C', '2026-03-03T00:00:00Z', { isArchived: true }),
+        ];
+        const inbox = Inbox.inboxChats(chats).map((c) => c.id);
+        const offered = S.shareableChats(chats, {}).map((c) => c.id);
+        return (inbox.join(',') === '!a' && offered.join(',') === '!a')
+          || (inbox.join(',') + ' | ' + offered.join(','));
+      });
+
+      check('the Inbox order is pinned first, then most recent activity', () => {
+        St.setPinned('!old', true);
+        try {
+          const chats = [
+            chat('!new', 'Newest', '2026-03-05T00:00:00Z'),
+            chat('!old', 'Pinned but older', '2026-03-01T00:00:00Z'),
+          ];
+          const got = Inbox.inboxChats(chats).map((c) => c.id);
+          return got.join(',') === '!old,!new' || got.join(',');
+        } finally {
+          St.setPinned('!old', false);
+        }
+      });
+
+      check('the chat a message came from is left out of the Inbox the picker uses', () => {
+        const chats = [
+          chat('!src', 'Source', '2026-03-05T00:00:00Z'),
+          chat('!other', 'Other', '2026-03-04T00:00:00Z'),
+        ];
+        const got = Inbox.inboxChats(chats, { excludeChatID: '!src' }).map((c) => c.id);
+        return got.join(',') === '!other' || got.join(',');
       });
 
       // ---------------------------------------------------------------------
@@ -310,15 +392,11 @@ async function main() {
         return got.join(',') === '!g1,!g2' || got.join(',');
       });
 
-      check('collapsing happens before the cap, not after it', () => {
-        // If the list were capped first and de-duplicated afterwards, a list
-        // that is mostly duplicates would offer fewer chats than the cap
-        // allows. The two copies of each person are one minute apart so that
-        // they land next to each other once sorted, which is what makes the
-        // cap bite in the middle of a pair.
-        //
-        // Both halves matter: length alone passes whether or not duplicates
-        // are removed, because a list of 20 with duplicates in it is still 20.
+      check('every person is offered once, however many chats they have', () => {
+        // Thirty people, each with two chats a minute apart. The list must
+        // hold thirty rows: not sixty, because the two copies of a person are
+        // one destination, and not twenty, because the list no longer stops
+        // there.
         const paired = [];
         for (let i = 0; i < 30; i++) {
           const older = String(i * 2).padStart(2, '0');
@@ -330,7 +408,7 @@ async function main() {
         const distinct = new Set(got.map((c) => c.title));
         // Plain concatenation, not a template literal: this whole block lives
         // inside one, and a backtick here would close it early.
-        return (got.length === S.CHAT_LIMIT && distinct.size === S.CHAT_LIMIT)
+        return (got.length === 30 && distinct.size === 30)
           || ('offered ' + got.length + ', ' + distinct.size + ' distinct');
       });
 
@@ -446,7 +524,7 @@ async function main() {
       // The one boundary that gets replaced: window.beeper. Everything above
       // this line is the real module; everything below runs the real modal,
       // the real search, and the real click handlers.
-      const calls = { send: [], uploads: [], create: [], contacts: [] };
+      const calls = { send: [], uploads: [], create: [], contacts: [], chats: [] };
       let reuploadReturnsNothing = false;
       let failSendAt = 0;
       // The chats whose sends are refused, whatever is being sent into them.
@@ -467,7 +545,22 @@ async function main() {
           },
         },
         chats: {
-          list: async () => ({ ok: true, data: {} }),
+          list: async (params) => {
+            calls.chats.push(params || {});
+            // A cursor means the picker is asking for the chats after the
+            // ones it already has. The page it gets back is the last one.
+            if (params && params.cursor) {
+              return {
+                ok: true,
+                data: {
+                  items: [chat('!paged', 'Paged chat', '2026-02-01T00:00:00Z')],
+                  hasMore: false,
+                  oldestCursor: '',
+                },
+              };
+            }
+            return { ok: true, data: {} };
+          },
           create: async (payload) => {
             calls.create.push(payload);
             return { ok: true, data: { id: '!newchat', title: 'Bea Example' } };
@@ -546,6 +639,25 @@ async function main() {
         .map((n) => ((n.querySelector('.share-run-name') || {}).textContent || '')
           + ': ' + ((n.querySelector('.share-run-state') || {}).textContent || ''));
 
+      /** The picker's own scrolling area. */
+      const scrollArea = () => document.querySelector('#modal-root .share-scroll');
+
+      /**
+       * Scroll to the end of the picker's list.
+       *
+       * The area is really moved to its end, and the event is dispatched by
+       * hand as well: the window is hidden, so the browser has no reason to
+       * paint a frame and fire one of its own.
+       */
+      const scrollToEnd = async () => {
+        const area = scrollArea();
+        if (!area) throw new Error('no scrolling area');
+        area.scrollTop = area.scrollHeight;
+        area.dispatchEvent(new Event('scroll', { bubbles: true }));
+        await tick(80);
+        return area;
+      };
+
       const SOURCE = { id: '!src', title: 'Source chat', accountID: '!acct', lastActivity: '2026-03-05T00:00:00Z' };
 
       function seed(over, extra) {
@@ -555,6 +667,7 @@ async function main() {
         for (const c of chats) St.state.chats.set(c.id, c);
         St.state.accounts = [{ accountID: '!acct', status: 'connected' }];
         calls.send.length = 0; calls.uploads.length = 0; calls.create.length = 0; calls.contacts.length = 0;
+        calls.chats.length = 0;
         reuploadReturnsNothing = false;
         failSendAt = 0;
         failChats.clear();
@@ -676,6 +789,16 @@ async function main() {
         await pressSend();
         const stillOpen = !document.querySelector('#modal-root').hidden;
         return stillOpen || 'the picker closed on an empty share';
+      });
+
+      await checkAsync('the picker does not say null anywhere', async () => {
+        // The native append takes a null as the text "null", so a missing
+        // file line appended as a null puts the word in the middle of the
+        // picker - on every share of a message that has no files.
+        seed();
+        await open();
+        const text = (document.querySelector('#modal-root .share-pick') || {}).textContent || '';
+        return !/null/.test(text) || JSON.stringify(text);
       });
 
       await checkAsync('the picker says which files are going along', async () => {
@@ -932,6 +1055,136 @@ async function main() {
         const where = calls.send.map((s) => s.chatID).join(',');
         return (where === '!other' && /not sent/.test(toastText()))
           || JSON.stringify({ where: where, toast: toastText() });
+      });
+
+      // ---------------------------------------------------------------------
+      // The list itself
+      //
+      // The picker used to offer the first twenty chats and stop. It now
+      // offers the Inbox's chats: the first screenful is drawn, the rest
+      // fills in as the user scrolls, and when the list runs out it asks
+      // Beeper for the page after it.
+      // ---------------------------------------------------------------------
+
+      const manyChats = (count) => Array.from({ length: count }, (_, i) =>
+        chat('!m' + i, 'Chat ' + i, '2026-03-01T00:00:' + String(i % 60).padStart(2, '0') + 'Z'));
+
+      await checkAsync('the list has a scrolling area of its own', async () => {
+        // The list is longer than the box it is in, so the box scrolls. A
+        // list with no bound does not scroll: it is simply clipped, and the
+        // chats below the cut can never be reached.
+        //
+        // This is the case that catches a broken chain of boxes between the
+        // modal body and the list, where every height is the content height
+        // and the scroll area is as tall as the list it is supposed to hold.
+        seed({}, manyChats(120));
+        await open();
+        const area = scrollArea();
+        const style = area ? getComputedStyle(area) : null;
+        const rows = lists()[0].querySelectorAll('.result-item').length;
+        // Every box between the modal and the list, so a broken chain says
+        // which box lost the height.
+        const chain = ['.modal', '.modal-body', '.share-body', '.share-pick', '.share-scroll']
+          .map((sel) => {
+            const node = document.querySelector('#modal-root ' + sel);
+            return sel + '=' + (node ? Math.round(node.getBoundingClientRect().height) : 'none');
+          })
+          .join(' ');
+        const pick = document.querySelector('#modal-root .share-pick');
+        const kids = pick
+          ? [...pick.children].map((n) => (n.className || n.nodeName) + ':' + Math.round(n.getBoundingClientRect().height)).join(',')
+          : 'none';
+        const scrollStyle = area ? getComputedStyle(area) : null;
+        return (area && style.overflowY === 'auto' && area.clientHeight > 0
+          && area.scrollHeight > area.clientHeight && rows === 50)
+          || JSON.stringify({
+            overflowY: style && style.overflowY,
+            clientHeight: area && area.clientHeight,
+            scrollHeight: area && area.scrollHeight,
+            rows: rows,
+            chain: chain,
+            kids: kids,
+            basis: scrollStyle && scrollStyle.flexBasis,
+            shrink: scrollStyle && scrollStyle.flexShrink,
+            minHeight: scrollStyle && scrollStyle.minHeight,
+          });
+      });
+
+      await checkAsync('the list fills in as the user scrolls', async () => {
+        seed({}, manyChats(120));
+        await open();
+        const list = lists()[0];
+        const first = list.querySelectorAll('.result-item').length;
+        await scrollToEnd();
+        const second = list.querySelectorAll('.result-item').length;
+        return (first === 50 && second === 100) || (first + ' rows, then ' + second);
+      });
+
+      await checkAsync('the count says how many chats there are, not how many are drawn', async () => {
+        // A list that says "50 chats" when there are a hundred and twenty is
+        // a count that cannot be trusted, and the count is what a person
+        // reads to decide whether to keep scrolling.
+        seed({}, manyChats(120));
+        await open();
+        const said = summaries().join(' ');
+        const rows = lists()[0].querySelectorAll('.result-item').length;
+        // Every chat in the state but the one the message came from.
+        const expected = [...St.state.chats.keys()].filter((id) => id !== SOURCE.id).length;
+        return (new RegExp(expected + ' chats').test(said) && rows === 50)
+          || (said + ' / ' + rows + ' rows');
+      });
+
+      await checkAsync('an archived chat is not offered to share into', async () => {
+        seed();
+        St.setArchivedOverride('!other', true);
+        try {
+          await open();
+          const got = titles(lists()[0] || document.createElement('div'));
+          return got.length === 0 || got.join(',');
+        } finally {
+          St.setArchivedOverride('!other', false);
+        }
+      });
+
+      await checkAsync('a pinned chat is offered first', async () => {
+        seed({}, [chat('!pinned', 'Pinned chat', '2026-03-01T00:00:00Z')]);
+        St.setPinned('!pinned', true);
+        try {
+          await open();
+          const got = titles(lists()[0] || document.createElement('div'));
+          return got[0] === 'Pinned chat' || got.join(',');
+        } finally {
+          St.setPinned('!pinned', false);
+        }
+      });
+
+      await checkAsync('scrolling past the end of the list asks Beeper for the next page', async () => {
+        seed();
+        // The app records where the list paging got to when it reads a page.
+        St.noteChatPage('!cursor-1', true);
+        await open();
+        await scrollToEnd();
+        const asked = calls.chats[calls.chats.length - 1];
+        const rows = titles(lists()[0] || document.createElement('div'));
+        return (calls.chats.length === 1
+          && asked && asked.cursor === '!cursor-1' && asked.direction === 'before' && asked.limit === 100
+          && rows.indexOf('Paged chat') !== -1)
+          || JSON.stringify({ asked: asked, calls: calls.chats, rows: rows });
+      });
+
+      await checkAsync('a chat that arrived on the next page can be picked and sent to', async () => {
+        // The picker from the case above is still open, with the row that
+        // came back from Beeper in it.
+        const list = lists()[0];
+        const row = [...list.querySelectorAll('.result-item')].find(
+          (n) => (n.querySelector('.result-item-title') || {}).textContent === 'Paged chat');
+        if (!row) return 'the chat from the next page is not in the list';
+        row.click();
+        await tick(40);
+        document.querySelector('#modal-root .modal-footer .btn-primary').click();
+        await tick(150);
+        const where = calls.send.map((s) => s.chatID).join(',');
+        return where === '!paged' || where;
       });
 
       // Report from the page, decide the exit code in Node: the renderer has

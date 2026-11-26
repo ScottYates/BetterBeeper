@@ -53,6 +53,12 @@ The chat UI talks to Beeper's REST API and its live WebSocket event stream. Beep
   person does not stop the others, the picker says what happened to each of
   them, and a failure can be sent again without sending the messages that
   already arrived a second time
+- The Share picker offers the Inbox's chats, all of them. It used to stop
+  after twenty and keep a list of its own; now it is the same list the
+  sidebar shows - not archived, not merged, pinned first - and it fills in as
+  you scroll, asking Beeper for the next page when it runs out. The count
+  under the list says how many chats there are, not how many happen to be on
+  screen
 - Attach files, which are uploaded to Beeper and then referenced by the message
 - Paste an image straight into the composer with Ctrl+V. A pasted screenshot is a clipboard
   file with no text beside it, so there is nothing for the textarea to insert; it is uploaded

@@ -18,6 +18,7 @@ import {
   localStateVersion,
 } from './state.js';
 import { toast, openLightbox } from './ui.js';
+import { inboxOrder } from './inbox-chats.js';
 import { totalUnread, chatIsUnread } from './unread.js';
 import { setArchived } from './chat-actions.js';
 import { networkIconMarkup, badgeBackground } from './network-icons.js';
@@ -273,11 +274,11 @@ export function renderChats() {
   // what lets an explicit unpin send them back down with the ordinary chats.
   // `isPinned` also covers pins the user set in this app, not just the ones
   // Beeper reports.
+  //
+  // The rule itself lives in inbox-chats.js, because the share picker draws
+  // the same list and the two must not drift apart.
   const ordered = all.slice();
-  ordered.sort((a, b) => {
-    if (isPinned(b) !== isPinned(a)) return isPinned(b) ? 1 : -1;
-    return new Date(b.lastActivity || 0).getTime() - new Date(a.lastActivity || 0).getTime();
-  });
+  ordered.sort(inboxOrder);
 
   const next = [];
   for (const chat of ordered) {

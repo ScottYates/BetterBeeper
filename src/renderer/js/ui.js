@@ -109,7 +109,7 @@ export function closeModal() {
   }
 }
 
-export function openModal({ title, body, footer, width, onClose, onSubmit }) {
+export function openModal({ title, body, footer, width, onClose, onSubmit, bodyClass }) {
   const root = $('#modal-root');
   clear(root);
   root.hidden = false;
@@ -130,7 +130,10 @@ export function openModal({ title, body, footer, width, onClose, onSubmit }) {
     ),
   );
 
-  const bodyNode = el('div', { class: 'modal-body' });
+  // The class is a hook, not a style: a modal whose body scrolls its own
+  // content says so through a class on the body, and the stylesheet decides
+  // what that means.
+  const bodyNode = el('div', { class: bodyClass ? `modal-body ${bodyClass}` : 'modal-body' });
   if (body) bodyNode.append(body);
   modal.append(bodyNode);
 
