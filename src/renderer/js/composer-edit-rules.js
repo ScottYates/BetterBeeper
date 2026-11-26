@@ -18,6 +18,11 @@
 
 /** The utility helpers, and nothing that touches the DOM. */
 import { parseTs } from './util.js';
+import { confirmedByBeeper } from './send-status.js';
+
+// The receipt the bridge sends has two shapes, and the reading of both lives
+// in a module of its own because the bubble wants it as well.
+export { confirmedByBeeper };
 
 /**
  * The lowest support level that still means "you may edit".
@@ -73,22 +78,12 @@ export function millisOf(value) {
 }
 
 /**
- * Has Beeper confirmed this message?
+ * A message that only exists on this device is not a message Beeper has.
  *
- * A message with no status of its own came from Beeper - every real message
- * from the bridge looks like that. A status says the message is one this
- * device made: `pending` is the optimistic bubble the app puts on screen
- * before the send round trip comes back, and `failed` is one whose send did
- * not go through.
- *
- * Beeper has never heard of either id, so neither of them can be edited:
- * the edit would be sent for a message that does not exist.
+ * Whether Beeper has a message is asked of `send-status.js`, because the
+ * status has two shapes: the app's own flag on the optimistic bubble, and
+ * the bridge's delivery receipt.
  */
-export function confirmedByBeeper(message) {
-  const status = message?.sendStatus;
-  if (status === undefined || status === null) return true;
-  return status === 'sent';
-}
 
 /**
  * Why this message cannot be edited, or null when it can.

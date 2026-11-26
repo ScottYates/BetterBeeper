@@ -194,6 +194,44 @@ add('CONTROL: a message that was sent can be edited', withRules((R) =>
   R.isEditableMessage(chat({ edit: 2 }), own({ sendStatus: 'sent' }), NOW) === true
   || 'it was refused'));
 
+// --- the bridge's delivery receipt ----------------------------------------------
+//
+// The bridge started sending a delivery receipt on 2026-11-24: an object, not
+// the app's own flag. The rule compared the field with the string 'sent', so
+// every message of the user's own came back as "not confirmed", the up arrow
+// had nothing at all to open, and the explanation it gave was about the wrong
+// reason entirely.
+
+const RECEIPT = {
+  status: 'SUCCESS',
+  timestamp: '2026-11-26T03:06:02.362Z',
+  deliveredToUsers: ['@them:local-signal.localhost'],
+};
+
+add('a message the bridge confirmed with a delivery receipt can be edited', withRules((R) =>
+  R.isEditableMessage(chat({ edit: 2 }), own({ sendStatus: RECEIPT }), NOW) === true
+  || 'it was refused'));
+
+add('CONTROL: a message the bridge failed to deliver cannot be edited', withRules((R) =>
+  R.isEditableMessage(chat({ edit: 2 }), own({ sendStatus: { status: 'FAIL_RETRIABLE' } }), NOW) === false
+  || 'it was allowed'));
+
+add('the up arrow opens the newest message of ours, receipt or not', withRules((R) => {
+  const list = R.editableMessages(chat({ edit: 2 }), [
+    own({ id: 'older', timestamp: new Date(NOW - 9000).toISOString() }),
+    own({ id: 'newest', sendStatus: RECEIPT, timestamp: new Date(NOW - 1000).toISOString() }),
+  ], NOW);
+  return (list.length === 2 && list[list.length - 1].id === 'newest')
+    || ('it would open ' + list.map((m) => m.id).join(','));
+}));
+
+add('CONTROL: a receipt does not make an old message young again', withRules((R) =>
+  R.isEditableMessage(
+    chat({ edit: 2, editMaxAge: 900 }),
+    own({ sendStatus: RECEIPT, timestamp: new Date(NOW - 1000000).toISOString() }),
+    NOW,
+  ) === false || 'an old message was allowed'));
+
 // --- the list ----------------------------------------------------------------
 
 add('the editable list is oldest first', withRules((R) => {

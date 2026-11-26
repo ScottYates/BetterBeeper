@@ -15,6 +15,7 @@ import {
 } from './util.js';
 import { decodeEntities, clipText } from './entities.js';
 import { splitBridgePlaceholder } from './bridge-placeholder.js';
+import { sendState } from './send-status.js';
 import {
   selfReaderIds,
   deliveryTime,
@@ -1216,7 +1217,9 @@ export function threadSignature(messages) {
       m.senderID || '',
       m.senderName || '',
       m.isDeleted ? 1 : 0,
-      m.sendStatus || '',
+      // The state, not the field: the bridge's receipt is an object, and two
+      // different receipts would sign the thread the same way.
+      sendState(m),
       m.text || '',
       m.type || '',
       m.timestamp || '',
@@ -1567,10 +1570,14 @@ function metaNode(message) {
   const delivery = deliveryTimeOf(message);
 
   if (message.isSender) {
+    // The status is read from the shape it actually has: the app's own flag on
+    // the optimistic bubble, or the bridge's delivery receipt. Comparing the
+    // field with the string 'sent' used to put a second tick beside the read
+    // receipt and left the tick with no colour on it.
+    const status = sendState(message);
     // Once it has been read, the plain "sent" tick says nothing the receipt has
     // not already said - and sitting beside it reads as two ticks and a time.
-    if (!receipt || message.sendStatus !== 'sent') {
-      const status = message.sendStatus || 'sent';
+    if (!receipt || status !== 'sent') {
       const label = { pending: '⏳ sending…', sent: '✓', failed: '✕ failed' }[status] || '✓';
       bits.push(el('span', { class: `msg-status-${status}`, text: label }));
     }

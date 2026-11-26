@@ -2764,19 +2764,107 @@ worked around. This one was red before the work started, at 5125 MB, and
 the release took it to 155 MB - the part that is left is held by the tool
 asking the question.
 
+## Work done 2026-11-25
+
+### The up arrow had nothing to open, because the bridge started answering with a receipt
+
+Reported as "editing history with up arrow is not working. it looks like it is
+not correctly saving what the most recent sent messages are".
+
+**The rule was written for a bridge that said nothing.** `confirmedByBeeper`
+asks whether Beeper has heard of a message, and it read the answer out of
+`sendStatus`:
+
+```js
+const status = message?.sendStatus;
+if (status === undefined || status === null) return true;
+return status === 'sent';
+```
+
+The app's own flag on the optimistic bubble is a string - 'pending', 'sent',
+'failed' - and that is what the rule was written against. The bridge's own
+delivery receipt is an **object**:
+
+```js
+{ status: 'SUCCESS', timestamp: '2026-11-26T03:06:02.362Z',
+  deliveredToUsers: ['@them:local-signal.localhost'] }
+```
+
+**Measured, not assumed.** The app's own store (`%APPDATA%\Better Beeper\history.db`)
+was read on 2026-11-25: 16,289 messages of the user's own. Every one of them
+that the bridge confirmed since **2026-11-24 14:00 UTC** carries that object;
+before that date, 16,230 messages carry no status at all. **Not one message
+carries the app's own string form.** The bridge's vocabulary is `SUCCESS` (59
+messages) and `FAIL_RETRIABLE` (1).
+
+So from 2026-11-24 the comparison `status === 'sent'` was false for every
+message the user had sent, and every one of them came back as "not confirmed".
+
+**What that did, measured with the app's own rules against the app's own
+store**, in the chat that was open at the time:
+
+| | before | after |
+|---|---|---|
+| messages of the user's own the arrow could open | **0 of 639** | 27 |
+| the newest five of them | all refused as `not-confirmed` | all editable |
+| the explanation the arrow gave | "too-old", about messages four days old | none needed |
+
+Zero. The up arrow had nothing at all to open, and it explained itself with
+the wrong reason: `chatEditRefusal` reports the reason that applies to *most*
+of your messages, and in that chat almost every message really was too old - so
+the toast said the last one had been sent four days ago, when it had been sent
+two minutes ago.
+
+**The same field was read in two more places**, and both were wrong the same
+way:
+
+- the bubble's own tick: `message.sendStatus !== 'sent'` put a second tick
+  beside the read receipt - "two ticks and a time", which the comment there
+  says is exactly what must not happen - and the class name became
+  `msg-status-[object Object]`, which no rule in the stylesheet matches, so
+  the tick lost its colour;
+- the thread signature carried the field itself, and two different receipts are
+  both "[object Object]", so a message the bridge failed to deliver kept the
+  tick of one it had delivered.
+
+**The fix is one reading of the shape, in a module of its own.**
+`src/renderer/js/send-status.js` reads the field once and says whether the
+message is pending, sent or failed. Everything else asks it: the edit rule, the
+bubble's tick and the thread signature. A message with no status of its own
+came from Beeper, so it has been sent; the app's own flag is read as it is; a
+receipt saying SUCCESS is sent, one saying FAIL is failed, and a receipt with a
+status nobody has seen is not sent yet.
+
+**What proves it.**
+
+- `npm run check:sendstatus` (13/13) reads every shape, with a control that
+  shows the old comparison rejecting the receipt.
+- `npm run check:composereditrules` (49/49) gained the cases at the level the
+  user sees: a message the bridge confirmed with a receipt can be edited, one
+  it failed to deliver cannot, and the up arrow opens the newest message of
+  yours.
+- `npm run check:historyrender` (31/31) gained the bubble: a message with a
+  receipt and a read receipt shows one mark, a confirmed message shows one tick
+  in the colour of a sent message, and a message the bridge failed to deliver
+  is redrawn as failed.
+- `tools/send-status-redproof.js` (8/8) reintroduces each of the five breaks
+  in the source - the receipt not read as a receipt, an unknown flag read as
+  sent, the old string comparison, the bubble reading the field, the signature
+  reading the field - and requires the right suite to go red each time.
+
+**The general lesson.** The bridge's answer changed shape and the app kept
+asking the old question. The field was read in three places, each of them
+comparing it with a string, and none of them knew the other two existed. A
+field that more than one place reads belongs in a module of its own, and the
+shapes it can have are worth measuring rather than assuming: the rule was
+written on 2026-11-08 against a bridge that sent nothing, and the change
+arrived sixteen days later with no announcement.
+
 ## Verification status
-`npm run check:all` sweeps **63 suites**. On the v1.33.0 release commit, 61 of
-them pass. The two that do not are `check:released` and `check:prune`, and
-both are the same disk clause rather than the release: 155 MB of old build
-output is still on the disk in 13 files that the agent runtime holding this
-session has open, and the check allows 100 MB. It was red before this work
-started too, at 5125 MB. See "The release gate is red for a reason that is
-not the code" above. On the tree
-carrying the work, before the release is cut, 61 of them pass: the two that
-do not are `check:released`, which is red until the release is cut because
-`main` is ahead of the newest tag, and `check:prune`, whose baseline is
-`check:released` - a proof that needs the tree to be in the state it is
-proving. It was 61 suites on the
+`npm run check:all` sweeps **64 suites**. On the v1.33.2 release commit, 63 of
+them pass, and the one that does not is `check:released`, which is red until
+the release carrying this work is cut, because `main` is ahead of the newest
+tag. The suite count was 63 before `check:sendstatus` was added. It was 61 suites on the
 tree carrying the 2026-11-12 work, 59 of them passing; it was 58 suites on the
 tree carrying the 2026-11-11 work, 57 of them passing; it was 54 suites on the
 tree carrying the 2026-11-09 work, 53 of them passing; 53 suites on the tree
@@ -2814,7 +2902,9 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:typeread` | 18/18 checks passed, typing into the real composer in a browser harness (new) |
 | `tools/typeread-redproof.js` | 5/5 mutations caught, no holes, with an asserted baseline (new) |
 | `check:composeredit` | 58/58 checks passed |
-| `check:composereditrules` | 45/45 checks passed, with no Electron and no window |
+| `check:composereditrules` | 49/49 checks passed, with no Electron and no window, and the cases the bridge's delivery receipt needs |
+| `check:sendstatus` | 13/13 checks passed, reading both shapes of the delivery status, with no Electron and no window (new) |
+| `tools/send-status-redproof.js` | 5/5 mutations caught, no holes, with an asserted baseline (new) |
 | `check:bridgeplaceholder` | 12/12 checks passed, with no Electron and no window (new) |
 | `check:threadopen` | 29/29 checks passed |
 | `check:readreceipts` | 14/14 checks passed, with no Electron and no window (new) |

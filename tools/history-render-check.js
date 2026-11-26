@@ -138,6 +138,71 @@ async function main() {
         JSON.stringify(failedBits),
       ]);
 
+      // The bridge sends a delivery receipt on the messages it confirms, and
+      // it is an object rather than the app's own flag. Comparing the field
+      // with the string 'sent' put a second tick beside the read receipt, and
+      // left the tick with no colour on it.
+      const RECEIPT = {
+        status: 'SUCCESS',
+        timestamp: '2026-01-01T11:00:01.000Z',
+        deliveredToUsers: ['@them:x'],
+      };
+      S.upsertMessage('h1', {
+        id: 'seen-5', chatID: 'h1', isSender: true, senderID: 'me', senderName: 'Me',
+        timestamp: '2026-01-01T11:00:00.000Z', text: 'sent and read, with a receipt', type: 'TEXT', attachments: [],
+        sendStatus: RECEIPT, seen: { '@them:x': '2026-01-01T12:10:00.000Z' },
+      });
+      const receiptRow = document.querySelector('#message-list [data-message-id="seen-5"]');
+      const receiptBits = receiptRow
+        ? [...receiptRow.querySelectorAll('.msg-meta span')].map((n) => n.className)
+        : ['(no row)'];
+      cases.push([
+        'a message with a delivery receipt shows the receipt without a second tick',
+        receiptBits.length === 1 && receiptBits[0] === 'msg-seen',
+        JSON.stringify(receiptBits),
+      ]);
+
+      // The same message with nobody having read it yet: one tick, and it is
+      // the sent one, so it carries the colour of a sent message.
+      S.upsertMessage('h1', {
+        id: 'seen-6', chatID: 'h1', isSender: true, senderID: 'me', senderName: 'Me',
+        timestamp: '2026-01-01T11:05:00.000Z', text: 'confirmed, not read', type: 'TEXT', attachments: [],
+        sendStatus: RECEIPT,
+      });
+      const tickRow = document.querySelector('#message-list [data-message-id="seen-6"]');
+      const tickBits = tickRow
+        ? [...tickRow.querySelectorAll('.msg-meta span')].map((n) => n.className)
+        : ['(no row)'];
+      cases.push([
+        'a confirmed message shows one tick, and it is the sent one',
+        tickBits.length === 1 && tickBits[0] === 'msg-status-sent',
+        JSON.stringify(tickBits),
+      ]);
+
+      // And the thread has to redraw when the state changes. The signature
+      // used to carry the field itself, and two different receipts are both
+      // "[object Object]" - so a message the bridge failed to deliver kept
+      // the tick of one it had delivered.
+      S.upsertMessage('h1', {
+        id: 'seen-7', chatID: 'h1', isSender: true, senderID: 'me', senderName: 'Me',
+        timestamp: '2026-01-01T11:10:00.000Z', text: 'then it failed', type: 'TEXT', attachments: [],
+        sendStatus: RECEIPT,
+      });
+      S.upsertMessage('h1', {
+        id: 'seen-7', chatID: 'h1', isSender: true, senderID: 'me', senderName: 'Me',
+        timestamp: '2026-01-01T11:10:00.000Z', text: 'then it failed', type: 'TEXT', attachments: [],
+        sendStatus: { status: 'FAIL_RETRIABLE', timestamp: '2026-01-01T11:10:05.000Z' },
+      });
+      const failedLaterRow = document.querySelector('#message-list [data-message-id="seen-7"]');
+      const failedLaterBits = failedLaterRow
+        ? [...failedLaterRow.querySelectorAll('.msg-meta span')].map((n) => n.className)
+        : ['(no row)'];
+      cases.push([
+        'a message the bridge failed to deliver is redrawn as failed',
+        failedLaterBits.length === 1 && failedLaterBits[0] === 'msg-status-failed',
+        JSON.stringify(failedLaterBits),
+      ]);
+
       // A page of messages is announced once. Feeding it in one at a time made
       // every single message re-sort the list and re-signature the whole
       // thread, so opening a chat did 200 rebuilds to show 200 rows - measured
