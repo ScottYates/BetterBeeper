@@ -392,6 +392,15 @@ mark.ts-hit.is-current {
   transition: max-height .16s ease, opacity .16s ease, padding .16s ease;
 }
 .filter-row.is-open { max-height: 40px; opacity: 1; padding-bottom: 8px; }
+/* The quick filter, which appears when the user types with no chat open and
+   narrows the list below it. It sits between the view chips and the list,
+   because it is the narrowest of the three and belongs nearest the thing it
+   narrows. */
+.chat-filter-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px 8px;
+}
+.chat-filter-row input { flex: 1; min-width: 0; }
 .chip {
   font: inherit; font-size: 12px; font-weight: 550;
   padding: 4px 11px; border-radius: 999px;

@@ -19,6 +19,7 @@ import {
 } from './state.js';
 import { toast, openLightbox } from './ui.js';
 import { inboxOrder } from './inbox-chats.js';
+import { filterChats } from './chat-filter.js';
 import { totalUnread, chatIsUnread } from './unread.js';
 import { setArchived } from './chat-actions.js';
 import { networkIconMarkup, badgeBackground } from './network-icons.js';
@@ -98,6 +99,25 @@ export function initSidebar(handlers) {
     runSearch();
   });
 
+  // The quick filter. It narrows the list on screen, and it disappears when
+  // there is nothing left to filter by, because a box that is not filtering
+  // anything is a box that says nothing.
+  const filterInput = $('#chat-filter-input');
+  filterInput?.addEventListener('input', () => {
+    const text = filterInput.value;
+    if (!text.trim()) {
+      clearChatFilter();
+      return;
+    }
+    state.chatFilter = text.trim();
+    renderChats();
+  });
+  filterInput?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    clearChatFilter();
+  });
+
   document.addEventListener('click', (event) => {
     const link = event.target.closest('a[data-external]');
     if (link) {
@@ -115,6 +135,96 @@ export function focusSearch() {
   const input = $('#search-input');
   input.focus();
   input.select();
+}
+
+// ---------------------------------------------------------------------------
+// The quick filter
+//
+// Typing with no chat open narrows the chat list. The filter is over the
+// list that is already on screen - the same view, the same order - and it
+// is not the search: the search asks Beeper about chats and messages this
+// window has never seen and takes the pane over, while this leaves the
+// conversation list alone and makes it shorter.
+//
+// The box appears rather than being there already, because a control
+// nobody asked for is a control in the way, and it goes away again when
+// there is nothing left to filter by.
+// ---------------------------------------------------------------------------
+
+/**
+ * Show the filter box exactly while there is a filter.
+ *
+ * The search takes the pane over when it runs, and the two boxes do not sit
+ * together: one filter at a time. The filter itself stays - it comes back
+ * with the list when the search is cleared.
+ */
+function syncChatFilterRow() {
+  const row = $('#chat-filter-row');
+  if (!row) return;
+  row.hidden = !state.chatFilter || Boolean(state.searchQuery);
+}
+
+/**
+ * Start narrowing the list with what has just been typed.
+ *
+ * The character that started it goes into the box, so the user can see what
+ * they typed and change it: a filter whose text cannot be seen is a filter
+ * that cannot be corrected.
+ */
+export function startChatFilter(text) {
+  const row = $('#chat-filter-row');
+  const input = $('#chat-filter-input');
+  if (!row || !input) return;
+  input.value = text;
+  state.chatFilter = String(text || '').trim();
+  // The box is shown before it is focused: a hidden input cannot take the
+  // focus, and the keystrokes would go nowhere.
+  syncChatFilterRow();
+  input.focus();
+  input.setSelectionRange(text.length, text.length);
+  renderChats();
+}
+
+/**
+ * Take the filter back off.
+ *
+ * The list comes back whole, and the box goes away: it exists exactly
+ * while there is a filter, and an empty filter box sitting under the list
+ * is a box that says nothing.
+ */
+export function clearChatFilter() {
+  const input = $('#chat-filter-input');
+  if (input) {
+    input.value = '';
+    // The box is about to be hidden, and a hidden input that still holds the
+    // focus would swallow the next keystroke into a box nobody can see.
+    input.blur();
+  }
+  state.chatFilter = '';
+  syncChatFilterRow();
+  renderChats();
+}
+
+/** Is the list being narrowed right now? */
+export function hasChatFilter() {
+  return Boolean(state.chatFilter);
+}
+
+/**
+ * How many of the chats on screen the filter left, and how many there were.
+ *
+ * The count is there because a filter that found nothing and a filter that
+ * has not run yet look the same from outside, and the difference is worth
+ * saying.
+ */
+function updateChatFilterCount(shown, total) {
+  const count = $('#chat-filter-count');
+  if (!count) return;
+  if (!state.chatFilter) {
+    count.textContent = '';
+    return;
+  }
+  count.textContent = shown ? `${shown} of ${total}` : 'No matches';
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +351,9 @@ function syncBadge() {
 export function renderChats() {
   const list = $('#chat-list');
   syncBadge();
+  // The filter box belongs to the list, so it goes with it: while the search
+  // owns the pane, the filter is not on screen to be looked at.
+  syncChatFilterRow();
   if (state.searchQuery) return; // search view owns the pane
 
   const all = chatList().filter((chat) => {
@@ -257,13 +370,23 @@ export function renderChats() {
     }
   });
 
-  if (!all.length) {
+  // The quick filter narrows the list that is on screen, not the whole
+  // account: it is a way of finding one of the chats you can already see.
+  // The order is untouched, so the pinned chats stay at the top.
+  const shown = filterChats(all, state.chatFilter);
+  updateChatFilterCount(shown.length, all.length);
+
+  if (!shown.length) {
     clear(list);
     rows.clear();
     list.append(
       el('div', {
         class: 'empty-note',
-        text: state.chats.size ? 'Nothing in this view.' : 'No chats loaded yet.',
+        // A filter that found nothing and a view with nothing in it are
+        // different things, and the note says which one this is.
+        text: state.chatFilter
+          ? `No chat matches "${state.chatFilter}".`
+          : (state.chats.size ? 'Nothing in this view.' : 'No chats loaded yet.'),
       }),
     );
     return;
@@ -277,7 +400,7 @@ export function renderChats() {
   //
   // The rule itself lives in inbox-chats.js, because the share picker draws
   // the same list and the two must not drift apart.
-  const ordered = all.slice();
+  const ordered = shown.slice();
   ordered.sort(inboxOrder);
 
   const next = [];
@@ -296,12 +419,15 @@ export function renderChats() {
 
   next.forEach((node, i) => place(list, node, i));
 
-  // Anything left over is a chat that left this view, or the empty-note.
+  // Anything left over is a chat the filter is hiding, or the empty-note.
   while (list.children.length > next.length) list.removeChild(list.lastChild);
 
-  const live = new Set(next);
+  // The rows of the chats the filter is hiding are kept. They are hidden,
+  // not gone, and throwing their rows away would mean rebuilding them -
+  // and re-resolving their avatars - every time the filter is cleared.
+  const live = new Set(all.map((chat) => chat.id));
   for (const [id, entry] of [...rows]) {
-    if (!live.has(entry.node)) rows.delete(id);
+    if (!live.has(id)) rows.delete(id);
   }
 }
 

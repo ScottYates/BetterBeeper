@@ -3032,10 +3032,97 @@ reason it was noticed is that somebody asked for a chat that was plainly
 there and it was not offered. The fix was not to make the picker's list
 longer; it was to give both places one rule and one place to keep it.
 
+### Typing narrows the chat list
+
+**What it does.** With no conversation open, the first key you press opens a
+filter box above the chat list and narrows the list to the chats whose name
+contains what you typed. The count beside it says how many of the list are
+left. Escape takes the filter back off.
+
+It is a **filter over the list that is on screen**, not a search. The view
+you are already looking at (All, Unread, Inbox, Archive) is what gets
+narrowed, in the order you were already looking at it - pinned chats first,
+then most recent activity. The search behind the magnifier is a different
+thing and is unchanged: it asks Beeper about chats and messages this window
+has never seen, and it takes the pane over.
+
+**The two decisions in it.**
+
+1. **The filter text is visible.** A box appears above the list with what you
+   typed in it, and it takes the keyboard from there. A filter whose text
+   cannot be seen is a filter that cannot be corrected, and one that cannot be
+   corrected is a filter you have to Escape out of and try again.
+2. **Escape clears the filter, and only then closes the chat.** One Escape,
+   one thing. The filter is the last thing the user asked for, so it is the
+   first thing Escape takes back. With no filter active, Escape does what it
+   always did.
+
+**The rule is in a module of its own.** `src/renderer/js/chat-filter.js` has
+no DOM and no account: `filterName` (the name as the list draws it, decoded),
+`matchesFilter`, `filterChats` (which keeps the order it is given - the list
+is filtered, not re-sorted) and `isFilterableKey` (a printable character, no
+modifier held, not typed into a field).
+
+**What makes it hard, and would be easy to get wrong.**
+
+- **The composer has the keyboard.** With a chat open, the keys belong to the
+  message you are writing. The guard `if (state.activeChatID) return;` is the
+  difference between a filter and an app that eats the first letter of every
+  message.
+- **A filter that finds nothing must say so.** "Nothing in this view" and "no
+  chat matches zzz" are different things, and the empty note now says which
+  one it is.
+- **The rows the filter hides are kept.** They are hidden, not gone, and
+  throwing their rows away would mean rebuilding them - and re-resolving
+  their avatars - every time the filter was cleared. The rows map now keeps
+  the chats the filter is hiding and only forgets the ones that left the
+  view.
+
+**What proves it.**
+
+- `npm run check:chatfilter` (26/26) reads the rule with no Electron and no
+  window: the text is a substring and not the whole name, the comparison
+  ignores case and ignores surrounding spaces, an empty text keeps
+  everything, the order is not touched, a name is matched as the list draws
+  it, and a keystroke in a field or with a modifier held does not start a
+  filter. It also reads the wiring out of the source: the row is in
+  `index.html`, the sidebar can start, clear and report the filter, the list
+  is narrowed by it, the keystroke is guarded by the active chat, and Escape
+  clears the filter before it closes the chat.
+- `npm run check:sidebar` (102/102) drives the real sidebar against the real
+  `index.html`: the row is not there until a filter starts, the filter
+  narrows the list on screen, the count says how much of the list is left,
+  the box holds what was typed and takes the keyboard, a filter that finds
+  nothing says so, Escape in the box clears it, clearing it brings the whole
+  list back without re-resolving a single avatar, and the box goes away
+  while the search owns the pane and comes back when the search is over.
+- `npm run check:chatfilterredproof` (12/12) reintroduces nine breaks in
+  the source - the filter matching the case exactly, the filter matching only
+  the start of a name, a keystroke in a field starting a filter, a shortcut
+  starting a filter, the list not being narrowed, the count saying how many
+  chats there are rather than how many matched, the box staying after the
+  filter is cleared, the box sitting over the search results, and typing
+  into an open chat starting a filter - and requires the right suite to go
+  red each time.
+
+**One bug the check caught while it was being written.** The box was focused
+before it was shown, and a hidden input cannot take the focus - so the
+keystrokes went nowhere and the filter never started. The order is now the
+other way round: show the box, then focus it. The check that caught it is
+"the filter takes the keyboard", and it is the reason the order is written
+down here.
+
+**The general lesson.** A list that is on screen and a list that can be
+searched are different things, and the app already had both: the search
+behind the magnifier asks the network about everything it knows, and the
+sidebar shows what it has. The filter is the third thing, and it is the one
+that answers "where is that conversation" in the state the user is actually
+in - looking at the list, with nothing open.
+
 ## Verification status
-`npm run check:all` sweeps **67 suites**, and all 67 pass on the tree
-carrying this work. The suite count was 66 before `check:sharelistredproof`
-was added. It was 64 before `check:sharequeue` and
+`npm run check:all` sweeps **69 suites**. The suite count was 67 before
+`check:chatfilter` and `check:chatfilterredproof` were added. It was 66 before
+`check:sharelistredproof` was added. It was 64 before `check:sharequeue` and
 `check:sharequeueredproof` were added. It was 63 before `check:sendstatus` was added. It was 61 suites on the
 tree carrying the 2026-11-12 work, 59 of them passing; it was 58 suites on the
 tree carrying the 2026-11-11 work, 57 of them passing; it was 54 suites on the
@@ -3048,12 +3135,12 @@ commit, 2026-10-21; 42 suites before `check:contactrefresh` was added, 41
 before `check:participants`, 40 before `check:refreshchats`, 39 before
 `check:entity`, and 35/37 on 2026-10-14.
 
-`check:released` is the one that moves with the git state, and it is why the
-sweep above is 67/67 rather than 66/67: it was run while the tree was still
-standing on the v1.34.0 tag. It fails whenever `main` is ahead of the newest
-tag, because a push with no release behind it is exactly what it exists to
-catch. So it goes red on the commit that carries this work, and green again
-on the release commit behind it. That is the rule working, not a defect.
+`check:released` is the one that moves with the git state, and it is why a
+sweep can be one short of the suite count: it fails whenever `main` is ahead
+of the newest tag, because a push with no release behind it is exactly what
+it exists to catch. So it goes red on the commit that carries a piece of
+work, and green again on the release commit behind it. That is the rule
+working, not a defect.
 
 One of those suites was red on `main` while this work was being done:
 `check:history` wanted a progress announcement out of a walk that finished

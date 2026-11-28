@@ -90,6 +90,11 @@ The chat UI talks to Beeper's REST API and its live WebSocket event stream. Beep
   pretending it can be played
 - Independent vertical scrolling for the chat list and the message thread, with infinite
   scroll backwards through history
+- Type to narrow the chat list. With no conversation open, the first key you press opens a
+  filter above the list and narrows it to the chats whose name contains what you typed, in
+  the view you are already looking at. The count says how many of them are left, and Escape
+  takes the filter back off. It is a filter over the list on screen, not a search: the
+  magnifier still searches every conversation and every message
 - Search inside the conversation that is open. The magnifier in the thread header opens a search
   row under the header, the matches are highlighted in the conversation itself rather than listed
   beside it, and Enter and Shift+Enter step through them. A fragment of a word finds the word, so

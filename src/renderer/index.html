@@ -145,6 +145,20 @@
           <button class="chip" data-filter="archive">Archive</button>
         </div>
 
+        <!-- The quick filter. It appears when the user types with no chat
+             open, narrows the list below it, and goes away again when there
+             is nothing left to filter by. -->
+        <div id="chat-filter-row" class="chat-filter-row" hidden>
+          <input
+            id="chat-filter-input"
+            type="search"
+            placeholder="Filter chats"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <span id="chat-filter-count" class="search-count"></span>
+        </div>
+
         <div id="chat-list" class="chat-list" role="list"></div>
 
         <footer class="sidebar-footer">

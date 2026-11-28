@@ -41,6 +41,15 @@ export const state = {
   discovery: null,
   liveStatus: 'idle',
   filter: 'all',
+  /**
+   * The text the chat list is being narrowed by.
+   *
+   * Empty means no filter. It is separate from `searchQuery` on purpose:
+   * the search asks Beeper about chats and messages this window has never
+   * seen and takes over the pane, while this narrows the list that is
+   * already on screen.
+   */
+  chatFilter: '',
   /** Which view the main pane is showing: 'chat' or 'calls' */
   view: 'chat',
   searchQuery: '',

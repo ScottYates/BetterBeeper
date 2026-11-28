@@ -313,6 +313,103 @@ async function main() {
         return clears <= 1 || 'renderChats clears the list ' + clears + ' times';
       });
 
+      // --- the quick filter --------------------------------------------------
+      // Typing with no chat open narrows the list on screen. The row appears
+      // when the filter starts and goes away when there is nothing left to
+      // filter by, so the cases below drive it the way the keyboard does.
+      S.upsertChat(chat('b1', { title: 'Benji' }));
+      S.upsertChat(chat('b2', { title: 'Benedict' }));
+      B.renderChats();
+      await new Promise((r) => setTimeout(r, 250));
+
+      const filterRow = document.getElementById('chat-filter-row');
+      const filterInput = document.getElementById('chat-filter-input');
+      const filterCount = document.getElementById('chat-filter-count');
+      const chatRows = () => [...document.querySelectorAll('#chat-list .chat-item')]
+        .map((n) => n.getAttribute('data-chat-id'));
+
+      add('the filter row exists in the sidebar', () =>
+        !!(filterRow && filterInput && filterCount) || 'the filter row is missing');
+
+      add('the filter row is not there until a filter starts', () =>
+        (filterRow && filterRow.hidden) || 'the filter row is showing before anything was typed');
+
+      B.startChatFilter('ben');
+      await new Promise((r) => setTimeout(r, 150));
+
+      add('the filter narrows the list on screen', () =>
+        chatRows().slice().sort().join(',') === 'b1,b2' || chatRows().join(','));
+
+      add('the filter says what it left of the list', () =>
+        /2 of 4/.test(filterCount.textContent || '')
+        || ('count reads ' + JSON.stringify(filterCount.textContent)));
+
+      add('the filter box holds what was typed', () =>
+        (filterInput.value === 'ben') || ('the box reads ' + JSON.stringify(filterInput.value)));
+
+      add('the filter takes the keyboard', () =>
+        (document.activeElement === filterInput) || 'the filter box did not take the focus');
+
+      // A filter that finds nothing has to say so: an empty list with the
+      // usual "nothing in this view" note would be a different thing.
+      B.startChatFilter('zzz');
+      await new Promise((r) => setTimeout(r, 150));
+      add('a filter that finds nothing says so', () => {
+        const note = document.querySelector('#chat-list .empty-note');
+        return (note && /No chat matches "zzz"/.test(note.textContent))
+          || ('the note reads ' + JSON.stringify(note && note.textContent));
+      });
+
+      add('a filter that finds nothing says how many it looked at', () =>
+        /No matches/.test(filterCount.textContent || '')
+        || ('count reads ' + JSON.stringify(filterCount.textContent)));
+
+      // The rows of the chats the filter hid are kept, so putting the filter
+      // back does not rebuild them - and re-resolve their avatars.
+      const beforeFilter = resolves;
+      B.clearChatFilter();
+      await new Promise((r) => setTimeout(r, 300));
+      add('clearing the filter brings the whole list back', () =>
+        chatRows().length === 4 || chatRows().join(','));
+
+      add('clearing the filter does not rebuild the rows it hid', () =>
+        (resolves === beforeFilter) || ((resolves - beforeFilter) + ' avatars were resolved again'));
+
+      add('clearing the filter takes the box away', () =>
+        (filterRow.hidden && filterInput.value === '') || 'the filter row is still showing');
+
+      add('the filter is off once it is cleared', () =>
+        B.hasChatFilter() === false || 'the filter is still on');
+
+      // Escape in the box clears it, the same way the search box does.
+      B.startChatFilter('ben');
+      await new Promise((r) => setTimeout(r, 150));
+      filterInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await new Promise((r) => setTimeout(r, 150));
+      add('escape in the filter box clears the filter', () =>
+        (chatRows().length === 4 && filterRow.hidden) || chatRows().join(','));
+
+      // The search takes the pane over, and the two boxes do not sit
+      // together: one filter at a time. The filter itself stays, and comes
+      // back with the list when the search is over.
+      B.startChatFilter('ben');
+      await new Promise((r) => setTimeout(r, 150));
+      S.state.searchQuery = 'invoice';
+      B.renderChats();
+      await new Promise((r) => setTimeout(r, 150));
+      add('the filter box goes away while the search owns the pane', () =>
+        filterRow.hidden || 'the filter box is still showing over the search results');
+
+      S.state.searchQuery = '';
+      B.renderChats();
+      await new Promise((r) => setTimeout(r, 150));
+      add('the filter box comes back when the search is over', () =>
+        (!filterRow.hidden && chatRows().length === 2)
+        || ('rows: ' + chatRows().join(',') + ' hidden: ' + filterRow.hidden));
+
+      B.clearChatFilter();
+      await new Promise((r) => setTimeout(r, 150));
+
       // --- background jobs panel -------------------------------------------
       J.initJobs();
       await new Promise((r) => setTimeout(r, 200));

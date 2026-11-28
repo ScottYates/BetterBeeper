@@ -7,11 +7,13 @@ import { toast, closePopover, initTooltips, openPopover } from './ui.js';
 import {
   initSidebar, renderChats, renderAccountBadges, setLiveStatus, focusSearch, avatarNode,
   setView, currentView, renderViewChrome, VIEWS,
+  startChatFilter, clearChatFilter, hasChatFilter,
 } from './sidebar.js';
 import { initThread, openChat, applyMessageEvent, closeThread, markReadOnReturn } from './thread.js';
 import { initJobs } from './jobs.js';
 import { openNewChat, openSettings, showToolsCatalog, applyTheme } from './modals.js';
 import { initLayout } from './layout.js';
+import { isFilterableKey } from './chat-filter.js';
 import { checkForUpdatesOnLaunch, reportInstallOutcome } from './updates.js';
 import { newestPreviewEntry, mergeChatSummary } from './chat-preview.js';
 import { markAllTargets, inBatches } from './mark-all-read.js';
@@ -434,6 +436,15 @@ function wireKeyboard() {
       // before the search row's own handler does: without this guard, one
       // Escape would close the row and the conversation behind it.
       if (event.target?.id === 'thread-search-input') return;
+      // The quick filter's own box clears it, the same way.
+      if (event.target?.id === 'chat-filter-input') return;
+      // A filter is undone before anything else. Escape means "take this
+      // back", and the filter is the last thing the user asked for.
+      if (hasChatFilter()) {
+        event.preventDefault();
+        clearChatFilter();
+        return;
+      }
       if (!state.activeChatID) return;
 
       event.preventDefault();
@@ -458,6 +469,27 @@ function wireKeyboard() {
       event.preventDefault();
       focusSearch();
     }
+  });
+
+  // Typing with no chat open narrows the chat list.
+  //
+  // The keystroke is taken by the filter rather than by a search: the list on
+  // screen is what the user is looking at, and the list on screen is what
+  // gets narrower. The search behind the magnifier is a different thing - it
+  // asks Beeper about chats and messages this window has never seen - and it
+  // keeps its own box.
+  //
+  // With a chat open the composer has the keyboard, so this is the resting
+  // state: nothing is open, and the only thing the keys can sensibly do is
+  // narrow the list.
+  document.addEventListener('keydown', (event) => {
+    if (!isFilterableKey(event)) return;
+    if (state.activeChatID) return;
+    if (state.searchQuery) return; // the search owns the pane
+    if ($('#app').hidden) return; // the connect screen is up
+    if (!$('#modal-root').hidden) return;
+    startChatFilter(event.key);
+    event.preventDefault();
   });
 
   window.beeper.on.menuNewChat(() => openNewChat());
