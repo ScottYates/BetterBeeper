@@ -324,6 +324,7 @@ npm run check:syntax    # every JS file parses, so a broken check cannot pose as
 npm run check:bump      # the semver level chosen from a commit message is right
 npm run check:released  # every push to main has a release, and the old ones are gone
 npm run check:prune    # the cleanup check goes red when the old builds come back (new)
+npm run check:releasedlock  # a build held open by another program is not a build on the disk (new)
 npm run check:icons     # network glyphs, including the self-coloured Google Voice mark
 npm run check:appicon  # the icon files still match the artwork, and the app uses them
 npm run check:ascii     # documentation and code comments stay ASCII
@@ -423,6 +424,16 @@ failing a release that is already published.
 `check:prune` is the proof that the rule is load-bearing: it makes an old build appear on
 the disk, shows `check:released` going red for it, removes it again, and shows the check
 green. The tool half runs on a temporary folder, so the proof never costs anything real.
+
+`check:releasedlock` covers the other half of the same rule. A build directory that could
+not be removed because one file in it is open - the desktop app running out of the build
+folder, or a file indexer with a handle on it - is not a build sitting on the disk, so
+those bytes are reported rather than counted. The split is measured by asking the
+operating system, the same question the shell asks: a file can only be deleted if every
+handle on it was opened with `FILE_SHARE_DELETE`, so asking for DELETE access to it
+answers exactly "could this be removed?". Nothing is renamed, moved or deleted to find
+out. The proof holds a file open for real, with an exclusive handle, and shows the check
+stop counting it.
 
 Two details worth knowing if you run this by hand:
 
@@ -569,6 +580,8 @@ src/
     thread-search-redproof.js  prove the search check fails when the rules are broken
     release.js        bump the version from the commits, build, install, publish, verify by hash
     released-check.js check: every push to main has a release
+    released-locked-redproof.js  prove a build held open is not counted as a build
+    locked-bytes.ps1  ask Windows which of those bytes could be deleted right now
     bump-check.js     check: the semver level a commit message produces is the right one
     icon-check.mjs    check: every network glyph still renders, self-coloured or not
     build-icon.js     draw the app icon from build/icon.svg into the .ico and the png

@@ -25,6 +25,7 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const KEEP = 3;
+const PROBE = path.join(__dirname, 'locked-bytes.ps1');
 
 /**
  * How much old build output is a problem.
@@ -32,6 +33,12 @@ const KEEP = 3;
  * A full build is about 427 MB, so 100 MB is a quarter of one: enough that
  * it is a build sitting on the disk rather than the leftover of one that
  * could not be removed because a file in it is open.
+ *
+ * The bytes that count are the ones a prune could actually take away. A
+ * file another program is holding open cannot be removed by anything, and
+ * it is not a build sitting on the disk - it is the one file in a build
+ * that has already been emptied. Counting it would report a problem that
+ * is not one, and a check that cries wolf is a check that gets ignored.
  */
 const STALE_MB_LIMIT = 100;
 
@@ -95,6 +102,53 @@ function localBuildDirs() {
   return dirs;
 }
 
+/**
+ * How much of the old build output could be removed right now.
+ *
+ * The prune tool empties an old build directory and leaves behind whatever
+ * another program is holding open - the desktop app that runs out of the
+ * build folder, or a file indexer with a handle on it. Those bytes are real
+ * and they are on the disk, but nothing can be done about them until the
+ * handle is released, and reporting them as a build that needs pruning is a
+ * problem that has no answer.
+ *
+ * So the bytes are split: the ones a prune could take away now, and the ones
+ * it cannot. Only the first kind is a failure. The second is reported, so
+ * that it is never a secret.
+ *
+ * The split is measured by asking the operating system rather than guessed:
+ * a file can only be deleted if every handle on it was opened with
+ * FILE_SHARE_DELETE, so asking for DELETE access to it answers exactly the
+ * question "could this be removed?".
+ *
+ * If the probe cannot answer - no PowerShell, a timeout, something else -
+ * then every byte counts. The check has to be right when it cannot ask.
+ */
+function probeLocks(dirs) {
+  if (!dirs.length) return { removable: 0, locked: 0 };
+  let out;
+  try {
+    out = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PROBE],
+      {
+        input: dirs.join('\n'),
+        cwd: ROOT,
+        encoding: 'utf8',
+        timeout: 120000,
+        windowsHide: true,
+        maxBuffer: 8 * 1024 * 1024,
+      },
+    );
+  } catch {
+    return null;
+  }
+  const removable = Number((out.match(/^removable\s+(\d+)/m) || [])[1]);
+  const locked = Number((out.match(/^locked\s+(\d+)/m) || [])[1]);
+  if (!Number.isFinite(removable) || !Number.isFinite(locked)) return null;
+  return { removable, locked };
+}
+
 function main() {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const problems = [];
@@ -155,6 +209,8 @@ function main() {
   }
 
   const builds = localBuildDirs();
+  let staleLine = '';
+  let heldNote = '';
   if (builds.length) {
     // Measured in bytes, not in directories.
     //
@@ -168,10 +224,32 @@ function main() {
     for (const d of stale) {
       staleBytes += sizeOf(path.join(ROOT, d.name));
     }
-    const staleMb = staleBytes / 1048576;
-    if (staleMb > STALE_MB_LIMIT) {
+
+    // The bytes that count are the ones a prune could actually take away.
+    // The rest are reported, not failed on: they are the file another
+    // program is holding open, and nothing can be done about them until the
+    // handle is released.
+    const probe = probeLocks(stale.map((d) => path.join(ROOT, d.name)));
+    const removableBytes = probe ? probe.removable : staleBytes;
+    const lockedBytes = probe ? probe.locked : 0;
+
+    const removableMb = removableBytes / 1048576;
+    const lockedMb = lockedBytes / 1048576;
+
+    if (lockedBytes > 0) {
+      heldNote =
+        `${lockedMb.toFixed(0)} MB in ${stale.length} old build director` +
+        `${stale.length === 1 ? 'y is' : 'ies are'} held open by another program and cannot be ` +
+        'removed until the handle is released. The next prune will take them.';
+    }
+
+    staleLine =
+      `${(staleBytes / 1048576).toFixed(0)} MB on disk, ` +
+      `${removableMb.toFixed(0)} MB removable, ${lockedMb.toFixed(0)} MB held open`;
+
+    if (removableMb > STALE_MB_LIMIT) {
       problems.push(
-        `${staleMb.toFixed(0)} MB of old build output is still on disk and only ${KEEP} builds should be.\n` +
+        `${removableMb.toFixed(0)} MB of old build output is still on disk and only ${KEEP} builds should be.\n` +
         `    The oldest are ${stale.map((d) => d.name).join(', ')}.\n` +
         '    Run "npm run prune" to remove them.',
       );
@@ -184,6 +262,8 @@ function main() {
   console.log(`package.json  : ${pkg.version}`);
   console.log(`releases kept : ${releases.length || '?'} of ${KEEP}`);
   console.log(`builds kept   : ${builds.length} of ${KEEP}`);
+  if (staleLine) console.log(`old output    : ${staleLine}`);
+  if (heldNote) console.log(`held open    : ${heldNote}`);
 
   if (problems.length === 0) {
     console.log(`\nOK  every push to ${branch} has a release, and the old ones are gone.`);

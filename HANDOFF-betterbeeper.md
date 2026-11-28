@@ -3119,9 +3119,79 @@ sidebar shows what it has. The filter is the third thing, and it is the one
 that answers "where is that conversation" in the state the user is actually
 in - looking at the list, with nothing open.
 
+### The old builds that could not be removed were being counted as old builds
+
+The housekeeping after the v1.36.0 release left nine old build directories
+holding one file each: `app.asar`, twelve-odd megabytes apiece, 108 MB in
+all. The prune tool emptied the other 400-odd megabytes of every one of them
+and could not remove the last file, because something has it open.
+
+**What holds it.** The Restart Manager says the holder is the MiniMax Code
+app itself - the app this session is running in. It is not a stray Electron
+process from an old check, and there is no child process to kill: the
+desktop app has a handle on the `app.asar` of every build directory it has
+seen. The recoverable trash refuses them as well, and it is not to be
+bypassed with a permanent delete. Restarting the app releases the handles
+and `npm run prune` then takes the 108 MB away.
+
+**Why it mattered more than it looked.** `check:released` counts the bytes
+in the old build directories and fails when there are more than 100 MB of
+them. Nine locked leftovers are 108 MB, so the check went red - and it
+would go red after every release from then on, because each release builds
+one more `app.asar` for the app to hold. The check was reporting a problem
+that no run of `npm run prune` could fix, which is the definition of a check
+that cries wolf.
+
+**The fix is in the check, and it is the check's own rule.** The comment on
+that limit has always said the reason for measuring bytes rather than
+directories: *"A directory that could not be removed because one file in it
+is open - an app running out of the build folder, or a file indexer - is not
+a build sitting on the disk."* The implementation counted those bytes
+anyway. Now it does not.
+
+**How the split is measured.** `tools/locked-bytes.ps1` asks the operating
+system the same question the shell asks: a file can only be deleted if every
+handle on it was opened with `FILE_SHARE_DELETE`, so opening it for DELETE
+access answers exactly "could this be removed?". The file is not renamed,
+moved or deleted - the handle is opened and closed again, and if it cannot
+even be opened the answer is no. The bytes that come back removable are the
+ones the check counts; the ones that come back held open are reported and
+not failed on:
+
+```
+old output    : 108 MB on disk, 0 MB removable, 108 MB held open
+held open    : 108 MB in 9 old build directories are held open by another
+program and cannot be removed until the handle is released. The next prune
+will take them.
+```
+
+If the probe cannot answer - no PowerShell, a timeout, anything else - then
+every byte counts, because the check has to be right when it cannot ask.
+
+**The proof.** `npm run check:releasedlock` (7/7) puts a 120 MB build on the
+disk and shows the check goes red, then holds that build's file open for
+real - a PowerShell process with an exclusive handle, the same thing that
+stops a file being deleted - and shows that the check stops counting it,
+says which output is held open, and comes back to exactly where it started
+once the file is gone. The assertions are about the difference between two
+runs rather than an absolute number, so the proof says the same thing on a
+machine whose old builds are locked and on one whose are not.
+
+**The mutation.** Changing the check back to counting every byte turns that
+proof red: *"the held-open build was still counted as removable: 228 MB"*.
+That is the whole point of the proof - it fails when the rule is not the
+rule.
+
+**What did not change.** The prune tool still empties what it can and
+reports what it cannot. The recoverable trash is still the only way anything
+is deleted. The 108 MB is still on the disk, and it goes away when the app
+is restarted and the prune is run again - the check no longer claims
+otherwise.
+
 ## Verification status
-`npm run check:all` sweeps **69 suites**. The suite count was 67 before
-`check:chatfilter` and `check:chatfilterredproof` were added. It was 66 before
+`npm run check:all` sweeps **70 suites**. The suite count was 69 before
+`check:releasedlock` was added, and 69 before `check:chatfilter` and
+`check:chatfilterredproof` were added. It was 67 before
 `check:sharelistredproof` was added. It was 64 before `check:sharequeue` and
 `check:sharequeueredproof` were added. It was 63 before `check:sendstatus` was added. It was 61 suites on the
 tree carrying the 2026-11-12 work, 59 of them passing; it was 58 suites on the
@@ -3178,6 +3248,7 @@ working, not a defect, and it is why a docs-only push still gets a release.
 | `check:readreceipts` | 14/14 checks passed, with no Electron and no window (new) |
 | `check:released` | green on a release commit, red while `main` is ahead of the last tag; it also counts the published releases and the old build output on the disk (new) |
 | `check:prune` | 7/7 checks passed, proving the cleanup check goes red when the old builds come back, that the prune removes them, and that the real builds are left alone (new) |
+| `check:releasedlock` | 7/7 checks passed, proving a build held open by another program is not counted as a build on the disk, with a real exclusive handle and no window (new) |
 | `tools/prune-redproof.js` | 5/5 mutations caught, no holes, with an asserted baseline (new) |
 | `tools/update-redproof.js` | 25/25 mutations caught, no holes |
 | `tools/update-failure-redproof.js` | 15/15 mutations caught, no holes, with an asserted baseline (new) |

@@ -60,6 +60,7 @@
     "prune": "node tools/prune.js --releases",
     "prune:dry": "node tools/prune.js --releases --dry-run",
     "check:prune": "node tools/prune-redproof.js",
+    "check:releasedlock": "node tools/released-locked-redproof.js",
     "pack": "electron-builder --dir",
     "check:paste": "electron tools/run-check.js tools/paste-check.js",
     "check:paste-live": "node tools/paste-live.js",
